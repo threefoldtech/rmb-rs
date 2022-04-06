@@ -38,7 +38,7 @@ Note that Local and Remote RMB are just one service. a single instance of RMB ca
   - The RMB maintain a set of workers, those workers are waiting for jobs pushed to them on a queue
   - When an ID is received on `msbugs.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
   - The worker then can start (trying) to push this to remove RMB over the `/rmb-remote` url. The IP has already been resolved earlier from the cache (or re-retrieved if needed)
-  - The worker can try up to $try times before giving up and report an error for that $dst id.
+  - The worker can try up to `$try` times before giving up and report an error for that `$dst` id.
 
 ### RMB (remote)
 - On receiving a message on the `/rmb-remote` entrypoint. This entry-point will verify message body, and signature. A 202 Accepted is returned if all is okay, 400 BadRequest, or 401 Unauthorized if signature verifications fails.
@@ -54,3 +54,112 @@ Note that Local and Remote RMB are just one service. a single instance of RMB ca
 - Original message is GET from the backlog. If message does not exist anymore (timed-out) return 408 Request Timeout (?) may be not the best code we can change later
 - If message still available, an 202 Accepted is returned instead.
 - Response is pushed to $ret (from the original message from the backlog)
+
+
+# Components
+This is a rough guide of the separate entities that can be developed in parallel. Of course this can be modified and tweaked during development to make sure it operates as intended.
+
+## The message
+```json
+{
+  "ver": 1,                                # version identifier (always 1 for now)
+  "uid": "uuid4",                          # unique id (filled by server)
+  "cmd": "wallet.stellar.balance.tft",     # command to call (aka function name)
+  "exp": 3600,                             # expiration in seconds (relative to 'now')
+  "try": 4,                                # amount of retry if remote cannot be joined
+  "dat": "R0E3...2WUwzTzdOQzNQUlkN=",      # data base64 encoded
+  "src": 1001,                             # source twin id (filled by server)
+  "dst": [1002],                           # list of twin destination id (filled by client)
+  "ret": "5bf6bc...0c7-e87d799fbc73",      # return queue expected (please use uuid4)
+  "shm": "",                               # schema definition (not used now)
+  "now": 1621944461,                       # sent timestamp (filled by client)
+  "err": ""                                # optional error (would be set by server)
+}
+```
+
+## Client
+to be defined
+
+## Identity
+Identity is the RMB twin identity. It's created with the private key of the twin (or mnemonics). It uses this identity to retrieve it's twin id from substrate.
+
+This must be built before any of other rmb operation proceed.
+
+```rust
+trait Identity {
+    // returns signed message
+    id() -> u64
+    sign(msg: Message) -> Message
+}
+```
+
+## Twin
+A Twin represents a remote twin, A remote twin is identified by it's ID and must hold it's public key as well. A twin can be retrieved from substrate with a given ID. then cached in a local cache (in memory)
+
+```rust
+trait Twin {
+    id() -> u64
+    verify(msg: &Message) -> Result<()>
+    address() -> String // we use string not IP because the twin address can be a dns name
+}
+```
+
+## Redis abstraction layer
+One component that need to be built is the Redis wrapper. This hides the calls to local redis and instead expose a concrete and statically typed trait to set, get, pop, and push data to separate "queues" as follows
+```rust
+
+enum QueuedMessage {
+    Forward(Message)
+    Reply(Message)
+}
+
+trait Storage {
+    // operation against backlog
+    // sets backlog.$uid and set ttl to $exp
+    set(msg: Message) -> Result<()>
+    // gets message with ID.
+    get(id: String) -> Result<Option<Message>>
+
+    // pushes the message to local process (msgbus.$cmd) queue
+    run(msg: Message) -> Result<()>
+
+    // pushes message to `msgbus.system.forward` queue
+    forward(msg: Message) -> Result<()>
+
+    // pushes message to `msg.$ret` queue
+    reply(msg: Message) -> Result<()>
+
+    // gets a message from local queue waits
+    // until a message is available
+    local() -> Result<Message>
+
+    // find a better name
+    // process will wait on both msgbus.system.forward AND msgbus.system.reply
+    // and return the first message available with the correct Queue type
+    process() -> Result<QueuedMessage>
+}
+```
+
+Not implementation for storage should be implement connection pooling, also a Storage object can be passed around and cloned to be used by other parts of the system in async/io fashion
+
+## HTTP Server
+this server implements only 2 end-points as explained above
+- `/rmb-remote`
+- `/rmb-reply`
+
+The server holds an instance to Storage. If you followed the diagram the endpoints will need to be able to:
+- Has instance of Identity
+- Able to retrieve a twin object. A twin implementation can support a get twin operation which will either access the cache or retrieve the twin from the chain and cache it.
+- Use storage object either to do `run`, `forward`, or `reply` as per the sequence diagram
+
+## Dispatcher no.1 (local dispatcher)
+This one is simple, it calls Storage.local() and then decide what to do with the message based on the sequence diagram
+
+## Dispatcher no.2 (http workers)
+This is a little bit complex. It needs to do the following:
+- Wait until an http worker is free (the worker should ask for a new job)
+- call Storage.process() and block until a message is available.
+- When a message is available, the message is signed with twin identity
+- Message is sent to the worker, along side the twin object
+- worker can then try to call either `/rmb-remote` or `/rmb-reply` based on the Queue type.
+- if **FORWARD** the worker can report the caller immediately with an error if message was not able to deliver (calling Storage.reply() with right error filled in)
