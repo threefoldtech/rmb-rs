@@ -36,8 +36,8 @@ Note that Local and Remote RMB are just one service. a single instance of RMB ca
   - if $dst != local, this message is intended for remote process The message is then stored in redis on key (backlog.$id) AND a TTL is set on that with $exp. This means a message that never receive a response will eventually be flushed out of redis memory. Then the message id ($id) is pushed to `msgbus.system.forward`.
 - The ids pushed to the `msgbus.system.forward` are handled in another routine of the system as follows:
   - The RMB maintain a set of workers, those workers are waiting for jobs pushed to them on a queue
-  - When an ID is received on `msbugs.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
-  - The worker then can start (trying) to push this to remove RMB over the `/rmb-remote` url. The IP has already been resolved earlier from the cache (or re-retrieved if needed)
+  - When an ID is received on `msgbus.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
+  - The worker then can start (trying) to push this to remote RMB over the `/rmb-remote` url. The IP has already been resolved earlier from the cache (or re-retrieved if needed)
   - The worker can try up to `$try` times before giving up and report an error for that `$dst` id.
 
 ### RMB (remote)
