@@ -1,0 +1,60 @@
+@startuml RMB
+
+participant "Local Process" as lp
+database "Local Redis" as lr
+participant "local Rmb" as lrmb
+
+participant "Remote Rmb" as rrmb
+database "Remote Redis" as rr
+participant "Remote Process" as rp
+
+lp -> lr: RPUSH message on \n(msgbus.system.local)
+lr -> lrmb : LPOP message from \n(msgbus.system.local)
+
+alt $dst == local
+lrmb -> lr: PUSH msg to (msgbus.$cmd)
+else $dst != local
+lrmb -> lr: SET backlog.$id AND ttl to $exp
+lrmb -> lr: RPUSH $id to \n(msgbus.system.forward)
+end
+...
+lr -> lrmb: LPOP $id from \n(msgbus.system.forward)
+lrmb -> rrmb: POST message to /rmb-remote
+note left
+ this will allow the module that sends requests
+ to run multiple workers each worker can then retry
+ multiple time before it succeed or fail
+end note
+alt $dst != local
+rrmb -> rr: RPUSH msg to \n(msgbus.system.forward)
+else
+rrmb -> rr: RPUSH to msgbus.$cmd
+note right
+$ret is set to msgbus.system.reply
+before pushing to the msgbus.$cmd queue
+end note
+end
+...
+rr -> rp: LPOP from (msgbus.$cmd) queue
+rp -> rp: Process and handle message
+rp -> rr: RPUSH to $ret
+note right
+$ret is already set to msgbus.system.reply
+by http handler.
+It also set $now and swap $dst and $src
+end note
+...
+rr -> rrmb: RPOP message from \n(msgbus.system.reply)
+rrmb -> lrmb: POST message to /rmb-reply
+note left
+if recieved message $dst does not
+match local id, message is dropped.
+end note
+lrmb -> lr: GET message backlog.$id
+alt does not exist
+lrmb -> lrmb: drop message it probably timedout
+else
+lrmb -> lr: RPUSH response to $ret from the backlog
+end
+lr -> lp: RPOP response from $ret
+@enduml
