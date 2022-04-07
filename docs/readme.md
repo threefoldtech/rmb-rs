@@ -33,10 +33,11 @@ Note that Local and Remote RMB are just one service. a single instance of RMB ca
   - verify dst twins are valid, for each twin in the list the identity and the IP of the dst twin is retrieved and cached if not already in cache.
   - if one or more twins are invalid, the message can't be processed, and an error message is pushed directly tot the `$ret` queue. with details of the error.
   - if $dst == $local  (where $local is local twin id) the msg is immediately forwarded to `msgbus.$cmd` for local processing by a local process. This takes RMB out of the picture for local inter process communication. Because the local receiver will just reply to the msg $ret which is waited on by the client process.
-  - if $dst != local, this message is intended for remote process The message is then stored in redis on key (backlog.$id) AND a TTL is set on that with $exp. This means a message that never receive a response will eventually be flushed out of redis memory. Then the message id ($id) is pushed to `msgbus.system.forward`.
+  - if $dst != local, this message is intended for remote process The message is then stored in redis on key (backlog.$id) AND a TTL is set on that with $exp. This means a message that never receive a response will eventually be flushed out of redis memory.
+  - for each $twin in $dst the string ($id:$twin) is pushed to `msgbus.system.forward`. This will allow messages to be sent (and retried) in parallel to multiple destinations.
 - The ids pushed to the `msgbus.system.forward` are handled in another routine of the system as follows:
   - The RMB maintain a set of workers, those workers are waiting for jobs pushed to them on a queue
-  - When an ID is received on `msgbus.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
+  - When an ID ($id:$twin) is received on `msgbus.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
   - The worker then can start (trying) to push this to remote RMB over the `/rmb-remote` url. The IP has already been resolved earlier from the cache (or re-retrieved if needed)
   - The worker can try up to `$try` times before giving up and report an error for that `$dst` id.
 

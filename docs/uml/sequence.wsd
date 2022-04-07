@@ -15,7 +15,7 @@ alt $dst == local
 lrmb -> lr: PUSH msg to (msgbus.$cmd)
 else $dst != local
 lrmb -> lr: SET backlog.$id AND ttl to $exp
-lrmb -> lr: PUSH $id to \n(msgbus.system.forward)
+lrmb -> lr: for each $dst PUSH $id:$dst to \n(msgbus.system.forward)
 end
 ...
 lr -> lrmb: POP $id from \n(msgbus.system.forward)
