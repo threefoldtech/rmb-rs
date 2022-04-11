@@ -2,6 +2,8 @@ use crate::types::Message;
 
 use super::storage_interface::Storage;
 use async_trait::async_trait;
+
+#[derive(Clone)]
 pub struct RedisStorage;
 
 #[async_trait]

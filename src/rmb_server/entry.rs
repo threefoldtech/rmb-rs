@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use crate::{rmb_server::AppData, storage::RedisStorage, types::SrIdentity};
+
 use super::routes::*;
 use anyhow::Result;
 use hyper::{
@@ -15,13 +19,25 @@ impl<'a> RmbServer<'a> {
         RmbServer { addr, port }
     }
 
-    #[tokio::main]
     pub async fn run(&self) -> Result<()> {
-        let addr = format!("{}:{}", self.addr, self.port).parse().unwrap();
+        let data = AppData {
+            storage: RedisStorage {},
+            identity: SrIdentity {},
+        };
 
-        let services = make_service_fn(move |_| async {
-            Ok::<_, anyhow::Error>(service_fn(move |req| routes(req)))
+        let data = Arc::new(data);
+
+        // let services = make_service_fn(move |_| {
+        //     Ok::<_, anyhow::Error>(service_fn( move |req|routes(req, data.clone())))
+        // });
+
+        let services = make_service_fn(move |_| {
+            let data = data.clone();
+            let service = service_fn(move |req| routes(req, data.clone()));
+            async move { Ok::<_, anyhow::Error>(service) }
         });
+
+        let addr = format!("{}:{}", self.addr, self.port).parse()?;
 
         let server = Server::bind(&addr).serve(services);
         println!("Listening on: {}", addr);
