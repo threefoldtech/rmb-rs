@@ -19,13 +19,8 @@ impl<'a> RmbServer<'a> {
     pub async fn run(&self) -> Result<()> {
         let addr = format!("{}:{}", self.addr, self.port).parse().unwrap();
 
-        let services = make_service_fn(move |_| {
-            async {
-                Ok::<_, anyhow::Error>(service_fn(move |req| {
-                    // Clone again to ensure that client outlives this closure.
-                    routes(req)
-                }))
-            }
+        let services = make_service_fn(move |_| async {
+            Ok::<_, anyhow::Error>(service_fn(move |req| routes(req)))
         });
 
         let server = Server::bind(&addr).serve(services);
