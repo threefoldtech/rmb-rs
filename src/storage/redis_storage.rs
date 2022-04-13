@@ -1,6 +1,6 @@
 use crate::types::Message;
 
-use super::storage_interface::Storage;
+use super::Storage;
 use async_trait::async_trait;
 
 #[derive(Clone)]
