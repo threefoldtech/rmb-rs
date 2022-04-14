@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 // operation against backlog
 #[async_trait]
-pub trait Storage: Clone {
+pub trait Storage: Clone + Send + Sync {
     // sets backlog.$uid and set ttl to $exp
     async fn set(msg: Message) -> Result<()>;
 

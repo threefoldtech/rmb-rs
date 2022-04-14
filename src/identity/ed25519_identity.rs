@@ -1,6 +1,6 @@
 use super::Identity;
 use crate::types::Message;
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use sp_core::{ed25519::Pair as EdPair, Pair};
 
 #[derive(Clone)]
@@ -11,25 +11,22 @@ pub struct Ed25519Identity {
 }
 
 impl Identity for Ed25519Identity {
-    fn id(&self) -> u64 {
-        let _key = self.pair.public();
-        todo!("Check the return value")
-    }
-    fn sign(&self, msg: Message) -> Result<Message> {
-        let mut msg = msg;
-        let signed_msg = self.pair.sign(msg.dat.as_bytes()).0;
-        msg.dat = String::from_utf8(signed_msg.to_vec())?;
+    fn sign(&self, mut msg: Message) -> Result<Message> {
+        let signature = self.pair.sign(msg.dat.as_bytes());
+        msg.sig = hex::encode(signature);
         Ok(msg)
     }
 }
 
 impl TryFrom<&str> for Ed25519Identity {
     type Error = anyhow::Error;
-    fn try_from(phrase: &str) -> Result<Self, Self::Error> {
+    fn try_from(phrase: &str) -> std::result::Result<Self, Self::Error> {
         // let (pair, seed) = sp_keyring::ed25519::Pair::from_phrase(phrase, None)?;
         let (pair, seed) = sp_core::ed25519::Pair::from_phrase(phrase, None)
-            .map_err(|err| anyhow::anyhow!("{:?}", err))?;
+            .map_err(|err| anyhow!("{:?}", err))?;
 
         Ok(Self { pair, seed })
     }
 }
+
+// [0, 1, 2] <[u8]> -> string ?! 0 , 1 , 2

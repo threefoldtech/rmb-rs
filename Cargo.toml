@@ -15,4 +15,7 @@ async-trait = "0.1.53"
 sp-core = { version = "6.0.0", features = ["full_crypto"] }
 sp-keyring = "6.0.0"
 subxt = "0.20.0"
+log = "0.4"
+hex = "0.4"
+
 [dev-dependencies]

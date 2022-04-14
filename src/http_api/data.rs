@@ -1,4 +1,4 @@
-use crate::{storage::Storage, types::Identity};
+use crate::{identity::Identity, storage::Storage};
 
 /// - This is an example struct which holds the shared parameters between all handlers
 /// such as the database or cache
