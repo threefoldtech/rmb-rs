@@ -164,3 +164,36 @@ This is a little bit complex. It needs to do the following:
 - Message is sent to the worker, along side the twin object
 - worker can then try to call either `/rmb-remote` or `/rmb-reply` based on the Queue type.
 - if **FORWARD** the worker can report the caller immediately with an error if message was not able to deliver (calling Storage.reply() with right error filled in)
+
+# Proxying
+Proxying the support for one rmb instance (twin) to forward a message on behalf of another twin. This can be useful if the first rmb (the sender) can't run it's own instance of rmb, hence it can ask a nearby twin (over other means of communication that is not part of this specs) to send a message to another twin (receiver) over rmb protocol. But the receiver then need to send the answer back to the proxy, which will then deliver the reply to the caller.
+
+There are 3 parties in this scenario:
+- **sender**: A twin that is not running it's own instance of rmb, but has a configured twin object on the chain, hence it's public key is valid.
+- **proxy**: the twin with rmb instance, that will work as a bridge
+- **receiver**: Another twin with it's own rmb instance and can be reached over the rmb protocol.
+
+An instance of RMB only accepts messages from local processes (over redis). As explained above the /rmb-remote, and /rmb-reply are only intended for RMB to RMB communication. Hence to support proxying a 3rd party process must run local to the proxy rmb, this process will implement the public communication protocol to receive proxy requests from sender twins. This of course outside the scope of this document.
+
+> For example, an http app can run next to rmb that accepts request to proxy messages. for example the grid proxy. This process can implement validation on this message normally to save processing time. For example validate the signature, timestamps, etc...
+
+Once the 3rd party app receives a message, it can communicate with it's local rmb normally like any other local process. It can use available rmb client implementation.
+
+- **payload**: is the message that is intended for delivery to the receiver rmb
+- **envelope**: is the message that is initiated from proxy to receiver.
+
+The point is the 3rd party app, once it receives a `payload` message and once it's done with the validation, it will simply crete a new `envelope` message that wraps the payload. This message will have the fixed cmd `system.proxy`. Message is then sent normally to `receiver` rmb.
+
+`envelope` message goes through the same processing as a normal message (validation) note that the twin id on the envelope message is the `proxy` twin.
+
+This mean that this envelope message will end up on the `msgbus.system.proxy` queue (if all validation is fine). A special routine handler on this queue will does the following:
+
+- it will extract the `payload` message from the `data` field of the `envelope`
+- it will does payload validation (against the sender twin id), and timestamps validation, etc...
+- the message `$ret` is set to `msgbus.system.proxied`
+- the envelope message is parked in redis (using a special) `proxied.$id` key. TTL is applied
+- the message is sent to `msgbus.$cmd`
+- once the msg is processed by the local process. the message is then pushed on the correct `msgbus.system.proxied`
+- another routing (or same) is pulling from `msgbus.system.proxied`.
+- this will then get the envelope from redis and create a return message (setting correct src/dst) and push again the `envelop.$ret` (this was set by the normal rmb operation)
+- response will arrive at the 3rd party app normally
