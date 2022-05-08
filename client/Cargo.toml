@@ -1,0 +1,95 @@
+[package]
+name = "rmb-rs-client"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+substrate-api-client = "0.6.6"
+# sp-core = "6.0.0"
+anyhow = "1.0.56"
+sp-keyring = "3.0.0"
+# frame-metadata = "15.0.0"
+# frame-support = "3.0.0"
+# frame-system = "3"
+parity-scale-codec = "3.1.2"
+[dev-dependencies]
+env_logger = "0.9.0"
+log = "0.4.0"
+
+[dependencies.codec]
+version = "2.0.0"
+features = ["derive"]
+default-features = false
+package = "parity-scale-codec"
+
+[dependencies.frame-metadata]
+version = "13.0.0"
+default-features = false
+
+[dependencies.frame-support]
+version = "3.0"
+default-features = false
+
+[dependencies.frame-system]
+version = "3.0"
+optional = true
+
+[dependencies.hex]
+version = "0.4.3"
+features = ["alloc"]
+default-features = false
+
+[dependencies.log]
+version = "0.4"
+
+[dependencies.sc-rpc-api]
+version = "0.9.0"
+optional = true
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+optional = true
+
+[dependencies.serde_json]
+version = "1.0"
+optional = true
+
+[dependencies.sp-core]
+version = "3.0"
+features = ["full_crypto"]
+default-features = false
+
+[dependencies.sp-runtime]
+version = "3.0"
+default-features = false
+
+[dependencies.sp-std]
+version = "3.0"
+default-features = false
+
+[dependencies.sp-version]
+version = "3.0"
+optional = true
+
+[dependencies.thiserror]
+version = "1.0"
+optional = true
+
+[dependencies.ws]
+version = "0.9.1"
+features = ["ssl"]
+optional = true
+[dev-dependencies.clap]
+version = "2.3.3"
+features = ["yaml"]
+
+[dev-dependencies.sp-keyring]
+version = "3.0"
+
+[features]
+default = ["std"]
+full_crypto = []
+std = ["sc-rpc-api", "sp-core/std", "codec/std", "frame-metadata/std", "sp-version", "frame-system", "sp-runtime/std", "frame-support/std", "sp-std/std", "serde/std", "serde_json", "ws", "hex/std", "thiserror"]
