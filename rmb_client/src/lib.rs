@@ -6,7 +6,7 @@ use sp_core::Pair;
 use sp_runtime::MultiSignature;
 use substrate_api_client::Api;
 
-pub struct Client<P>
+pub struct RmbClient<P>
 where
     P: Pair,
     MultiSignature: From<P::Signature>,
@@ -14,7 +14,7 @@ where
     api: Api<P>,
 }
 
-impl<P> Client<P>
+impl<P> RmbClient<P>
 where
     P: Pair,
     MultiSignature: From<P::Signature>,
@@ -50,5 +50,17 @@ where
             .decode()?;
 
         Ok(twin_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_twin_id() {
+        let client = RmbClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string()).unwrap();
+        println!("{:#?}", client.get_twins(55));
+        assert_eq!(55, client.get_twin_id_by_account_id("5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb".to_string()).unwrap());
     }
 }

@@ -10,6 +10,7 @@ mod http_api;
 mod identity;
 mod storage;
 mod types;
+mod twin;
 
 #[tokio::main]
 async fn main() {
