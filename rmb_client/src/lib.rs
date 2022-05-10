@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use anyhow::{Ok, Result};
 use codec::{Decode, Encode};
-use sp_core::Pair;
+use sp_core::{Pair};
 use sp_runtime::MultiSignature;
 use substrate_api_client::Api;
 
@@ -59,8 +59,17 @@ mod tests {
 
     #[test]
     fn test_get_twin_id() {
-        let client = RmbClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string()).unwrap();
+        let client =
+            RmbClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string())
+                .unwrap();
         println!("{:#?}", client.get_twins(55));
-        assert_eq!(55, client.get_twin_id_by_account_id("5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb".to_string()).unwrap());
+        assert_eq!(
+            55,
+            client
+                .get_twin_id_by_account_id(
+                    "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb".to_string()
+                )
+                .unwrap()
+        );
     }
 }

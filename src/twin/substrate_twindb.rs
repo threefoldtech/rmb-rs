@@ -1,19 +1,11 @@
-mod twin;
-mod substrate_twindb;
-
-pub use twin::*;
-pub use substrate_twindb::*;
-
 use anyhow::Result;
 use async_trait::async_trait;
 use rmb_client::RmbClient;
-use sp_core::{crypto::Dummy, ed25519, Pair};
-use twin::Twin;
+use sp_core::{ed25519};
 
-#[async_trait]
-pub trait TwinDB {
-    async fn get(&self, twin_id: u32) -> Result<Twin>;
-}
+use super::TwinDB;
+use super::Twin;
+
 
 pub struct SubstrateTwinDB {
     client: RmbClient<ed25519::Pair>,
