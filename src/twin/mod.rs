@@ -1,25 +1,15 @@
-mod twin;
 mod substrate_twindb;
 
-pub use twin::*;
-pub use substrate_twindb::*;
+use crate::types::Message;
 use anyhow::{Ok, Result};
 use async_trait::async_trait;
-use crate::types::Message;
 use parity_scale_codec::Decode;
+pub use substrate_twindb::*;
 
 #[async_trait]
 pub trait TwinDB {
     async fn get(&self, twin_id: u32) -> Result<Twin>;
 }
-
-#[async_trait]
-pub trait Cache<T> {
-    async fn cache(&self, c: T);
-}
-
-
-
 
 #[derive(Decode)]
 pub struct Twin {

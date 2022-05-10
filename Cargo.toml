@@ -23,4 +23,5 @@ log = "0.4"
 hex = { version = "0.4", features = ["alloc"] }
 sp-runtime = "3.0.0"
 parity-scale-codec = { version = "2.0.0", features = ["derive"] }
+bb8-redis = "0.11.0"
 rmb_client = { path = "rmb_client" }

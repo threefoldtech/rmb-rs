@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use anyhow::{Ok, Result};
 use codec::{Decode, Encode};
@@ -6,12 +6,14 @@ use sp_core::{Pair};
 use sp_runtime::MultiSignature;
 use substrate_api_client::Api;
 
+
+#[derive(Clone)]
 pub struct RmbClient<P>
 where
     P: Pair,
     MultiSignature: From<P::Signature>,
 {
-    api: Api<P>,
+    api: Arc<Api<P>>,
 }
 
 impl<P> RmbClient<P>
@@ -20,7 +22,7 @@ where
     MultiSignature: From<P::Signature>,
 {
     pub fn new(url: String) -> Result<Self> {
-        let api = Api::<P>::new(url)?;
+        let api = Arc::new(Api::<P>::new(url)?);
         Ok(Self { api })
     }
 
