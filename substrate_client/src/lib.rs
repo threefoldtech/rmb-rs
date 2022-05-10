@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
-use anyhow::{Ok, Result};
+use anyhow::{Ok, Result, Context};
 use codec::{Decode, Encode};
 use sp_core::{ed25519};
 use substrate_api_client::Api;
@@ -15,7 +15,7 @@ pub struct SubstrateClient
 impl SubstrateClient
 {
     pub fn new(url: String) -> Result<Self> {
-        let api = Arc::new(Api::<ed25519::Pair>::new(url)?);
+        let api = Arc::new(Api::<ed25519::Pair>::new(url).context("failed to create substrate client")?);
         Ok(Self { api })
     }
 
