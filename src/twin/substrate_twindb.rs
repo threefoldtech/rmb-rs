@@ -2,8 +2,8 @@ use crate::cache::Cache;
 use crate::cache::RedisCache;
 use anyhow::Result;
 use async_trait::async_trait;
-use substrate_client::SubstrateClient;
 use sp_core::ed25519;
+use substrate_client::SubstrateClient;
 use tokio::task::spawn_blocking;
 
 use super::Twin;

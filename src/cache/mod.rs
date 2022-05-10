@@ -1,9 +1,9 @@
 mod redis;
 pub use redis::RedisCache;
 
-use std::marker::{Send, Sync};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::marker::{Send, Sync};
 
 #[async_trait]
 pub trait Cache<T>: Send + Sync {

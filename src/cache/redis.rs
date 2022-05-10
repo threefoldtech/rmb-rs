@@ -24,11 +24,9 @@ impl RedisCache {
 #[async_trait]
 impl Cache<Twin> for RedisCache {
     async fn set<S: ToString + Send + Sync>(id: S, obj: Twin) -> Result<()> {
-
         Ok(())
     }
     async fn get<S: ToString + Send + Sync>(id: S) -> Result<Option<Twin>> {
-
         Ok(None)
     }
 }
