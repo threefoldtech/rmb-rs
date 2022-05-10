@@ -22,7 +22,7 @@ impl SubstrateTwinDB {
 #[async_trait]
 impl TwinDB for SubstrateTwinDB {
     async fn get(&self, twin_id: u32) -> Result<Twin> {
-        let twin = self.client.get_twins(twin_id)?;
+        let twin = self.client.get_twin(twin_id)?;
         Ok(twin)
     }
 }

@@ -24,7 +24,7 @@ where
         Ok(Self { api })
     }
 
-    pub fn get_twins<T: Decode>(&self, id: u32) -> Result<T> {
+    pub fn get_twin<T: Decode>(&self, id: u32) -> Result<T> {
         let twin: T = self
             .api
             .get_storage_map("TfgridModule", "Twins", id.encode(), None)?
@@ -62,7 +62,7 @@ mod tests {
         let client =
             RmbClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string())
                 .unwrap();
-        println!("{:#?}", client.get_twins(55));
+        println!("{:#?}", client.get_twin(55));
         assert_eq!(
             55,
             client
