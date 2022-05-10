@@ -2,27 +2,20 @@ use std::{str::FromStr, sync::Arc};
 
 use anyhow::{Ok, Result};
 use codec::{Decode, Encode};
-use sp_core::{Pair};
-use sp_runtime::MultiSignature;
+use sp_core::{ed25519};
 use substrate_api_client::Api;
 
 
 #[derive(Clone)]
-pub struct RmbClient<P>
-where
-    P: Pair,
-    MultiSignature: From<P::Signature>,
+pub struct SubstrateClient
 {
-    api: Arc<Api<P>>,
+    api: Arc<Api<ed25519::Pair>>,
 }
 
-impl<P> RmbClient<P>
-where
-    P: Pair,
-    MultiSignature: From<P::Signature>,
+impl SubstrateClient
 {
     pub fn new(url: String) -> Result<Self> {
-        let api = Arc::new(Api::<P>::new(url)?);
+        let api = Arc::new(Api::<ed25519::Pair>::new(url)?);
         Ok(Self { api })
     }
 
@@ -30,7 +23,7 @@ where
         let twin: T = self
             .api
             .get_storage_map("TfgridModule", "Twins", id.encode(), None)?
-            .ok_or(anyhow::anyhow!("Twin id is not found"))?
+            .ok_or(anyhow::anyhow!("twin id is not found"))?
             .decode()?;
 
         Ok(twin)
@@ -62,7 +55,7 @@ mod tests {
     #[test]
     fn test_get_twin_id() {
         let client =
-            RmbClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string())
+            SubstrateClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string())
                 .unwrap();
         println!("{:#?}", client.get_twin(55));
         assert_eq!(

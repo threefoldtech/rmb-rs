@@ -2,7 +2,7 @@ use crate::cache::Cache;
 use crate::cache::RedisCache;
 use anyhow::Result;
 use async_trait::async_trait;
-use rmb_client::RmbClient;
+use substrate_client::SubstrateClient;
 use sp_core::ed25519;
 use tokio::task::spawn_blocking;
 
@@ -17,7 +17,7 @@ pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    client: RmbClient<ed25519::Pair>,
+    client: SubstrateClient,
     cache: Option<C>,
 }
 
@@ -26,7 +26,7 @@ where
     C: Cache<Twin>,
 {
     pub async fn new(url: String, cache: Option<C>) -> Result<Self> {
-        let client = RmbClient::<ed25519::Pair>::new(url)?;
+        let client = SubstrateClient::new(url)?;
         Ok(Self { client, cache })
     }
 }
@@ -38,7 +38,6 @@ where
 {
     async fn get(&self, twin_id: u32) -> Result<Twin> {
         let client = self.client.clone();
-        let twin = spawn_blocking(move || client.get_twin(twin_id)).await??;
-        Ok(twin)
+        spawn_blocking(move || client.get_twin(twin_id)).await?
     }
 }
