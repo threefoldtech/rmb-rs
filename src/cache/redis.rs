@@ -58,14 +58,14 @@ where
     async fn get<S: ToString + Send + Sync>(&self, key: S) -> Result<Option<T>> {
         let mut conn = self.get_connection().await?;
 
-        let ret: Option<String> = cmd("GET")
+        let ret: Option<Vec<u8>> = cmd("GET")
             .arg(key.to_string())
             .query_async(&mut *conn)
             .await?;
 
         match ret {
             Some(val) => {
-                let ret: T = serde_json::from_str(&val)
+                let ret: T = serde_json::from_slice(&val)
                     .context("unable to deserialze redis value to twin object")?;
 
                 Ok(Some(ret))
