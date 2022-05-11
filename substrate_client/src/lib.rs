@@ -1,37 +1,40 @@
 use std::{str::FromStr, sync::Arc};
 
-use anyhow::{Ok, Result, Context};
+use anyhow::{Context, Result};
 use codec::{Decode, Encode};
-use sp_core::{ed25519};
+use sp_core::ed25519;
 use substrate_api_client::Api;
 
-
 #[derive(Clone)]
-pub struct SubstrateClient
-{
+pub struct SubstrateClient {
     api: Arc<Api<ed25519::Pair>>,
 }
 
-impl SubstrateClient
-{
+impl SubstrateClient {
     pub fn new(url: String) -> Result<Self> {
-        let api = Arc::new(Api::<ed25519::Pair>::new(url).context("failed to create substrate client")?);
+        let api =
+            Arc::new(Api::<ed25519::Pair>::new(url).context("failed to create substrate client")?);
         Ok(Self { api })
     }
 
-    pub fn get_twin<T: Decode>(&self, id: u32) -> Result<T> {
-        let twin: T = self
+    pub fn get_twin<T: Decode>(&self, id: u32) -> Result<Option<T>> {
+        let storage_value = self
             .api
-            .get_storage_map("TfgridModule", "Twins", id.encode(), None)?
-            .ok_or(anyhow::anyhow!("twin id is not found"))?
-            .decode()?;
+            .get_storage_map("TfgridModule", "Twins", id.encode(), None)?;
+
+        let twin: Option<T> = if let Some(sv) = storage_value {
+            Some(sv.decode().context("failed to decode twin object")?)
+        } else {
+            None
+        };
 
         Ok(twin)
     }
 
     pub fn get_twin_id_by_account_id(&self, account_id: String) -> Result<u32> {
         let account_id = sp_core::ed25519::Public::from_str(&account_id)
-            .map_err(|err| anyhow::anyhow!(format!("{:?}", err)))?;
+            .map_err(|err| anyhow::anyhow!(format!("{:?}", err)))
+            .context("failed to get ed25519 key from account id")?;
 
         let twin_id: u32 = self
             .api
@@ -42,7 +45,8 @@ impl SubstrateClient
                 None,
             )?
             .ok_or(anyhow::anyhow!("Account id is not found"))?
-            .decode()?;
+            .decode()
+            .context("failed to decode twin object")?;
 
         Ok(twin_id)
     }
@@ -54,9 +58,10 @@ mod tests {
 
     #[test]
     fn test_get_twin_id() {
-        let client =
-            SubstrateClient::<sp_core::ed25519::Pair>::new("wss://tfchain.dev.grid.tf:443".to_string())
-                .unwrap();
+        let client = SubstrateClient::<sp_core::ed25519::Pair>::new(
+            "wss://tfchain.dev.grid.tf:443".to_string(),
+        )
+        .unwrap();
         println!("{:#?}", client.get_twin(55));
         assert_eq!(
             55,
