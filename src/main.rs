@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused)]
+
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -6,9 +9,11 @@ extern crate anyhow;
 use http_api::HttpApi;
 use identity::Ed25519Identity;
 use storage::RedisStorage;
+mod cache;
 mod http_api;
 mod identity;
 mod storage;
+mod twin;
 mod types;
 
 #[tokio::main]

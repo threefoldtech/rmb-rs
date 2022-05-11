@@ -5,6 +5,11 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# [workspace]
+# members = [
+#     "rmb_client"
+# ]
+
 [dependencies]
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
@@ -12,10 +17,11 @@ anyhow = "1.0.56"
 futures = "0.3"
 serde = { version = "1.0.136", features = ["derive"] }
 async-trait = "0.1.53"
-sp-core = { version = "6.0.0", features = ["full_crypto"] }
-sp-keyring = "6.0.0"
-subxt = "0.20.0"
+sp-core = { version = "3.0.0", features = ["full_crypto"] }
+sp-keyring = "3.0.0"
 log = "0.4"
-hex = "0.4"
-
-[dev-dependencies]
+hex = { version = "0.4", features = ["alloc"] }
+sp-runtime = "3.0.0"
+parity-scale-codec = { version = "2.0.0", features = ["derive"] }
+bb8-redis = "0.11.0"
+substrate_client = { path = "substrate_client" }
