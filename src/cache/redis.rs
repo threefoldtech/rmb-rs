@@ -5,7 +5,7 @@ use super::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 //
 // how_to_init
@@ -27,7 +27,7 @@ impl RedisCache {
 #[async_trait]
 impl<'a, T> Cache<T> for RedisCache
 where
-    T: Serialize + Deserialize<'a> + Send + Sync + 'static
+    T: Serialize + Deserialize<'a> + Send + Sync + 'static,
 {
     async fn set<S: ToString + Send + Sync>(&self, id: S, obj: T) -> Result<()> {
         Ok(())
@@ -36,5 +36,3 @@ where
         Ok(None)
     }
 }
-
-
