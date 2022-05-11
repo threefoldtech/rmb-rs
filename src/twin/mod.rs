@@ -8,7 +8,6 @@ use parity_scale_codec::Decode;
 use serde::{Deserialize, Serialize};
 pub use substrate_twindb::*;
 
-
 #[async_trait]
 pub trait TwinDB {
     async fn get(&self, twin_id: u32) -> Result<Twin>;
@@ -24,11 +23,5 @@ pub struct Twin {
 impl Twin {
     pub async fn verify(&self, _msg: &Message) -> Result<()> {
         Ok(())
-    }
-}
-
-impl FromRedisValue for Twin {
-    fn from_redis_value(v: &bb8_redis::redis::Value) -> bb8_redis::redis::RedisResult<Self> {
-        todo!()
     }
 }

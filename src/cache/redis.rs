@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
-    redis::{cmd, ToRedisArgs, FromRedisValue},
+    redis::{cmd, FromRedisValue, ToRedisArgs},
     RedisConnectionManager,
 };
 use serde::{Deserialize, Serialize, Serializer};
@@ -41,10 +41,12 @@ impl RedisCache {
 #[async_trait]
 impl<'a, T> Cache<T> for RedisCache
 where
-    T: ToRedisArgs + FromRedisValue + Serialize + Deserialize<'a> + Send + Sync + 'static,
+    T: Serialize + Deserialize<'a> + Send + Sync + 'static,
 {
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
+        let obj =
+            serde_json::to_string(&obj).context("unable to serialze twin object for redis")?;
         cmd("SET")
             .arg(key.to_string())
             .arg(obj)
@@ -56,11 +58,19 @@ where
     async fn get<S: ToString + Send + Sync>(&self, key: S) -> Result<Option<T>> {
         let mut conn = self.get_connection().await?;
 
-        let twin: Twin = cmd("GET")
+        let ret: Option<String> = cmd("GET")
             .arg(key.to_string())
             .query_async(&mut *conn)
             .await?;
 
-        Ok(None)
+        match ret {
+            Some(val) => {
+                let ret: T = serde_json::from_str(&val)
+                    .context("unable to deserialze redis value to twin object")?;
+
+                Ok(Some(ret))
+            }
+            None => Ok(None),
+        }
     }
 }
