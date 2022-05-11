@@ -30,10 +30,8 @@ where
         Ok(Self { client, cache })
     }
 
-
     async fn get_cached_twin(&self, twin_id: u32) -> Option<Twin> {
         if let Some(cache) = self.cache.clone() {
-
             if let Ok(res) = cache.get(twin_id).await {
                 return res;
             }
@@ -41,7 +39,14 @@ where
 
         None
     }
-    
+
+    async fn cache_twin(&self, obj: Twin) -> Result<()> {
+        if let Some(cache) = self.cache.clone() {
+            cache.set(obj.id, obj).await?
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -49,13 +54,14 @@ impl<C> TwinDB for SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    async fn get(&self, twin_id: u32) -> Result<Option<Twin>> {
-
+    async fn get(&self, twin_id: u32) -> Result<Twin> {
         match self.get_cached_twin(twin_id).await {
-            Some(twin) => Ok(Some(twin)),
+            Some(twin) => Ok(twin),
             None => {
                 let client = self.client.clone();
-                spawn_blocking(move || client.get_twin(twin_id)).await?
+                let twin: Twin = spawn_blocking(move || client.get_twin(twin_id)).await??;
+                self.cache_twin(twin.clone()).await?;
+                Ok(twin)
             }
         }
     }
