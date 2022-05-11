@@ -9,7 +9,7 @@ use bb8_redis::{
     redis::{cmd, FromRedisValue, ToRedisArgs},
     RedisConnectionManager,
 };
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Serialize, Serializer};
 
 //
 // how_to_init
@@ -39,9 +39,9 @@ impl RedisCache {
 }
 
 #[async_trait]
-impl<'a, T> Cache<T> for RedisCache
+impl<T> Cache<T> for RedisCache
 where
-    T: Serialize + Deserialize<'a> + Send + Sync + 'static,
+    T: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
