@@ -31,7 +31,7 @@ where
     }
 
     async fn get_cached_twin(&self, twin_id: u32) -> Option<Twin> {
-        if let Some(cache) = self.cache.clone() {
+        if let Some(ref cache) = self.cache {
             if let Ok(res) = cache.get(twin_id).await {
                 return res;
             }
@@ -41,7 +41,7 @@ where
     }
 
     async fn cache_twin(&self, obj: Twin) -> Result<()> {
-        if let Some(cache) = self.cache.clone() {
+        if let Some(ref cache) = self.cache {
             cache.set(obj.id, obj).await?
         }
 
