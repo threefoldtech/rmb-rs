@@ -29,24 +29,6 @@ where
         let client = SubstrateClient::new(url)?;
         Ok(Self { client, cache })
     }
-
-    async fn get_cached_twin(&self, twin_id: u32) -> Option<Twin> {
-        if let Some(ref cache) = self.cache {
-            if let Ok(res) = cache.get(twin_id).await {
-                return res;
-            }
-        }
-
-        None
-    }
-
-    async fn cache_twin(&self, obj: Twin) -> Result<()> {
-        if let Some(ref cache) = self.cache {
-            cache.set(obj.id, obj).await?
-        }
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -55,14 +37,13 @@ where
     C: Cache<Twin>,
 {
     async fn get(&self, twin_id: u32) -> Result<Twin> {
-        match self.get_cached_twin(twin_id).await {
-            Some(twin) => Ok(twin),
-            None => {
-                let client = self.client.clone();
-                let twin: Twin = spawn_blocking(move || client.get_twin(twin_id)).await??;
-                self.cache_twin(twin.clone()).await?;
-                Ok(twin)
-            }
+        if let Some(twin) = self.cache.get(twin_id).await? {
+            return Ok(twin);
         }
+
+        let client = self.client.clone();
+        let twin: Twin = spawn_blocking(move || client.get_twin(twin_id)).await??;
+        self.cache.set(twin.id, twin.clone()).await?;
+        Ok(twin)
     }
 }
