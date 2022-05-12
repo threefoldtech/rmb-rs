@@ -3,6 +3,7 @@ mod substrate_twindb;
 use crate::types::Message;
 use anyhow::{Ok, Result};
 use async_trait::async_trait;
+use bb8_redis::redis::FromRedisValue;
 use parity_scale_codec::Decode;
 use serde::{Deserialize, Serialize};
 pub use substrate_twindb::*;
