@@ -1,4 +1,6 @@
+mod memory;
 mod redis;
+pub use memory::MemCache;
 pub use redis::RedisCache;
 
 use anyhow::Result;
