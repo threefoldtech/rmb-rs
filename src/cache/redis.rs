@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::twin::Twin;
 
 use super::Cache;
@@ -19,28 +21,24 @@ use serde::{de::DeserializeOwned, Serialize, Serializer};
 //
 
 #[derive(Clone)]
-pub struct RedisCache<P>
-where
-    P: Into<String>,
+pub struct RedisCache
 {
     pool: Pool<RedisConnectionManager>,
-    prefix: P,
-    ttl: usize,
+    prefix: String,
+    ttl: Duration,
 }
 
-impl<P> RedisCache<P>
-where
-    P: Into<String>,
+impl RedisCache
 {
-    pub async fn new(
+    pub async fn new<P: Into<String>>(
         pool: Pool<RedisConnectionManager>,
         prefix: P,
-        ttl_sec: usize,
+        ttl: Duration,
     ) -> Result<Self> {
         Ok(Self {
             pool,
-            prefix,
-            ttl: ttl_sec,
+            prefix: prefix.into(),
+            ttl,
         })
     }
 
@@ -56,20 +54,19 @@ where
 }
 
 #[async_trait]
-impl<T, P> Cache<T> for RedisCache<P>
+impl<T> Cache<T> for RedisCache
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: Into<String> + Send + Sync + Clone,
 {
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
-        let mut key = format!("{:?}.{}", self.prefix.clone().into(), key.to_string());
+        let key = format!("{:?}.{}", self.prefix, key.to_string());
         cmd("SET")
             .arg(key)
             .arg(obj)
             .arg("EX")
-            .arg(self.ttl)
+            .arg(self.ttl.as_secs())
             .query_async(&mut *conn)
             .await?;
 
