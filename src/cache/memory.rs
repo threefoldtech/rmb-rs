@@ -1,9 +1,6 @@
-use std::{
-    borrow::BorrowMut,
-    collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
-};
+use std::{borrow::BorrowMut, collections::HashMap, time::Duration};
+
+use tokio::sync::Mutex;
 
 use super::Cache;
 use crate::twin::Twin;
@@ -33,23 +30,14 @@ where
     T: Clone + Send + Sync + 'static,
 {
     async fn set<K: ToString + Send + Sync>(&self, key: K, obj: T) -> Result<()> {
-        let mut mem = self
-            .mem
-            .lock()
-            .map_err(|err| anyhow!("{}", err))
-            .context("cannot acquire the in-memory cache")?;
-
+        let mut mem = self.mem.lock().await;
         mem.insert(key.to_string(), obj);
+
         Ok(())
     }
 
     async fn get<K: ToString + Send + Sync>(&self, key: K) -> Result<Option<T>> {
-        let mem = self
-            .mem
-            .lock()
-            .map_err(|err| anyhow!("{}", err))
-            .context("cannot acquire the in-memory cache")?;
-
+        let mem = self.mem.lock().await;
         match mem.get(&key.to_string()) {
             None => Ok(None),
             Some(v) => Ok(Some(v.clone())),
