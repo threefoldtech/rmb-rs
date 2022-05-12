@@ -21,15 +21,13 @@ use serde::{de::DeserializeOwned, Serialize, Serializer};
 //
 
 #[derive(Clone)]
-pub struct RedisCache
-{
+pub struct RedisCache {
     pool: Pool<RedisConnectionManager>,
     prefix: String,
     ttl: Duration,
 }
 
-impl RedisCache
-{
+impl RedisCache {
     pub async fn new<P: Into<String>>(
         pool: Pool<RedisConnectionManager>,
         prefix: P,
@@ -61,7 +59,7 @@ where
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
-        let key = format!("{:?}.{}", self.prefix, key.to_string());
+        let key = format!("{}.{}", self.prefix, key.to_string());
         cmd("SET")
             .arg(key)
             .arg(obj)
