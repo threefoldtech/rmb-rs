@@ -28,7 +28,7 @@ pub struct RedisCache {
 }
 
 impl RedisCache {
-    pub async fn new<P: Into<String>>(
+    pub fn new<P: Into<String>>(
         pool: Pool<RedisConnectionManager>,
         prefix: P,
         ttl: Duration,
@@ -87,5 +87,71 @@ where
             }
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::*;
+
+    async fn create_redis_cache() -> RedisCache {
+        let manager = RedisConnectionManager::new("url")
+            .context("unable to create redis connection manager")
+            .unwrap();
+        let pool = Pool::builder()
+            .build(manager)
+            .await
+            .context("unable to build pool or redis connection manager")
+            .unwrap();
+        let cache = RedisCache::new(pool, "twin", Duration::from_secs(20))
+            .context("unable to create redis cache")
+            .unwrap();
+
+        cache
+    }
+
+    #[tokio::test]
+    async fn test_success_set_get_string() {
+        let cache = create_redis_cache().await;
+        cache
+            .set("k".to_string(), "v".to_string())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+        let retrieved_value: Option<String> = cache
+            .get("k")
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some("v".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_success_set_get_struct() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+        struct DummyStruct {
+            pub k: String,
+        }
+
+        let some_val = DummyStruct { k: "v".to_string() };
+
+        let cache = create_redis_cache().await;
+
+        cache
+            .set("k".to_string(), some_val.clone())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+
+        let retrieved_value: Option<DummyStruct> = cache
+            .get("k")
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some(some_val));
     }
 }

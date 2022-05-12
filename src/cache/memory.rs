@@ -1,6 +1,6 @@
-use std::{borrow::BorrowMut, collections::HashMap, time::Duration};
+use std::{borrow::BorrowMut, collections::HashMap, sync::Arc, time::Duration};
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use super::Cache;
 use crate::twin::Twin;
@@ -8,14 +8,15 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
+#[derive(Clone)]
 pub struct MemCache<V> {
-    mem: RwLock<HashMap<String, V>>,
+    mem: Arc<RwLock<HashMap<String, V>>>,
 }
 
 impl<V> MemCache<V> {
-    pub async fn new<P: Into<String>>(prefix: P, ttl: Duration) -> Self {
+    pub fn new() -> Self {
         Self {
-            mem: RwLock::new(HashMap::new()),
+            mem: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -38,5 +39,55 @@ where
             None => Ok(None),
             Some(v) => Ok(Some(v.clone())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_success_set_get_string() {
+        let cache = MemCache::new();
+        cache
+            .set("k".to_string(), "v".to_string())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+        let retrieved_value: Option<String> = cache
+            .get("k")
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some("v".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_success_set_get_struct() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+        struct DummyStruct {
+            pub k: String,
+        }
+
+        let some_val = DummyStruct { k: "v".to_string() };
+
+        let cache = MemCache::new();
+
+        cache
+            .set("k".to_string(), some_val.clone())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+
+        let retrieved_value: Option<DummyStruct> = cache
+            .get("k")
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some(some_val));
     }
 }

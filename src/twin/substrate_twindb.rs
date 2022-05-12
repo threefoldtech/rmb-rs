@@ -47,3 +47,37 @@ where
         Ok(twin)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, time::Duration};
+
+    use crate::cache::MemCache;
+
+    use super::*;
+    use anyhow::Context;
+
+    #[tokio::test]
+    async fn test_with_mem_cache() {
+        let mem: MemCache<Twin> = MemCache::new();
+
+        let db = SubstrateTwinDB::<MemCache<Twin>>::new("url".to_string(), Some(mem.clone()))
+            .await
+            .context("cannot create substrate twin db object")
+            .unwrap();
+
+        let twin = db
+            .get(55)
+            .await
+            .context("can't get twin from substrate")
+            .unwrap();
+
+        let cached_twin = mem
+            .get::<u32>(55)
+            .await
+            .context("cannot get twin from the cache")
+            .unwrap();
+
+        assert_eq!(Some(twin), cached_twin);
+    }
+}

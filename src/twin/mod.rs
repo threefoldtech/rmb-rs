@@ -13,7 +13,7 @@ pub trait TwinDB {
     async fn get(&self, twin_id: u32) -> Result<Twin>;
 }
 
-#[derive(Clone, Decode, Serialize, Deserialize)]
+#[derive(Clone, Decode, Serialize, Deserialize, PartialEq, Debug)]
 pub struct Twin {
     pub id: u64,
     pub pk: String,
