@@ -96,8 +96,11 @@ mod tests {
 
     use super::*;
 
+    const PREFIX: &str = "twin";
+    const TTL: u64 = 20;
+
     async fn create_redis_cache() -> RedisCache {
-        let manager = RedisConnectionManager::new("url")
+        let manager = RedisConnectionManager::new("redis://127.0.0.1/")
             .context("unable to create redis connection manager")
             .unwrap();
         let pool = Pool::builder()
@@ -105,7 +108,7 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        let cache = RedisCache::new(pool, "twin", Duration::from_secs(20))
+        let cache = RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
             .context("unable to create redis cache")
             .unwrap();
 
@@ -114,44 +117,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_success_set_get_string() {
+        const KEY: &str = "key";
+        const VAL: &str = "val";
+
         let cache = create_redis_cache().await;
         cache
-            .set("k".to_string(), "v".to_string())
+            .set(KEY.to_owned(), VAL.to_owned())
             .await
             .context("can not set value to cache")
             .unwrap();
         let retrieved_value: Option<String> = cache
-            .get("k")
+            .get(PREFIX.to_owned() + "." + KEY)
             .await
             .context("can not get value from the cache")
             .unwrap();
 
-        assert_eq!(retrieved_value, Some("v".to_string()));
+        assert_eq!(retrieved_value, Some(VAL.to_owned()));
     }
 
     #[tokio::test]
     async fn test_success_set_get_struct() {
         #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
         struct DummyStruct {
-            pub k: String,
+            pub k: usize,
         }
 
-        let some_val = DummyStruct { k: "v".to_string() };
+        const KEY: &str = "dummy";
+        const VAL: DummyStruct = DummyStruct { k: 55 };
 
         let cache = create_redis_cache().await;
 
+        let cache = create_redis_cache().await;
         cache
-            .set("k".to_string(), some_val.clone())
+            .set(KEY.to_owned(), VAL.to_owned())
             .await
             .context("can not set value to cache")
             .unwrap();
-
         let retrieved_value: Option<DummyStruct> = cache
-            .get("k")
+            .get(PREFIX.to_owned() + "." + KEY)
             .await
             .context("can not get value from the cache")
             .unwrap();
 
-        assert_eq!(retrieved_value, Some(some_val));
+        assert_eq!(retrieved_value, Some(VAL.to_owned()));
     }
 }

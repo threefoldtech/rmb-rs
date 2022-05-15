@@ -21,6 +21,9 @@ jobs:
         with:
           command: fmt
           args: -- --check
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.4.0
+        
       - uses: actions-rs/cargo@v1
         name: Run tests (ahm!)
         with:
