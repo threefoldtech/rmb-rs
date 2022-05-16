@@ -13,11 +13,19 @@ pub trait TwinDB {
     async fn get(&self, twin_id: u32) -> Result<Twin>;
 }
 
-#[derive(Clone, Decode, Serialize, Deserialize)]
+#[derive(Clone, Decode, Serialize, Deserialize, PartialEq, Debug)]
+pub struct EntityProof {
+    pub id: u32,
+    pub signature: String,
+}
+
+#[derive(Clone, Decode, Serialize, Deserialize, PartialEq, Debug)]
 pub struct Twin {
-    pub id: u64,
-    pub pk: String,
+    pub version: u32,
+    pub id: u32,
+    pub account: sp_core::crypto::AccountId32,
     pub address: String, // we use string not IP because the twin address can be a dns name
+    pub entities: Vec<EntityProof>,
 }
 
 impl Twin {

@@ -28,7 +28,7 @@ pub struct RedisCache {
 }
 
 impl RedisCache {
-    pub async fn new<P: Into<String>>(
+    pub fn new<P: Into<String>>(
         pool: Pool<RedisConnectionManager>,
         prefix: P,
         ttl: Duration,
@@ -87,5 +87,78 @@ where
             }
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::*;
+
+    const PREFIX: &str = "twin";
+    const TTL: u64 = 20;
+
+    async fn create_redis_cache() -> RedisCache {
+        let manager = RedisConnectionManager::new("redis://127.0.0.1/")
+            .context("unable to create redis connection manager")
+            .unwrap();
+        let pool = Pool::builder()
+            .build(manager)
+            .await
+            .context("unable to build pool or redis connection manager")
+            .unwrap();
+        let cache = RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
+            .context("unable to create redis cache")
+            .unwrap();
+
+        cache
+    }
+
+    #[tokio::test]
+    async fn test_success_set_get_string() {
+        const KEY: &str = "key";
+        const VAL: &str = "val";
+
+        let cache = create_redis_cache().await;
+        cache
+            .set(KEY.to_owned(), VAL.to_owned())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+        let retrieved_value: Option<String> = cache
+            .get(PREFIX.to_owned() + "." + KEY)
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some(VAL.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn test_success_set_get_struct() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+        struct DummyStruct {
+            pub k: usize,
+        }
+
+        const KEY: &str = "dummy";
+        const VAL: DummyStruct = DummyStruct { k: 55 };
+
+        let cache = create_redis_cache().await;
+
+        let cache = create_redis_cache().await;
+        cache
+            .set(KEY.to_owned(), VAL.to_owned())
+            .await
+            .context("can not set value to cache")
+            .unwrap();
+        let retrieved_value: Option<DummyStruct> = cache
+            .get(PREFIX.to_owned() + "." + KEY)
+            .await
+            .context("can not get value from the cache")
+            .unwrap();
+
+        assert_eq!(retrieved_value, Some(VAL.to_owned()));
     }
 }
