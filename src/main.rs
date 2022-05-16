@@ -11,6 +11,7 @@ use identity::Ed25519Identity;
 use storage::RedisStorage;
 mod cache;
 mod http_api;
+mod http_workers;
 mod identity;
 mod storage;
 mod twin;
