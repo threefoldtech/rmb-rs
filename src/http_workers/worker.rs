@@ -1,37 +1,53 @@
+use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
-use tokio::task;
+use tokio::sync::{mpsc, oneshot, Mutex};
 
-use super::Msg;
+use super::Work;
 
-pub struct Worker {
-    id: usize,
-    task: Option<task::JoinHandle<()>>,
+pub struct Worker<W> {
+    sender: mpsc::Sender<oneshot::Sender<W>>,
 }
 
-impl Worker {
-    pub async fn new(id: usize, mut receiver: Arc<Mutex<mpsc::Receiver<Msg>>>) -> Worker {
-        let task = tokio::spawn(async move {
+impl<W> Worker<W>
+where
+    W: Work + Send + Sync + 'static,
+{
+    pub async fn new(sender: mpsc::Sender<oneshot::Sender<W>>) -> Self {
+        Self { sender }
+    }
+    pub async fn run(self) {
+        tokio::spawn(async move {
             loop {
-                let message = receiver.lock().await.recv().await;
-                match message {
-                    Some(Msg::NewJob(job)) => {
-                        job();
-                    }
-                    Some(Msg::Terminate) => {
-                        break;
-                    }
-                    None => {
-                        todo!()
-                    }
+                let (tx, rx) = oneshot::channel();
+
+                if let Err(_err) = self.sender.send(tx).await {
+                    break;
                 }
+
+                match rx.await {
+                    Ok(job) => job.run().await,
+                    Err(e) => {
+                        log::debug!("worker handler dropped without receiving a job");
+                    }
+                };
             }
         });
+    }
+}
 
-        Worker {
-            id,
-            task: Some(task),
+pub struct WorkerHandle<W: Work> {
+    pub sender: oneshot::Sender<W>,
+}
+
+impl<W> WorkerHandle<W>
+where
+    W: Work,
+{
+    pub async fn send(self, job: W) -> Result<()> {
+        if self.sender.send(job).is_err() {
+            bail!("failed to queue job");
         }
+
+        Ok(())
     }
 }

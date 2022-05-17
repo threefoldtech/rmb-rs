@@ -19,6 +19,12 @@ mod types;
 
 #[tokio::main]
 async fn main() {
+    // let http_worker = http_workers::HttpWorker::new(10, RedisStorage).await;
+    // http_worker.run().await;
+
+    // tokio::time::sleep(std::time::Duration::from_secs(1000)).await;
+    // return;
+
     let storage = RedisStorage;
     let identity = Ed25519Identity::try_from("value").unwrap();
 

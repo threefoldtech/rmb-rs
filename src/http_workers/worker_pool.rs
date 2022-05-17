@@ -1,35 +1,35 @@
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
-use super::{worker::Worker, Msg};
+use super::{
+    worker::{Worker, WorkerHandle},
+    Work,
+};
 
-pub struct WorkerPool {
-    workers: Vec<Worker>,
-    sender: mpsc::Sender<Msg>,
+pub struct WorkerPool<W>
+where
+    W: Work,
+{
+    receiver: mpsc::Receiver<oneshot::Sender<W>>,
 }
 
-impl WorkerPool {
-    pub async fn new(size: usize) -> WorkerPool {
+impl<W> WorkerPool<W>
+where
+    W: Work + Send + Sync + Clone + 'static,
+{
+    pub async fn new(size: usize) -> WorkerPool<W> {
         let (sender, receiver) = mpsc::channel(size);
 
-        let receiver = Arc::new(Mutex::new(receiver));
-
-        let mut workers = Vec::with_capacity(size);
-
         for id in 0..size {
-            workers.push(Worker::new(id, Arc::clone(&receiver)).await);
+            Worker::new(sender.clone()).await.run().await;
         }
 
-        WorkerPool { workers, sender }
+        WorkerPool { receiver }
     }
 
-    pub async fn execute<F>(&self, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let job = Box::new(f);
-
-        self.sender.send(Msg::NewJob(job)).await;
+    pub async fn recv(&mut self) -> WorkerHandle<W> {
+        let sender = self.receiver.recv().await.unwrap();
+        WorkerHandle { sender }
     }
 }

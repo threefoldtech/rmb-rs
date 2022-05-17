@@ -1,15 +1,13 @@
 use crate::{storage::Storage, types::QueuedMessage};
 
 use self::worker_pool::WorkerPool;
-
+use async_trait::async_trait;
 mod worker;
 mod worker_pool;
 
-type Job = Box<dyn FnOnce() + Send + 'static>;
-
-pub enum Msg {
-    NewJob(Job),
-    Terminate,
+#[async_trait]
+pub trait Work {
+    async fn run(&self);
 }
 
 pub struct HttpWorker<S>
@@ -17,42 +15,32 @@ where
     S: Storage,
 {
     storage: S,
-    pool: WorkerPool,
-    available: usize,
+    pool: WorkerPool<QueuedMessage>,
 }
 
 impl<S> HttpWorker<S>
 where
-    S: Storage,
+    S: Storage + 'static,
 {
     pub async fn new(size: usize, storage: S) -> Self {
         let pool = WorkerPool::new(size).await;
-        let available = size;
-        Self {
-            storage,
-            pool,
-            available,
-        }
+        Self { storage, pool }
     }
 
-    pub async fn run(&self) {
-        // commented until get the new updates for Storage trait
-        /*
-        loop {
-            if self.available > 0 {
-                match Storage::process().await {
-                    Ok(queue) => {
-                        let job = || {
-                            // sign the message
-                            // call /rmb-remote or /rmb-reply based on the queue type
-                        };
+    pub async fn run(mut self) {
+        tokio::spawn(async move {
+            loop {
+                let worker_handler = self.pool.recv().await;
+
+                match self.storage.process().await {
+                    Ok(job) => {
+                        worker_handler.send(job).await;
                     }
-                    Err(err) => {
-                        todo!()
-                    }
+                    Err(_) => todo!(),
                 }
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
-        }
-        */
+        });
     }
 }
