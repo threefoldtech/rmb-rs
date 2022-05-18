@@ -14,12 +14,8 @@ pub enum QueuedMessage {
 impl Work for QueuedMessage {
     async fn run(&self) {
         match self {
-            QueuedMessage::Forward(msg) => {
-                println!("forward msg: {:?}", msg);
-            }
-            QueuedMessage::Reply(msg) => {
-                println!("reply msg: {:?}", msg);
-            }
+            QueuedMessage::Forward(msg) => {}
+            QueuedMessage::Reply(msg) => {}
         }
     }
 }

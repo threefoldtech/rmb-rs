@@ -80,7 +80,7 @@ mod tests {
     #[tokio::test]
     async fn test_workerpool() {
         let var = Arc::new(Mutex::new(0_u64));
-        let adder = Adder { var: var.clone() };
+        let adder = Adder { var: Arc::clone(&var) };
         let mut pool = WorkerPool::<Adder>::new(100).await;
         
         for _ in 0..=20000 {
