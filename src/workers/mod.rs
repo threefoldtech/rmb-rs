@@ -55,3 +55,41 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{Work, WorkerPool};
+    use async_trait::async_trait;
+    use tokio::sync::Mutex;
+
+    #[derive(Clone)]
+    struct Adder {
+        pub var: Arc<Mutex<u64>>,
+    }
+
+    #[async_trait]
+    impl Work for Adder {
+        async fn run(&self) {
+            let mut var = self.var.lock().await;
+            *var += 1;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workerpool() {
+        let var = Arc::new(Mutex::new(0_u64));
+        let adder = Adder { var: var.clone() };
+        let mut pool = WorkerPool::<Adder>::new(100).await;
+        
+        for _ in 0..=20000 {
+            let worker = pool.get().await;
+            worker.send(adder.clone()).await;
+        }
+
+        let var = *var.lock().await;
+
+        assert_eq!(var, 20000);
+    }
+}
