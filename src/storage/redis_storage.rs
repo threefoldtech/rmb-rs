@@ -1,4 +1,4 @@
-use crate::types::Message;
+use crate::types::{Message, QueuedMessage};
 
 use super::Storage;
 use async_trait::async_trait;
@@ -32,7 +32,7 @@ impl Storage for RedisStorage {
         unimplemented!()
     }
 
-    async fn process() -> anyhow::Result<crate::types::QueuedMessage> {
-        unimplemented!()
+    async fn process(&self) -> anyhow::Result<crate::types::QueuedMessage> {
+        Ok(QueuedMessage::Forward(Message::default()))
     }
 }
