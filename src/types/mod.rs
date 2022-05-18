@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::http_workers::Work;
+use crate::workers::Work;
 
 #[allow(dead_code)]
 #[derive(Clone)]

@@ -16,6 +16,7 @@ mod identity;
 mod storage;
 mod twin;
 mod types;
+mod workers;
 
 #[tokio::main]
 async fn main() {

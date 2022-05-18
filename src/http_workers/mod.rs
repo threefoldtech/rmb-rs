@@ -1,14 +1,6 @@
-use crate::{storage::Storage, types::QueuedMessage};
+use std::time::Duration;
 
-use self::worker_pool::WorkerPool;
-use async_trait::async_trait;
-mod worker;
-mod worker_pool;
-
-#[async_trait]
-pub trait Work {
-    async fn run(&self);
-}
+use crate::{storage::Storage, types::QueuedMessage, workers::WorkerPool};
 
 pub struct HttpWorker<S>
 where
@@ -30,13 +22,16 @@ where
     pub async fn run(mut self) {
         tokio::spawn(async move {
             loop {
-                let worker_handler = self.pool.recv().await;
+                let worker_handler = self.pool.get().await;
 
                 match self.storage.process().await {
                     Ok(job) => {
                         worker_handler.send(job).await;
                     }
-                    Err(_) => todo!(),
+                    Err(err) => {
+                        log::debug!("Error while process the storage because of '{}'", err);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
         });

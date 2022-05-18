@@ -34,20 +34,3 @@ where
         });
     }
 }
-
-pub struct WorkerHandle<W: Work> {
-    pub sender: oneshot::Sender<W>,
-}
-
-impl<W> WorkerHandle<W>
-where
-    W: Work,
-{
-    pub async fn send(self, job: W) -> Result<()> {
-        if self.sender.send(job).is_err() {
-            bail!("failed to queue job");
-        }
-
-        Ok(())
-    }
-}
