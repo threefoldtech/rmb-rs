@@ -11,7 +11,7 @@ in rust there are multiple ways to create a (sub)module in your crate
 We will agree to use the 2nd way (directory) but with the following restrictions:
 - `mod.rs` will have all `traits` and `concrete types` used by the traits.
 - `<implementation>.rs` file next to `mod.rs` that can include implementation for the module trait.
-
+z
 ### Example
 Following is an example of `animal` module.
 
@@ -107,8 +107,21 @@ fn might_fail2() -> Result<()> {
         bail!("failed because fail with set to true");
     }
 }
+
+> NOTE: all error messages starts with lowercase. for example it's `failed to ...` not `Failed to ...`
 ```
 
+## `logs`
+logging is important to trace the errors that cannot be propagated and also for debug messages that can help spotting a problem. We always gonna use `log` crate. as
+
+```rust
+log::debug!(); // for debug messages
+log::info!(); // info messages
+```
+
+Note only `errors` that can **NOT** be propagated are logged.
+
+> NOTE: All log messages start with lowercase.
 ## function signatures
 For function inputs (arguments) `generic` types are preferred if available over concrete types. This most obvious with `string` types. depending on the function behavior
 
