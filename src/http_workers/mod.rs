@@ -1,21 +1,43 @@
-use std::time::Duration;
+mod work_runner;
+use std::{sync::Arc, time::Duration};
 
-use crate::{storage::Storage, types::QueuedMessage, workers::WorkerPool};
+use anyhow::Context;
 
-pub struct HttpWorker<S>
+use crate::{
+    cache::Cache,
+    storage::Storage,
+    twin::{SubstrateTwinDB, Twin, TwinDB},
+    types::QueuedMessage,
+    workers::WorkerPool,
+};
+
+use self::work_runner::WorkRunner;
+
+pub struct HttpWorker<S, C>
 where
     S: Storage,
+    C: Cache<Twin>,
 {
     storage: S,
-    pool: WorkerPool<QueuedMessage>,
+    pool: WorkerPool<work_runner::WorkRunner<C>>,
 }
 
-impl<S> HttpWorker<S>
+impl<S, C> HttpWorker<S, C>
 where
-    S: Storage + 'static,
+    S: Storage,
+    C: Cache<Twin>,
 {
-    pub async fn new(size: usize, storage: S) -> Self {
-        let pool = WorkerPool::new(size).await;
+    pub async fn new(
+        size: usize,
+        storage: S,
+        cache: Option<C>,
+        twin_db: SubstrateTwinDB<C>,
+    ) -> Self {
+        // let twin_db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", cache)
+        //     .context("unable to create substrate twin db")?;
+        // unwrap because there is no way to return if this not work
+        let work_runner = WorkRunner::new(cache, twin_db).await.unwrap();
+        let pool = WorkerPool::new(work_runner, size).await;
         Self { storage, pool }
     }
 

@@ -9,10 +9,6 @@ use tokio::task::spawn_blocking;
 use super::Twin;
 use super::TwinDB;
 
-// async fn how_to_init() {
-//     let c = RedisCache::new("redis://localhost".to_string()).await.unwrap();
-//     let s = SubstrateTwinDB::new("url_to_substrate".to_string(), Some(c)).await.unwrap();
-// }
 pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
@@ -25,7 +21,7 @@ impl<C> SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    pub async fn new<S: Into<String>>(url: S, cache: Option<C>) -> Result<Self> {
+    pub fn new<S: Into<String>>(url: S, cache: Option<C>) -> Result<Self> {
         let client = SubstrateClient::new(url.into())?;
         Ok(Self { client, cache })
     }
@@ -63,7 +59,6 @@ mod tests {
 
         let db =
             SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", Some(mem.clone()))
-                .await
                 .context("cannot create substrate twin db object")
                 .unwrap();
 
@@ -95,7 +90,6 @@ mod tests {
     #[tokio::test]
     async fn test_with_no_cache() {
         let db = SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", None)
-            .await
             .context("cannot create substrate twin db object")
             .unwrap();
 
