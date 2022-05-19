@@ -15,6 +15,7 @@ use crate::{
 
 use anyhow::{Context, Result};
 
+#[derive(Clone)]
 pub struct WorkRunner<C>
 where
     C: Cache<Twin>,
@@ -30,7 +31,7 @@ where
         Ok(Self { twin_db })
     }
 
-    async fn get_twins(&self, dest: Vec<usize>) -> Vec<Twin> {
+    async fn get_twins(&self, dest: &Vec<usize>) -> Vec<Twin> {
         let mut twins = vec![];
         for dst in dest.iter() {
             let twin = self.twin_db.get(dst.to_owned() as u32).await;
@@ -90,17 +91,17 @@ where
     type Job = QueuedMessage;
     async fn run(&self, job: Self::Job) {
         //identify uri and extract msg
-        let (uri_path, msg) = match job {
+        let (uri_path, msg) = match &job {
             QueuedMessage::Forward(msg) => (String::from("rmb-remote"), msg),
             QueuedMessage::Reply(msg) => (String::from("rmb-reply"), msg),
         };
 
         // getting twins for all destinations
-        let destinations = msg.dst;
+        let destinations = &msg.dst;
         let twins = self.get_twins(destinations).await;
 
         // prepare requests
-        let requests = Self::build_requests(&msg, uri_path, twins).await;
+        let requests = Self::build_requests(msg, uri_path, twins).await;
 
         // get responses
         let _responses = Self::get_responses(requests).await;

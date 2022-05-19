@@ -41,7 +41,7 @@ where
         Self { storage, pool }
     }
 
-    pub async fn run(mut self) {
+    pub fn run(mut self) {
         tokio::spawn(async move {
             loop {
                 let worker_handler = self.pool.get().await;
