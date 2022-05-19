@@ -58,42 +58,41 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::sync::Arc;
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-//     use super::{Work, WorkerPool};
-//     use async_trait::async_trait;
-//     use tokio::sync::Mutex;
+    use super::{Work, WorkerPool};
+    use async_trait::async_trait;
+    use tokio::sync::Mutex;
 
-//     #[derive(Clone)]
-//     struct Adder {
-//         pub var: Arc<Mutex<u64>>,
-//     }
+    #[derive(Clone)]
+    struct Adder {
+        pub inc_val: u64,
+    }
 
-//     #[async_trait]
-//     impl Work for Adder {
-//         async fn run(&self) {
-//             let mut var = self.var.lock().await;
-//             *var += 1;
-//         }
-//     }
+    #[async_trait]
+    impl Work for Adder {
+        type Job = Arc<Mutex<u64>>;
+        async fn run(&self, job: Self::Job) {
+            let mut var = job.lock().await;
+            *var += self.inc_val;
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_workerpool() {
-//         let var = Arc::new(Mutex::new(0_u64));
-//         let adder = Adder {
-//             var: Arc::clone(&var),
-//         };
-//         let mut pool = WorkerPool::<Adder>::new(100).await;
+    #[tokio::test]
+    async fn test_workerpool() {
+        let var = Arc::new(Mutex::new(0_u64));
+        let adder = Adder { inc_val: 1_u64 };
+        let mut pool = WorkerPool::<Adder>::new(adder, 100).await;
 
-//         for _ in 0..=20000 {
-//             let worker = pool.get().await;
-//             worker.send(adder.clone()).await;
-//         }
+        for _ in 0..=20000 {
+            let worker = pool.get().await;
+            worker.send(Arc::clone(&var));
+        }
 
-//         let var = *var.lock().await;
+        let var = *var.lock().await;
 
-//         assert_eq!(var, 20000);
-//     }
-// }
+        assert_eq!(var, 20000);
+    }
+}
