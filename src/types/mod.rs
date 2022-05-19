@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-
 use crate::workers::Work;
+use async_trait::async_trait;
+use hyper::{Body, Client, Method, Request, Uri};
+use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -13,10 +13,26 @@ pub enum QueuedMessage {
 #[async_trait]
 impl Work for QueuedMessage {
     async fn run(&self) {
-        match self {
-            QueuedMessage::Forward(msg) => {}
-            QueuedMessage::Reply(msg) => {}
-        }
+        let req = Request::builder()
+            .method(Method::POST)
+            .header("content-type", "application/json");
+
+        let (req, msg) = match self {
+            QueuedMessage::Forward(msg) => (req.uri("forward uri"), msg),
+            QueuedMessage::Reply(msg) => (req.uri("reply uri"), msg),
+        };
+
+        let req = req.body(Body::from(serde_json::to_vec(msg).unwrap()));
+
+        let req = match req {
+            Ok(req) => req,
+            Err(err) => {
+                todo!()
+            }
+        };
+
+        let client = Client::new();
+        let _resp = client.request(req).await;
     }
 }
 
