@@ -13,7 +13,7 @@ impl<W> Worker<W>
 where
     W: Work + Send + Sync + 'static,
 {
-    pub async fn new(work: W, sender: mpsc::Sender<oneshot::Sender<W::Job>>) -> Self {
+    pub fn new(work: W, sender: mpsc::Sender<oneshot::Sender<W::Job>>) -> Self {
         Self { work, sender }
     }
     pub async fn run(self) {

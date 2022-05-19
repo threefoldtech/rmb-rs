@@ -24,11 +24,12 @@ impl<W> WorkerPool<W>
 where
     W: Work + Send + Sync + Clone + 'static,
 {
+    // this must be async because the run function is async
     pub async fn new(work: W, size: usize) -> WorkerPool<W> {
         let (sender, receiver) = mpsc::channel(1);
 
         for id in 0..size {
-            Worker::new(work.clone(), sender.clone()).await.run().await;
+            Worker::new(work.clone(), sender.clone()).run().await;
         }
 
         WorkerPool { receiver }
@@ -48,7 +49,7 @@ impl<W> WorkerHandle<W>
 where
     W: Work,
 {
-    pub async fn send(self, job: W::Job) -> Result<()> {
+    pub fn send(self, job: W::Job) -> Result<()> {
         if self.sender.send(job).is_err() {
             bail!("failed to queue job");
         }

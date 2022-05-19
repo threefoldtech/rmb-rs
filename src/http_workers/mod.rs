@@ -25,8 +25,9 @@ where
 impl<S, C> HttpWorker<S, C>
 where
     S: Storage,
-    C: Cache<Twin>,
+    C: Cache<Twin> + Clone,
 {
+    // this must be async because of the workpool new function must be async
     pub async fn new(
         size: usize,
         storage: S,
@@ -36,7 +37,7 @@ where
         // let twin_db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", cache)
         //     .context("unable to create substrate twin db")?;
         // unwrap because there is no way to return if this not work
-        let work_runner = WorkRunner::new(cache, twin_db).await.unwrap();
+        let work_runner = WorkRunner::new(cache, twin_db).unwrap();
         let pool = WorkerPool::new(work_runner, size).await;
         Self { storage, pool }
     }
@@ -48,7 +49,7 @@ where
 
                 match self.storage.queued().await {
                     Ok(job) => {
-                        worker_handler.send(job).await;
+                        worker_handler.send(job);
                     }
                     Err(err) => {
                         log::debug!("error while process the storage because of '{}'", err);
