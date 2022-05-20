@@ -16,7 +16,7 @@ where
     pub fn new(work: W, sender: mpsc::Sender<oneshot::Sender<W::Job>>) -> Self {
         Self { work, sender }
     }
-    pub async fn run(self) {
+    pub fn run(self) {
         tokio::spawn(async move {
             loop {
                 let (tx, rx) = oneshot::channel();

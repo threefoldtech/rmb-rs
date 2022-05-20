@@ -13,6 +13,18 @@ pub trait Work {
     async fn run(&self, job: Self::Job);
 }
 
+#[async_trait]
+impl<W> Work for Arc<W>
+where
+    W: Work + Send + Sync, // notice that Work here is not itself a Clone. that is covered by Arc
+{
+    type Job = W::Job;
+
+    async fn run(&self, job: Self::Job) {
+        self.as_ref().run(job);
+    }
+}
+
 pub struct WorkerPool<W>
 where
     W: Work,
@@ -25,11 +37,11 @@ where
     W: Work + Send + Sync + Clone + 'static,
 {
     // this must be async because the run function is async
-    pub async fn new(work: W, size: usize) -> WorkerPool<W> {
+    pub fn new(work: W, size: usize) -> WorkerPool<W> {
         let (sender, receiver) = mpsc::channel(1);
 
         for id in 0..size {
-            Worker::new(work.clone(), sender.clone()).run().await;
+            Worker::new(work.clone(), sender.clone()).run();
         }
 
         WorkerPool { receiver }
@@ -84,7 +96,7 @@ mod tests {
     async fn test_workerpool() {
         let var = Arc::new(Mutex::new(0_u64));
         let adder = Adder { inc_val: 1_u64 };
-        let mut pool = WorkerPool::<Adder>::new(adder, 100).await;
+        let mut pool = WorkerPool::<Adder>::new(adder, 100);
 
         for _ in 0..=20000 {
             let worker = pool.get().await;

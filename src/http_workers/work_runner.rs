@@ -27,8 +27,8 @@ impl<C> WorkRunner<C>
 where
     C: Cache<Twin>,
 {
-    pub fn new(cache: Option<C>, twin_db: SubstrateTwinDB<C>) -> Result<Self> {
-        Ok(Self { twin_db })
+    pub fn new(twin_db: SubstrateTwinDB<C>) -> Self {
+        Self { twin_db }
     }
 }
 
@@ -38,6 +38,7 @@ where
     C: Cache<Twin>,
 {
     type Job = QueuedMessage;
+
     async fn run(&self, job: Self::Job) {
         //identify uri and extract msg
         let (uri_path, msg) = match &job {
@@ -73,7 +74,7 @@ where
 
             let req = req.uri(format!(
                 "{}/{}",
-                twin.address.trim_end_matches("/"),
+                twin.address.trim_end_matches('/'),
                 uri_path
             ));
 
