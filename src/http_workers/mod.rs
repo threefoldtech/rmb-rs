@@ -24,7 +24,7 @@ where
             loop {
                 let worker_handler = self.pool.get().await;
 
-                match self.storage.process().await {
+                match self.storage.queued().await {
                     Ok(job) => {
                         worker_handler.send(job).await;
                     }

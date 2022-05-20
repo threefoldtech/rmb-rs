@@ -8,31 +8,27 @@ pub struct RedisStorage;
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn set(_msg: Message) -> anyhow::Result<()> {
+    async fn get(&self, _id: String) -> anyhow::Result<Option<Message>> {
         unimplemented!()
     }
 
-    async fn get(_id: String) -> anyhow::Result<Option<Message>> {
+    async fn run(&self, _msg: Message) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    async fn run(_msg: Message) -> anyhow::Result<()> {
+    async fn forward(&self, _msg: Message) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    async fn forward(_msg: Message) -> anyhow::Result<()> {
+    async fn reply(&self, _msg: Message) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    async fn reply(_msg: Message) -> anyhow::Result<()> {
+    async fn local(&self) -> anyhow::Result<Message> {
         unimplemented!()
     }
 
-    async fn local() -> anyhow::Result<Message> {
-        unimplemented!()
-    }
-
-    async fn process(&self) -> anyhow::Result<crate::types::QueuedMessage> {
+    async fn queued(&self) -> anyhow::Result<crate::types::QueuedMessage> {
         Ok(QueuedMessage::Forward(Message::default()))
     }
 }
