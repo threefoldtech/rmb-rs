@@ -27,9 +27,9 @@ async fn main() {
     // return;
 
     let storage = RedisStorage;
-    let identity = Ed25519Identity::try_from("value").unwrap();
+    let identity = Ed25519Identity::try_from("<MNEMONICS>").unwrap();
 
-    HttpApi::new("127.0.0.1", 888, storage, identity)
+    HttpApi::new("127.0.0.1", 8888, storage, identity)
         .unwrap()
         .run()
         .await

@@ -1,5 +1,5 @@
 use super::data::AppData;
-use crate::{identity::Identity, storage::Storage};
+use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
 use hyper::{
     service::{make_service_fn, service_fn},
@@ -22,7 +22,7 @@ where
     S: Storage + 'static,
     I: Identity + 'static,
 {
-    pub fn new<T: AsRef<str>>(ip: T, port: u16, storage: S, identity: I) -> Result<Self> {
+    pub fn new<P: AsRef<str>>(ip: P, port: u16, storage: S, identity: I) -> Result<Self> {
         let ip = ip.as_ref().parse().context("failed to parse ip address")?;
         let addr = SocketAddr::new(ip, port);
         Ok(HttpApi {
@@ -39,7 +39,8 @@ where
         });
 
         let server = Server::bind(&self.addr).serve(services);
-        info!("listening on: {}", self.addr.ip());
+        println!("Server started");
+        log::info!("listening on: {}", self.addr.ip());
 
         server.await?;
 
@@ -48,9 +49,53 @@ where
 }
 
 pub async fn rmb_remote<S: Storage, I: Identity>(
-    _req: Request<Body>,
-    _data: AppData<S, I>,
+    req: Request<Body>,
+    data: AppData<S, I>,
 ) -> Result<Response<Body>> {
+    let mut response = Response::new(Body::empty());
+    let body = hyper::body::to_bytes(req.into_body()).await;
+    let body = match body {
+        Ok(body) => body,
+        Err(err) => {
+            log::debug!("can not extract body because of {}", err);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+    };
+    let message: Result<Message> = serde_json::from_slice(&body.to_vec())
+        .map_err(|err| anyhow::anyhow!(err))
+        .context("can not parse body");
+
+    let message = match message {
+        Ok(message) => message,
+        Err(err) => {
+            log::debug!("{}", err);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+    };
+
+    // let twin = match data.twin_db.get(message.src as u32).await {
+    //     Ok(twin) => twin,
+    //     Err(err) => {
+    //         log::debug!("{}", err);
+    //         *response.status_mut() = StatusCode::BAD_REQUEST;
+    //         return Ok(response);
+    //     }
+    // };
+    // verify message
+    // let verified = data.identity.verify( &message.dat.as_bytes(), &(twin.account).to_string(), twin.address.as_bytes());
+    let verified = data.identity.verify(
+        &message.sig.as_bytes(),
+        &message.dat.to_string(),
+        "publickey".as_bytes(),
+    );
+    if verified == false {
+        *response.status_mut() = StatusCode::UNAUTHORIZED;
+        return Ok(response);
+    }
+    //decode message
+
     Ok(Response::new("RmbRemote Endpoint".into()))
 }
 

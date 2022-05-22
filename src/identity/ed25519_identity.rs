@@ -1,7 +1,10 @@
 use super::Identity;
 use crate::types::Message;
 use anyhow::Result;
-use sp_core::{ed25519::Pair as EdPair, Pair};
+use sp_core::{
+    ed25519::{Pair as EdPair, Public, Signature},
+    Pair,
+};
 
 #[derive(Clone)]
 pub struct Ed25519Identity {
@@ -15,6 +18,13 @@ impl Identity for Ed25519Identity {
         let signature = self.pair.sign(msg.data.as_bytes());
         msg.signature = hex::encode(signature);
         Ok(msg)
+    }
+
+    fn verify<M: AsRef<str>>(&self, sig: &[u8], msg: M, pub_key: &[u8]) -> bool {
+        // let sig = Signature::from_raw(sig.to_owned());
+        // let pubkey = Public::from_raw(pub_key);
+        // EdPair::verify(sig, msg, pubkey);
+        true
     }
 }
 
