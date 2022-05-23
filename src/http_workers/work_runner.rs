@@ -134,7 +134,9 @@ where
             // posting the message to the remote twin
             let mut send_result = Ok(());
             for _ in 0..msg.retry {
-                send_result = Self::send_msg(twin.clone(), uri_path.clone(), msg.clone(), id.to_owned()).await;
+                send_result =
+                    Self::send_msg(twin.clone(), uri_path.clone(), msg.clone(), id.to_owned())
+                        .await;
                 if send_result.is_ok() {
                     break;
                 }

@@ -5,10 +5,11 @@ use anyhow::Context;
 
 use crate::{
     cache::Cache,
+    identity::Identity,
     storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::QueuedMessage,
-    workers::WorkerPool, identity::Identity,
+    workers::WorkerPool,
 };
 
 use self::work_runner::WorkRunner;
