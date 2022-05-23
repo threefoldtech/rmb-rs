@@ -26,3 +26,5 @@ sp-keyring = "3.0.0"
 sp-runtime = "3.0.0"
 substrate_client = {path = "substrate_client"}
 tokio = {version = "1", features = ["full"]}
+chrono = "0.4.19"
+tokio-retry = "0.3"

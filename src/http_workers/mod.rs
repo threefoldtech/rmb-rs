@@ -8,31 +8,30 @@ use crate::{
     storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::QueuedMessage,
-    workers::WorkerPool,
+    workers::WorkerPool, identity::Identity,
 };
 
 use self::work_runner::WorkRunner;
 
-pub struct HttpWorker<S, C>
+pub struct HttpWorker<S, C, I>
 where
     S: Storage,
     C: Cache<Twin>,
+    I: Identity,
 {
     storage: S,
-    pool: WorkerPool<Arc<WorkRunner<C>>>,
+    pool: WorkerPool<Arc<WorkRunner<C, I>>>,
 }
 
-impl<S, C> HttpWorker<S, C>
+impl<S, C, I> HttpWorker<S, C, I>
 where
     S: Storage,
     C: Cache<Twin>,
+    I: Identity + 'static,
 {
     // this must be async because of the workpool new function must be async
-    pub fn new(size: usize, storage: S, twin_db: SubstrateTwinDB<C>) -> Self {
-        // let twin_db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", cache)
-        //     .context("unable to create substrate twin db")?;
-        // unwrap because there is no way to return if this not work
-        let work_runner = WorkRunner::new(twin_db);
+    pub fn new(size: usize, storage: S, twin_db: SubstrateTwinDB<C>, identity: I) -> Self {
+        let work_runner = WorkRunner::new(twin_db, identity);
         let pool = WorkerPool::new(Arc::new(work_runner), size);
         Self { storage, pool }
     }
