@@ -26,6 +26,10 @@ impl Identity for Ed25519Identity {
         // EdPair::verify(sig, msg, pubkey);
         true
     }
+
+    fn get_public_key(&self) -> String {
+        self.pair.public().to_string()
+    }
 }
 
 impl TryFrom<&str> for Ed25519Identity {

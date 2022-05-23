@@ -43,19 +43,26 @@ where
         self.cache.set(twin.id, twin.clone()).await?;
         Ok(Some(twin))
     }
+
+    async fn get_twin_id<S: Into<String> + Send + 'static>(&self, account_id: S) -> Result<u32> {
+        let client = self.client.clone();
+        let twin_id: u32 =
+            spawn_blocking(move || client.get_twin_id_by_account_id(account_id.into())).await??;
+        Ok(twin_id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use crate::cache::MemCache;
+    use crate::{cache::MemCache, identity::Ed25519Identity};
 
     use super::*;
     use anyhow::Context;
 
     #[tokio::test]
-    async fn test_with_mem_cache() {
+    async fn test_get_twin_with_mem_cache() {
         let mem: MemCache<Twin> = MemCache::new();
 
         let db =
@@ -90,7 +97,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_no_cache() {
+    async fn test_get_twin_with_no_cache() {
         let db = SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", None)
             .context("cannot create substrate twin db object")
             .unwrap();
@@ -111,5 +118,26 @@ mod tests {
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
         );
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_get_twin_id() {
+        let db = SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", None)
+            .context("cannot create substrate twin db object")
+            .unwrap();
+
+        // let identity = Ed25519Identity::try_from("mnemonics").unwrap();
+        // let account_id = identity.get_public_key();
+
+        let account_id = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb".to_string();
+
+        let twin_id = db
+            .get_twin_id(account_id)
+            .await
+            .context("can't get twin from substrate")
+            .unwrap();
+
+        assert_eq!(55, twin_id); 
     }
 }

@@ -22,12 +22,22 @@ where
     S: Storage + 'static,
     I: Identity + 'static,
 {
-    pub fn new<P: AsRef<str>>(ip: P, port: u16, storage: S, identity: I) -> Result<Self> {
+    pub fn new<P: AsRef<str>>(
+        ip: P,
+        port: u16,
+        storage: S,
+        identity: I,
+        twin_id: u32,
+    ) -> Result<Self> {
         let ip = ip.as_ref().parse().context("failed to parse ip address")?;
         let addr = SocketAddr::new(ip, port);
         Ok(HttpApi {
             addr,
-            data: AppData { storage, identity },
+            data: AppData {
+                storage,
+                identity,
+                twin_id,
+            },
         })
     }
 
@@ -86,8 +96,8 @@ pub async fn rmb_remote<S: Storage, I: Identity>(
     // verify message
     // let verified = data.identity.verify( &message.dat.as_bytes(), &(twin.account).to_string(), twin.address.as_bytes());
     let verified = data.identity.verify(
-        &message.sig.as_bytes(),
-        &message.dat.to_string(),
+        &message.signature.as_bytes(),
+        &message.data.to_string(),
         "publickey".as_bytes(),
     );
     if verified == false {

@@ -20,6 +20,10 @@ impl Identity for Sr25519Identity {
     fn verify<M: AsRef<str>>(&self, sig: &[u8], msg: M, pub_key: &[u8]) -> bool {
         todo!()
     }
+
+    fn get_public_key(&self) -> String {
+        todo!()
+    }
 }
 
 impl TryFrom<&str> for Sr25519Identity {
