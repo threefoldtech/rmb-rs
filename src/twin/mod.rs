@@ -10,7 +10,7 @@ pub use substrate_twindb::*;
 
 #[async_trait]
 pub trait TwinDB {
-    async fn get(&self, twin_id: u32) -> Result<Twin>;
+    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>>;
 }
 
 #[derive(Clone, Decode, Serialize, Deserialize, PartialEq, Debug)]

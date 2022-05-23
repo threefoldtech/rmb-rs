@@ -50,7 +50,7 @@ pub struct Message {
     pub ret: String,
     pub shm: String,
     pub now: usize,
-    pub err: String,
+    pub err: Option<String>,
     pub sig: String,
 }
 
@@ -68,7 +68,7 @@ impl Default for Message {
             ret: Default::default(),
             shm: Default::default(),
             now: Default::default(),
-            err: Default::default(),
+            err: None,
             sig: Default::default(),
         }
     }

@@ -10,6 +10,7 @@ use hyper::{
 use crate::{
     cache::Cache,
     identity::Identity,
+    storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::{Message, QueuedMessage},
     workers::Work,
@@ -18,31 +19,38 @@ use crate::{
 use anyhow::{Context, Result};
 
 #[derive(Clone)]
-pub struct WorkRunner<C, I>
+pub struct WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
     I: Identity,
+    S: Storage,
 {
     twin_db: SubstrateTwinDB<C>,
     identity: I,
+    storage: S,
 }
 
-impl<C, I> WorkRunner<C, I>
+impl<C, I, S> WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
     I: Identity,
+    S: Storage,
 {
-    pub fn new(twin_db: SubstrateTwinDB<C>, identity: I) -> Self {
-        Self { twin_db, identity }
+    pub fn new(twin_db: SubstrateTwinDB<C>, identity: I, storage: S) -> Self {
+        Self {
+            twin_db,
+            identity,
+            storage,
+        }
     }
 
     async fn get_twin(&self, twin_id: usize, retires: usize) -> Option<Twin> {
         for _ in 0..retires {
-            let twin = self.twin_db.get(twin_id.to_owned() as u32).await;
+            let twin = self.twin_db.get_twin(twin_id.to_owned() as u32).await;
 
             match twin {
                 Ok(twin) => {
-                    return Some(twin);
+                    return twin;
                 }
                 Err(err) => {
                     log::debug!(
@@ -50,7 +58,6 @@ where
                         twin_id,
                         err
                     );
-                    continue;
                 }
             };
         }
@@ -86,13 +93,34 @@ where
             .map(|op| ())
             .context("failure of message delivery!")
     }
+
+    async fn handle_delivery_err(&self, is_forward: bool, src: usize, err: anyhow::Error) {
+        if is_forward {
+            let mut reply_msg = Message::default();
+            reply_msg.src = src;
+            reply_msg.dst = vec![src];
+            reply_msg.err = Some(err.to_string());
+
+            if let Err(err) = self
+                .storage
+                .reply(reply_msg)
+                .await
+                .context("can not send a reply message")
+            {
+                log::info!("{:?}", err);
+            }
+        } else {
+            log::info!("{:?}", err);
+        }
+    }
 }
 
 #[async_trait]
-impl<C, I> Work for WorkRunner<C, I>
+impl<C, I, S> Work for WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
     I: Identity,
+    S: Storage,
 {
     type Job = QueuedMessage;
 
@@ -141,8 +169,14 @@ where
                     break;
                 }
             }
+
+            // handling delivery errors
             if send_result.is_err() {
-                log::info!("{:?}", send_result.err());
+                self.handle_delivery_err(
+                    uri_path.ends_with("remote"),
+                    msg.src.clone(),
+                    send_result.err().unwrap(),
+                );
             }
         }
     }

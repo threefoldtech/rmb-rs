@@ -21,7 +21,7 @@ where
     I: Identity,
 {
     storage: S,
-    pool: WorkerPool<Arc<WorkRunner<C, I>>>,
+    pool: WorkerPool<Arc<WorkRunner<C, I, S>>>,
 }
 
 impl<S, C, I> HttpWorker<S, C, I>
@@ -32,7 +32,7 @@ where
 {
     // this must be async because of the workpool new function must be async
     pub fn new(size: usize, storage: S, twin_db: SubstrateTwinDB<C>, identity: I) -> Self {
-        let work_runner = WorkRunner::new(twin_db, identity);
+        let work_runner = WorkRunner::new(twin_db, identity, storage.clone());
         let pool = WorkerPool::new(Arc::new(work_runner), size);
         Self { storage, pool }
     }
