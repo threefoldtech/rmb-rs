@@ -10,33 +10,6 @@ pub enum QueuedMessage {
     Reply(Message),
 }
 
-// #[async_trait]
-// impl Work for QueuedMessage {
-//     type Job = Self;
-//     async fn run(&self, ) {
-//         let req = Request::builder()
-//             .method(Method::POST)
-//             .header("content-type", "application/json");
-
-//         let (req, msg) = match self {
-//             QueuedMessage::Forward(msg) => (req.uri("forward uri"), msg),
-//             QueuedMessage::Reply(msg) => (req.uri("reply uri"), msg),
-//         };
-
-//         let req = req.body(Body::from(serde_json::to_vec(msg).unwrap()));
-
-//         let req = match req {
-//             Ok(req) => req,
-//             Err(err) => {
-//                 todo!()
-//             }
-//         };
-
-//         let client = Client::new();
-//         let _resp = client.request(req).await;
-//     }
-// }
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Message {
     pub ver: usize,

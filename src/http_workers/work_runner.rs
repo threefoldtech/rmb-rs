@@ -7,6 +7,10 @@ use hyper::{
     Body, Client, Method, Request,
 };
 
+use std::convert::TryFrom;
+
+use uriparse::{Authority, Path, Scheme, URIBuilder};
+
 use crate::{
     cache::Cache,
     identity::Identity,
@@ -68,23 +72,37 @@ where
         todo!()
     }
 
+    fn uri_builder(uri_path: String, twin_address: String) -> Result<String> {
+        let mut authority = Authority::try_from(twin_address.as_str())
+            .with_context(|| "can not form authority from twin_address")?;
+
+        if !authority.has_port() {
+            authority.set_port(Some(8051));
+        }
+
+        let mut uri = URIBuilder::default();
+        uri.scheme(Scheme::HTTP)
+            .authority(Some(authority))
+            .path(Path::try_from(uri_path.as_str()).with_context(|| "can not form uri path")?);
+
+        let uri = uri
+            .build()
+            .with_context(|| "can not build the destination uri")?;
+
+        Ok(uri.to_string())
+    }
+
     async fn send_msg(twin: Twin, uri_path: String, msg: Message, dst: usize) -> Result<()> {
         let req = Request::builder()
             .method(Method::POST)
             .header("content-type", "application/json");
 
-        let req = req.uri(format!(
-            "{}/{}",
-            twin.address.trim_end_matches('/'),
-            uri_path
-        ));
+        let uri = Self::uri_builder(uri_path.clone(), twin.address.clone())?;
+        let req = req.uri(uri);
 
         let req = req
             .body(Body::from(serde_json::to_vec(&msg).unwrap()))
-            .context(format!(
-                "can not construct request body for this id '{}'",
-                dst
-            ))?;
+            .with_context(|| format!("can not construct request body for this id '{}'", dst))?;
 
         let req = Request::from(req);
         Client::new()
