@@ -35,7 +35,10 @@ async fn main() {
         .unwrap();
 
     let storage = RedisStorage;
-    let identity = Ed25519Identity::try_from("junior sock chunk accident pilot under ask green endless remove coast wood").unwrap();
+    let identity = Ed25519Identity::try_from(
+        "junior sock chunk accident pilot under ask green endless remove coast wood",
+    )
+    .unwrap();
     let account_id = identity.get_public_key();
     let twin_id = db
         .get_twin_id(account_id)
@@ -43,7 +46,7 @@ async fn main() {
         .context("can not get twin id")
         .unwrap();
 
-    HttpApi::new("127.0.0.1", 8888, storage, identity, twin_id, &db)
+    HttpApi::new("127.0.0.1", 8888, storage, identity, twin_id, db)
         .unwrap()
         .run()
         .await
