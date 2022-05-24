@@ -1,23 +1,25 @@
 use super::data::AppData;
-use crate::{identity::Identity, storage::Storage, types::Message};
+use crate::{identity::Identity, storage::Storage, types::Message, cache::RedisCache};
 use anyhow::{Context, Result};
 use hyper::{
     service::{make_service_fn, service_fn},
     Server,
 };
+use crate::twin::{SubstrateTwinDB, TwinDB};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use std::net::SocketAddr;
 
-pub struct HttpApi<S, I>
+pub struct HttpApi<'a, S, I>
 where
     S: Storage,
     I: Identity,
 {
     addr: SocketAddr,
     data: AppData<S, I>,
+    twin_db: &'a SubstrateTwinDB<RedisCache>
 }
 
-impl<S, I> HttpApi<S, I>
+impl<'a, S, I> HttpApi<'a, S, I>
 where
     S: Storage + 'static,
     I: Identity + 'static,
@@ -28,6 +30,7 @@ where
         storage: S,
         identity: I,
         twin_id: u32,
+        twin_db: &'a SubstrateTwinDB<RedisCache>
     ) -> Result<Self> {
         let ip = ip.as_ref().parse().context("failed to parse ip address")?;
         let addr = SocketAddr::new(ip, port);
@@ -38,13 +41,14 @@ where
                 identity,
                 twin_id,
             },
+            twin_db,
         })
     }
 
     pub async fn run(self) -> Result<()> {
         let services = make_service_fn(move |_| {
             let data = self.data.clone();
-            let service = service_fn(move |req| routes(req, data.clone()));
+            let service = service_fn(move |req| routes(req, data.clone(), self.twin_db));
             async move { Ok::<_, anyhow::Error>(service) }
         });
 
@@ -58,9 +62,10 @@ where
     }
 }
 
-pub async fn rmb_remote<S: Storage, I: Identity>(
+pub async fn rmb_remote<'a, S: Storage, I: Identity>(
     req: Request<Body>,
     data: AppData<S, I>,
+    twin_db:  &'a SubstrateTwinDB<RedisCache>
 ) -> Result<Response<Body>> {
     let mut response = Response::new(Body::empty());
     let body = hyper::body::to_bytes(req.into_body()).await;
@@ -84,17 +89,20 @@ pub async fn rmb_remote<S: Storage, I: Identity>(
             return Ok(response);
         }
     };
+    // check the dst of the message is correct
+    if message.destination.is_empty() || message.destination[0] != data.twin_id as u32{
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(response);
+    }
 
-    // let twin = match data.twin_db.get(message.src as u32).await {
-    //     Ok(twin) => twin,
-    //     Err(err) => {
-    //         log::debug!("{}", err);
-    //         *response.status_mut() = StatusCode::BAD_REQUEST;
-    //         return Ok(response);
-    //     }
-    // };
-    // verify message
-    // let verified = data.identity.verify( &message.dat.as_bytes(), &(twin.account).to_string(), twin.address.as_bytes());
+    let sender_twin = match twin_db.get_twin(message.source as u32).await {
+        Ok(sender_twin) =>sender_twin,
+        Err(err) => {log::debug!("{}", err);
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(response);
+    },
+    };
+    
     let verified = data.identity.verify(
         &message.signature.as_bytes(),
         &message.data.to_string(),
@@ -116,12 +124,13 @@ pub async fn rmb_reply<S: Storage, I: Identity>(
     Ok(Response::new("RmbReply Endpoint".into()))
 }
 
-pub async fn routes<S: Storage, I: Identity>(
+pub async fn routes<'a, S: Storage, I: Identity>(
     req: Request<Body>,
     data: AppData<S, I>,
+    twin_db:  &'a SubstrateTwinDB<RedisCache>
 ) -> Result<Response<Body>> {
     match (req.method(), req.uri().path()) {
-        (&Method::POST, "/rmb-remote") => rmb_remote(req, data).await,
+        (&Method::POST, "/rmb-remote") => rmb_remote(req, data, twin_db).await,
         (&Method::POST, "/rmb-reply") => rmb_reply(req, data).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)

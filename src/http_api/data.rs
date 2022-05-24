@@ -1,4 +1,6 @@
+use crate::cache::RedisCache;
 use crate::{identity::Identity, storage::Storage};
+use crate::twin::{SubstrateTwinDB, TwinDB};
 
 /// - This is an example struct which holds the shared parameters between all handlers
 /// such as the database or cache
