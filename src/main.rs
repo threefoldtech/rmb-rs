@@ -6,9 +6,14 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
+use anyhow::Context;
+use bb8_redis::{bb8::Pool, RedisConnectionManager};
+
 use http_api::HttpApi;
 use identity::Ed25519Identity;
 use storage::RedisStorage;
+use storage::Storage;
+
 mod cache;
 mod http_api;
 mod http_workers;
@@ -26,12 +31,38 @@ async fn main() {
     // tokio::time::sleep(std::time::Duration::from_secs(1000)).await;
     // return;
 
-    let storage = RedisStorage;
-    let identity = Ed25519Identity::try_from("value").unwrap();
-
-    HttpApi::new("127.0.0.1", 888, storage, identity)
-        .unwrap()
-        .run()
-        .await
+    let manager = RedisConnectionManager::new("redis://127.0.0.1/")
+        .context("unable to create redis connection manager")
         .unwrap();
+    let pool = Pool::builder()
+        .build(manager)
+        .await
+        .context("unable to build pool or redis connection manager")
+        .unwrap();
+
+    const PREFIX: &str = "msgbus";
+    const TTL: usize = 20;
+    const MAX_COMMANDS: isize = 500;
+
+    let storage = RedisStorage::new(String::from(PREFIX), pool, TTL, MAX_COMMANDS)
+        .context("unable to create redis storage")
+        .unwrap();
+
+    let ret = storage.local().await;
+    match ret {
+        Ok(msg) => {
+            println!("{:?}", msg);
+        }
+        Err(e) => {
+            println!("{:?}", e);
+        }
+    }
+
+    // let identity = Ed25519Identity::try_from("value").unwrap();
+
+    // HttpApi::new("127.0.0.1", 888, storage, identity)
+    //     .unwrap()
+    //     .run()
+    //     .await
+    //     .unwrap();
 }

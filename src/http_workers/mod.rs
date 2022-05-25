@@ -25,9 +25,12 @@ where
                 let worker_handler = self.pool.get().await;
 
                 match self.storage.queued().await {
-                    Ok(job) => {
-                        worker_handler.send(job).await;
-                    }
+                    Ok(ret) => match ret {
+                        None => log::debug!("message has been expired"),
+                        Some(job) => {
+                            worker_handler.send(job).await;
+                        }
+                    },
                     Err(err) => {
                         log::debug!("error while process the storage because of '{}'", err);
                         tokio::time::sleep(Duration::from_secs(1)).await;

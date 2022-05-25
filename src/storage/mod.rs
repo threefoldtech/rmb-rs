@@ -44,5 +44,5 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // find a better name
     // process will wait on both msgbus.system.forward AND msgbus.system.reply
     // and return the first message available with the correct Queue type
-    async fn queued(&self) -> Result<QueuedMessage>;
+    async fn queued(&self) -> Result<Option<QueuedMessage>>;
 }

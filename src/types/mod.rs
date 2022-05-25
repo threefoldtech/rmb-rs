@@ -26,7 +26,11 @@ pub struct Message {
     pub uid: String,
     pub cmd: String,
     pub exp: usize,
+
+    // original message filed is try
+    #[serde(rename = "try")]
     pub retry: usize,
+
     pub dat: String,
     pub src: usize,
     pub dst: Vec<usize>,
