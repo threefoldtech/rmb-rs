@@ -12,9 +12,11 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "1.0.56"
-futures = "0.3"
+thiserror = "1.0.31"
 async-trait = "0.1.53"
 bb8-redis = "0.11.0"
+chrono = "0.4.19"
+futures = "0.3"
 hex = {version = "0.4", features = ["alloc"]}
 hyper = {version = "0.14", features = ["full"]}
 log = "0.4"
@@ -26,3 +28,6 @@ sp-keyring = "3.0.0"
 sp-runtime = "3.0.0"
 substrate_client = {path = "substrate_client"}
 tokio = {version = "1", features = ["full"]}
+tokio-retry = "0.3"
+uriparse = "0.6.4"
+http = "0.2.7"

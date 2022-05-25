@@ -12,8 +12,8 @@ pub struct Sr25519Identity {
 
 impl Identity for Sr25519Identity {
     fn sign(&self, mut msg: Message) -> Result<Message> {
-        let signature = self.pair.sign(msg.dat.as_bytes());
-        msg.sig = hex::encode(signature);
+        let signature = self.pair.sign(msg.data.as_bytes());
+        msg.signature = hex::encode(signature);
         Ok(msg)
     }
 }

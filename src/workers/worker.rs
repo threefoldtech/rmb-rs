@@ -4,18 +4,19 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use super::Work;
 
-pub struct Worker<W> {
-    sender: mpsc::Sender<oneshot::Sender<W>>,
+pub struct Worker<W: Work> {
+    work: W,
+    sender: mpsc::Sender<oneshot::Sender<W::Job>>,
 }
 
 impl<W> Worker<W>
 where
     W: Work + Send + Sync + 'static,
 {
-    pub async fn new(sender: mpsc::Sender<oneshot::Sender<W>>) -> Self {
-        Self { sender }
+    pub fn new(work: W, sender: mpsc::Sender<oneshot::Sender<W::Job>>) -> Self {
+        Self { work, sender }
     }
-    pub async fn run(self) {
+    pub fn run(self) {
         tokio::spawn(async move {
             loop {
                 let (tx, rx) = oneshot::channel();
@@ -25,7 +26,7 @@ where
                 }
 
                 match rx.await {
-                    Ok(job) => job.run().await,
+                    Ok(job) => self.work.run(job).await,
                     Err(e) => {
                         log::debug!("worker handler dropped without receiving a job");
                     }
