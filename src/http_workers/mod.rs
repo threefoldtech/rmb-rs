@@ -1,7 +1,7 @@
 mod work_runner;
-use std::{sync::Arc, time::Duration};
-
 use anyhow::Context;
+use hyper::Client;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     cache::Cache,
@@ -32,7 +32,9 @@ where
 {
     // this must be async because of the workpool new function must be async
     pub fn new(size: usize, storage: S, twin_db: SubstrateTwinDB<C>, identity: I) -> Self {
-        let work_runner = WorkRunner::new(twin_db, identity, storage.clone());
+        // it's cheaper to create one http client and then clone it to the workers
+        // according to docs this will make it share the same connection pool.
+        let work_runner = WorkRunner::new(twin_db, identity, storage.clone(), Client::default());
         let pool = WorkerPool::new(Arc::new(work_runner), size);
         Self { storage, pool }
     }
