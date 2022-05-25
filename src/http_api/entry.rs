@@ -2,11 +2,11 @@ use super::data::AppData;
 use crate::twin::{SubstrateTwinDB, TwinDB};
 use crate::{cache::RedisCache, identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
+use hyper::http::{Method, Request, Response, Result as HTTPResult, StatusCode};
 use hyper::{
     service::{make_service_fn, service_fn},
-    Server,
+    Body, Server,
 };
-use hyper::{Body, Method, Request, Response, StatusCode};
 use std::net::SocketAddr;
 
 pub struct HttpApi<S, I, D>
@@ -63,73 +63,87 @@ where
     }
 }
 
+fn create_response(content: &str, status: StatusCode) {}
+
 pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     req: Request<Body>,
     data: AppData<S, I, D>,
-) -> Result<Response<Body>> {
+) -> HTTPResult<Response<(Body)>> {
     let mut response = Response::new(Body::empty());
+    // getting request body
     let body = hyper::body::to_bytes(req.into_body()).await;
     let body = match body {
         Ok(body) => body,
         Err(err) => {
-            log::debug!("can not extract body because of {}", err);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            return Ok(response);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Failure in body"))
         }
     };
     let message: Result<Message> = serde_json::from_slice(&body.to_vec())
         .map_err(|err| anyhow::anyhow!(err))
         .context("can not parse body");
 
-    let message = match message {
+    let mut message = match message {
         Ok(message) => message,
         Err(err) => {
-            log::debug!("{}", err);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            return Ok(response);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Failure in body: Couldn't parse message"))
         }
     };
     // check the dst of the message is correct
-    if message.destination.is_empty() || message.destination[0] != data.twin_id as u32{
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return Ok(response);
+    if message.destination.is_empty() || message.destination[0] != data.twin_id as u32 {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("Failure in body: bad destination"));
     }
-
-
+    // getting sender twin
     let sender_twin = match data.twin_db.get_twin(message.source as u32).await {
         Ok(sender_twin) => sender_twin,
         Err(err) => {
-            log::debug!("{}", err);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            return Ok(response);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Couldn't find twin matching message source"))
         }
     };
-
+    let sender_twin = match sender_twin {
+        Some(sender_twin) => sender_twin,
+        None => return Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .body(Body::from("Couldn't find twin matching message source")),
+    };
+    //verify the message
     let verified = data.identity.verify(
-        &message.signature.as_bytes(),
+        message.signature.as_bytes().into(),
         &message.data.to_string(),
-        "publickey".as_bytes(),
+        sender_twin.account,
     );
     if verified == false {
         *response.status_mut() = StatusCode::UNAUTHORIZED;
         return Ok(response);
     }
-    //decode message
 
-    Ok(Response::new("RmbRemote Endpoint".into()))
+    message.reply = String::from("msgbus.system.reply");
+    data.storage.run(message);
+    Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .body(Body::from(""))
 }
 
 pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
     _req: Request<Body>,
     _data: AppData<S, I, D>,
-) -> Result<Response<Body>> {
-    Ok(Response::new("RmbReply Endpoint".into()))
+) -> HTTPResult<Response<Body>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from("RMB Reply endpoint"))
 }
 
 pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
     req: Request<Body>,
     data: AppData<S, I, D>,
-) -> Result<Response<Body>> {
+) -> HTTPResult<Response<Body>> {
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/rmb-remote") => rmb_remote(req, data).await,
         (&Method::POST, "/rmb-reply") => rmb_reply(req, data).await,

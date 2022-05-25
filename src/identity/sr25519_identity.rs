@@ -17,7 +17,7 @@ impl Identity for Sr25519Identity {
         Ok(msg)
     }
 
-    fn verify<M: AsRef<str>>(&self, sig: &[u8], msg: M, pub_key: &[u8]) -> bool {
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: &[u8], message: M, pubkey: P) -> bool {
         todo!()
     }
 

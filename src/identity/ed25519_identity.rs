@@ -20,11 +20,8 @@ impl Identity for Ed25519Identity {
         Ok(msg)
     }
 
-    fn verify<M: AsRef<str>>(&self, sig: &[u8], msg: M, pub_key: &[u8]) -> bool {
-        // let sig = Signature::from_raw(sig.to_owned());
-        // let pubkey = Public::from_raw(pub_key);
-        // EdPair::verify(sig, msg, pubkey);
-        true
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: &[u8], message: M, pubkey: P) -> bool {
+        EdPair::verify_weak(&sig, message, pubkey)
     }
 
     fn get_public_key(&self) -> String {

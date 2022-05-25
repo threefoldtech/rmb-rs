@@ -9,7 +9,7 @@ use anyhow::Result;
 
 pub trait Identity: Clone + Send + Sync {
     fn sign(&self, msg: Message) -> Result<Message>;
-    fn verify<M: AsRef<str>>(&self, sig: &[u8], msg: M, pub_key: &[u8]) -> bool;
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: &[u8], message: M, pubkey: P) -> bool;
     fn get_public_key(&self) -> String;
 }
 
