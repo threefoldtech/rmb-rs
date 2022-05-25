@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_flow() {
+    async fn test_simple_flow() {
         let storage = create_redis_storage().await;
         let id: &str = "e60b5d65-dcf7-4894-91b9-4e546a0c0904";
 
@@ -229,11 +229,11 @@ mod tests {
         let msg: Message = storage.local().await.unwrap();
         assert_eq!(msg.uid, id);
 
-        storage.forward(msg);
+        storage.forward(msg).await;
         let ret: Option<QueuedMessage> = storage.queued().await.unwrap();
 
         match ret {
-            None => println!("message is expired"), // message is expired
+            None => {} // message is expired
             Some(queued_msg) => match queued_msg {
                 QueuedMessage::Forward(msg) => {
                     storage.run(msg);
