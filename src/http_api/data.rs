@@ -30,5 +30,4 @@ where
     pub storage: S,
     pub identity: I,
     pub twin_db: D,
-    pub twin_id: u32,
 }

@@ -138,6 +138,6 @@ mod tests {
             .context("can't get twin from substrate")
             .unwrap();
 
-        assert_eq!(55, twin_id); 
+        assert_eq!(55, twin_id);
     }
 }

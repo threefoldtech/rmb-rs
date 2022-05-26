@@ -7,8 +7,10 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
+use std::convert::Infallible;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
-
+use thiserror::Error;
 pub struct HttpApi<S, I, D>
 where
     S: Storage,
@@ -30,7 +32,6 @@ where
         port: u16,
         storage: S,
         identity: I,
-        twin_id: u32,
         twin_db: D,
     ) -> Result<Self> {
         let ip = ip.as_ref().parse().context("failed to parse ip address")?;
@@ -40,7 +41,6 @@ where
             data: AppData {
                 storage,
                 identity,
-                twin_id,
                 twin_db,
             },
         })
@@ -50,11 +50,10 @@ where
         let services = make_service_fn(move |_| {
             let data = self.data.clone();
             let service = service_fn(move |req| routes(req, data.clone()));
-            async move { Ok::<_, anyhow::Error>(service) }
+            async move { Ok::<_, Infallible>(service) }
         });
 
         let server = Server::bind(&self.addr).serve(services);
-        println!("Server started");
         log::info!("listening on: {}", self.addr.ip());
 
         server.await?;
@@ -62,73 +61,103 @@ where
         Ok(())
     }
 }
-
-fn create_response(content: &str, status: StatusCode) {}
-
-pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
-    req: Request<Body>,
+#[derive(Error, Debug)]
+enum HandlerError {
+    #[error("BadRequest:{0}")]
+    BadRequest(String),
+    #[error("UnAuthorized: {0}")]
+    UnAuthorized(String),
+}
+impl HandlerError {
+    fn code(&self) -> StatusCode {
+        match self {
+            HandlerError::BadRequest(_) => return StatusCode::BAD_REQUEST,
+            HandlerError::UnAuthorized(_) => return StatusCode::UNAUTHORIZED,
+        };
+    }
+}
+async fn handler<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
     data: AppData<S, I, D>,
-) -> HTTPResult<Response<(Body)>> {
-    let mut response = Response::new(Body::empty());
+) -> Result<(), HandlerError> {
     // getting request body
-    let body = hyper::body::to_bytes(req.into_body()).await;
+    let body = hyper::body::to_bytes(request.into_body()).await;
     let body = match body {
         Ok(body) => body,
         Err(err) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("Failure in body"))
+            return anyhow::private::Err(HandlerError::BadRequest(String::from("Failure in body")));
         }
     };
-    let message: Result<Message> = serde_json::from_slice(&body.to_vec())
-        .map_err(|err| anyhow::anyhow!(err))
-        .context("can not parse body");
+    let message: Result<Message> =
+        serde_json::from_slice(&body.to_vec()).context("can not parse body");
 
     let mut message = match message {
         Ok(message) => message,
         Err(err) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("Failure in body: Couldn't parse message"))
+            return anyhow::private::Err(HandlerError::BadRequest(String::from(
+                "Failure in body: Couldn't parse message",
+            )));
         }
     };
+    let twin_id = data
+        .twin_db
+        .get_twin_id(data.identity.get_public_key())
+        .await
+        .context("can not get twin id")
+        .unwrap();
     // check the dst of the message is correct
-    if message.destination.is_empty() || message.destination[0] != data.twin_id as u32 {
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from("Failure in body: bad destination"));
+    if message.destination.is_empty() || message.destination[0] != twin_id as u32 {
+        return anyhow::private::Err(HandlerError::BadRequest(String::from(
+            "Failure in body: bad destination",
+        )));
     }
     // getting sender twin
     let sender_twin = match data.twin_db.get_twin(message.source as u32).await {
         Ok(sender_twin) => sender_twin,
         Err(err) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("Couldn't find twin matching message source"))
+            return anyhow::private::Err(HandlerError::BadRequest(String::from(
+                "Couldn't find twin matching message source",
+            )));
         }
     };
     let sender_twin = match sender_twin {
         Some(sender_twin) => sender_twin,
-        None => return Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .body(Body::from("Couldn't find twin matching message source")),
+        None => {
+            return anyhow::private::Err(HandlerError::BadRequest(String::from(
+                "Couldn't find twin matching message source",
+            )));
+        }
     };
     //verify the message
     let verified = data.identity.verify(
-        message.signature.as_bytes().into(),
-        &message.data.to_string(),
+        message.signature.as_bytes(),
+        &message.data,
         sender_twin.account,
     );
-    if verified == false {
-        *response.status_mut() = StatusCode::UNAUTHORIZED;
-        return Ok(response);
+    if !verified {
+        return anyhow::private::Err(HandlerError::UnAuthorized(String::from("Bad Signature")));
     }
 
-    message.reply = String::from("msgbus.system.reply");
     data.storage.run(message);
-    Response::builder()
-        .status(StatusCode::ACCEPTED)
-        .body(Body::from(""))
+    Ok(())
+}
+
+pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> HTTPResult<Response<(Body)>> {
+    match handler(request, data).await {
+        Ok(_) => {
+            return Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .body(Body::from(""))
+        }
+        Err(error) => {
+            return Response::builder()
+                .status(error.code())
+                .body(Body::from(error.to_string()))
+        }
+    }
 }
 
 pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
