@@ -9,7 +9,7 @@ extern crate anyhow;
 use anyhow::Context;
 use cache::RedisCache;
 use http_api::HttpApi;
-use identity::Ed25519Identity;
+use identity::Ed25519Signer;
 use identity::Identity;
 use storage::RedisStorage;
 use twin::{SubstrateTwinDB, TwinDB};
@@ -35,7 +35,7 @@ async fn main() {
         .unwrap();
 
     let storage = RedisStorage;
-    let identity = Ed25519Identity::try_from(
+    let identity = Ed25519Signer::try_from(
         "junior sock chunk accident pilot under ask green endless remove coast wood",
     )
     .unwrap();

@@ -1,5 +1,5 @@
 //use std::io::Write;
-use crate::identity::{Identity, Signer};
+use crate::identity::{Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hyper::{Body, Client, Method, Request, Uri};
@@ -95,8 +95,12 @@ impl Message {
         let digest = self.challenge().unwrap();
         let signature = hex::decode(&self.signature).context("failed to decode signature")?;
 
+        if signature.len() != SIGNATURE_LENGTH {
+            bail!("invalid signature length")
+        }
+
         if !identity.verify(&signature, &digest[..]) {
-            bail!("invalid signature")
+            bail!("signature verification failed")
         }
 
         Ok(())

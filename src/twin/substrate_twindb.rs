@@ -56,7 +56,7 @@ where
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use crate::{cache::MemCache, identity::Ed25519Identity};
+    use crate::{cache::MemCache, identity::Ed25519Signer};
 
     use super::*;
     use anyhow::Context;
