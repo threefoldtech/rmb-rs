@@ -40,7 +40,7 @@ async fn main() {
     )
     .unwrap();
 
-    HttpApi::new("127.0.0.1", 8888, storage, identity, db)
+    HttpApi::new(1, "127.0.0.1:8888", storage, identity, db)
         .unwrap()
         .run()
         .await

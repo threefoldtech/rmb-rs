@@ -21,7 +21,7 @@ impl Identity for Ed25519Identity {
     }
 
     fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: &[u8], message: M, pubkey: P) -> bool {
-        EdPair::verify_weak(&sig, message, pubkey)
+        EdPair::verify_weak(sig, message, pubkey)
     }
 
     fn get_public_key(&self) -> String {

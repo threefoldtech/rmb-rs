@@ -28,17 +28,17 @@ where
     D: TwinDB + Clone + Send + Sync + 'static,
 {
     pub fn new<P: AsRef<str>>(
-        ip: P,
-        port: u16,
+        twin: u32,
+        listen: P,
         storage: S,
         identity: I,
         twin_db: D,
     ) -> Result<Self> {
-        let ip = ip.as_ref().parse().context("failed to parse ip address")?;
-        let addr = SocketAddr::new(ip, port);
+        let addr: SocketAddr = listen.as_ref().parse().context("failed to parse address")?;
         Ok(HttpApi {
             addr,
             data: AppData {
+                twin,
                 storage,
                 identity,
                 twin_db,
@@ -63,79 +63,81 @@ where
 }
 #[derive(Error, Debug)]
 enum HandlerError {
-    #[error("BadRequest:{0}")]
-    BadRequest(String),
-    #[error("UnAuthorized: {0}")]
-    UnAuthorized(String),
+    #[error("bad request: {0}")]
+    BadRequest(anyhow::Error),
+
+    #[error("un authorized: {0}")]
+    UnAuthorized(anyhow::Error),
+
+    #[error("invalid destination twin {0}")]
+    InvalidDestination(u32),
+
+    #[error("invalid source twin {0}: {1}")]
+    InvalidSource(u32, anyhow::Error),
 }
+
 impl HandlerError {
     fn code(&self) -> StatusCode {
         match self {
-            HandlerError::BadRequest(_) => return StatusCode::BAD_REQUEST,
-            HandlerError::UnAuthorized(_) => return StatusCode::UNAUTHORIZED,
-        };
+            // the following ones are considered a bad request error
+            HandlerError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            HandlerError::InvalidDestination(_) => StatusCode::BAD_REQUEST,
+
+            // Unauthorized errors
+            HandlerError::UnAuthorized(_) => StatusCode::UNAUTHORIZED,
+            HandlerError::InvalidSource(_, _) => StatusCode::UNAUTHORIZED,
+        }
     }
 }
+
 async fn handler<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
     data: AppData<S, I, D>,
 ) -> Result<(), HandlerError> {
     // getting request body
-    let body = hyper::body::to_bytes(request.into_body()).await;
-    let body = match body {
-        Ok(body) => body,
-        Err(err) => {
-            return anyhow::private::Err(HandlerError::BadRequest(String::from("Failure in body")));
-        }
-    };
-    let message: Result<Message> =
-        serde_json::from_slice(&body.to_vec()).context("can not parse body");
-
-    let mut message = match message {
-        Ok(message) => message,
-        Err(err) => {
-            return anyhow::private::Err(HandlerError::BadRequest(String::from(
-                "Failure in body: Couldn't parse message",
-            )));
-        }
-    };
-    let twin_id = data
-        .twin_db
-        .get_twin_id(data.identity.get_public_key())
+    let body = hyper::body::to_bytes(request.into_body())
         .await
-        .context("can not get twin id")
-        .unwrap();
+        .context("failed to read request body")
+        .map_err(HandlerError::BadRequest)?;
+
+    let message: Message = serde_json::from_slice(&body.to_vec())
+        .context("failed to parse message")
+        .map_err(HandlerError::BadRequest)?;
+
     // check the dst of the message is correct
-    if message.destination.is_empty() || message.destination[0] != twin_id as u32 {
-        return anyhow::private::Err(HandlerError::BadRequest(String::from(
-            "Failure in body: bad destination",
-        )));
+    if message.destination.is_empty() || message.destination[0] != data.twin as u32 {
+        return Err(HandlerError::InvalidDestination(message.destination[0]));
     }
+
     // getting sender twin
-    let sender_twin = match data.twin_db.get_twin(message.source as u32).await {
-        Ok(sender_twin) => sender_twin,
-        Err(err) => {
-            return anyhow::private::Err(HandlerError::BadRequest(String::from(
-                "Couldn't find twin matching message source",
-            )));
-        }
-    };
+    let sender_twin = data
+        .twin_db
+        .get_twin(message.source as u32)
+        .await
+        .context("failed to get source twin")
+        .map_err(|e| HandlerError::InvalidSource(message.source, e))?;
+
     let sender_twin = match sender_twin {
-        Some(sender_twin) => sender_twin,
+        Some(twin) => twin,
         None => {
-            return anyhow::private::Err(HandlerError::BadRequest(String::from(
-                "Couldn't find twin matching message source",
-            )));
+            return Err(HandlerError::InvalidSource(
+                message.source,
+                anyhow::anyhow!("source twin not found"),
+            ))
         }
     };
+
     //verify the message
     let verified = data.identity.verify(
         message.signature.as_bytes(),
         &message.data,
         sender_twin.account,
     );
+
     if !verified {
-        return anyhow::private::Err(HandlerError::UnAuthorized(String::from("Bad Signature")));
+        return Err(HandlerError::UnAuthorized(anyhow::anyhow!(
+            "failed to validate signature"
+        )));
     }
 
     data.storage.run(message);
@@ -147,16 +149,12 @@ pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     data: AppData<S, I, D>,
 ) -> HTTPResult<Response<(Body)>> {
     match handler(request, data).await {
-        Ok(_) => {
-            return Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .body(Body::from(""))
-        }
-        Err(error) => {
-            return Response::builder()
-                .status(error.code())
-                .body(Body::from(error.to_string()))
-        }
+        Ok(_) => Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Body::empty()),
+        Err(error) => Response::builder()
+            .status(error.code())
+            .body(Body::from(error.to_string())),
     }
 }
 

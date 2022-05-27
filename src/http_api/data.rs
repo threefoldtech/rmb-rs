@@ -27,6 +27,7 @@ where
     I: Identity,
     D: TwinDB,
 {
+    pub twin: u32,
     pub storage: S,
     pub identity: I,
     pub twin_db: D,
