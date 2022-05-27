@@ -133,13 +133,9 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
     };
 
     //verify the message
-
-    let verified = message.verify(&sender_twin.account);
-    if !verified {
-        return Err(HandlerError::UnAuthorized(anyhow::anyhow!(
-            "failed to validate signature"
-        )));
-    }
+    message
+        .verify(&sender_twin.account)
+        .map_err(HandlerError::UnAuthorized)?;
 
     Ok(message)
 }
