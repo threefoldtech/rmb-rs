@@ -11,7 +11,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
     // there is no message with that ID or the actual message.
-    async fn get(&self, id: String) -> Result<Option<Message>>;
+    async fn get(&self, id: &str) -> Result<Option<Message>>;
 
     // pushes the message to local process (msgbus.$cmd) queue.
     // this means the message will be now available to the application

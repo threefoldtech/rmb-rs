@@ -11,6 +11,7 @@ pub use substrate_twindb::*;
 #[async_trait]
 pub trait TwinDB {
     async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>>;
+    async fn get_twin_id<S: Into<String> + Send + 'static>(&self, account_id: S) -> Result<u32>;
 }
 
 #[derive(Clone, Decode, Serialize, Deserialize, PartialEq, Debug)]

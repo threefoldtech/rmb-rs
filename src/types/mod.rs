@@ -1,7 +1,10 @@
-use crate::workers::Work;
+//use std::io::Write;
+use crate::identity::{Identity, Signer};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -67,5 +70,43 @@ impl Message {
 
     pub fn from_json(json: Vec<u8>) -> serde_json::Result<Self> {
         serde_json::from_slice(&json)
+    }
+
+    fn challenge(&self) -> Result<md5::Digest> {
+        let mut hash = md5::Context::new();
+        write!(hash, "{}", self.version)?;
+        write!(hash, "{}", self.id)?;
+        write!(hash, "{}", self.command)?;
+        write!(hash, "{}", self.data)?;
+        write!(hash, "{}", self.source)?;
+        for id in &self.destination {
+            write!(hash, "{}", *id)?;
+        }
+        write!(hash, "{}", self.reply)?;
+        write!(hash, "{}", self.now)?;
+
+        Ok(hash.compute())
+    }
+
+    pub fn sign<S: Signer>(&mut self, signer: &S) {
+        // we do unwrap because this should never fail.
+        let digest = self.challenge().unwrap();
+        let signature = signer.sign(&digest[..]);
+
+        // todo!: we need to include the signer type in the signature
+        // because remote twin will not have no idea how to interpret
+        // the twin account id
+        self.signature = hex::encode(signature);
+    }
+
+    pub fn verify<I: Identity>(&mut self, identity: &I) -> Result<()> {
+        let digest = self.challenge().unwrap();
+        let signature = hex::decode(&self.signature).context("failed to decode signature")?;
+
+        if !identity.verify(&signature, &digest[..]) {
+            bail!("invalid signature")
+        }
+
+        Ok(())
     }
 }

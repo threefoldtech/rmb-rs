@@ -26,7 +26,7 @@ note left
  multiple time before it succeed or fail
 end note
 alt $dst != local
-rrmb -> rr: PUSH msg to \n(msgbus.system.forward)
+rrmb -> lrmb: invalid destination error\n(code 400 Bad Request)
 else
 rrmb -> rr: PUSH to msgbus.$cmd
 note right

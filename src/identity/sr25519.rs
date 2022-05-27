@@ -1,4 +1,4 @@
-use super::Identity;
+use super::{Identity, Signer};
 use crate::types::Message;
 use anyhow::Result;
 use sp_core::{sr25519::Pair as SrPair, Pair};
@@ -10,11 +10,19 @@ pub struct Sr25519Identity {
     seed: [u8; 32],
 }
 
+impl Signer for Sr25519Identity {
+    fn sign<S: AsRef<[u8]>>(&self, msg: S) -> [u8; 64] {
+        self.pair.sign(msg.as_ref()).0
+    }
+}
+
 impl Identity for Sr25519Identity {
-    fn sign(&self, mut msg: Message) -> Result<Message> {
-        let signature = self.pair.sign(msg.data.as_bytes());
-        msg.signature = hex::encode(signature);
-        Ok(msg)
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
+        SrPair::verify_weak(sig.as_ref(), message, self.pair.public())
+    }
+
+    fn get_public_key(&self) -> String {
+        self.pair.public().to_string()
     }
 }
 
