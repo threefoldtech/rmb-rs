@@ -95,10 +95,10 @@ impl Message {
         let digest = self.challenge().unwrap();
         let signature = hex::decode(&self.signature).context("failed to decode signature")?;
 
-        if identity.verify(&signature, &digest[..]) {
-            return Ok(());
+        if !identity.verify(&signature, &digest[..]) {
+            bail!("invalid signature")
         }
 
-        bail!("invalid signature")
+        Ok(())
     }
 }
