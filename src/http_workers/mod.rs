@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     cache::Cache,
-    identity::Identity,
+    identity::{Identity, Signer},
     storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::QueuedMessage,
@@ -18,7 +18,7 @@ pub struct HttpWorker<S, C, I>
 where
     S: Storage,
     C: Cache<Twin>,
-    I: Identity,
+    I: Signer,
 {
     storage: S,
     pool: WorkerPool<Arc<WorkRunner<C, I, S>>>,
@@ -28,7 +28,7 @@ impl<S, C, I> HttpWorker<S, C, I>
 where
     S: Storage,
     C: Cache<Twin>,
-    I: Identity + 'static,
+    I: Signer + 'static,
 {
     // this must be async because of the workpool new function must be async
     pub fn new(size: usize, storage: S, twin_db: SubstrateTwinDB<C>, identity: I) -> Self {

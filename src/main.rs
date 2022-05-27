@@ -6,9 +6,13 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
+use anyhow::Context;
+use cache::RedisCache;
 use http_api::HttpApi;
 use identity::Ed25519Identity;
+use identity::Identity;
 use storage::RedisStorage;
+use twin::{SubstrateTwinDB, TwinDB};
 mod cache;
 mod http_api;
 mod http_workers;
@@ -26,10 +30,17 @@ async fn main() {
     // tokio::time::sleep(std::time::Duration::from_secs(1000)).await;
     // return;
 
-    let storage = RedisStorage;
-    let identity = Ed25519Identity::try_from("value").unwrap();
+    let db = SubstrateTwinDB::<RedisCache>::new("wss://tfchain.dev.grid.tf", None)
+        .context("cannot create substrate twin db object")
+        .unwrap();
 
-    HttpApi::new("127.0.0.1", 888, storage, identity)
+    let storage = RedisStorage;
+    let identity = Ed25519Identity::try_from(
+        "junior sock chunk accident pilot under ask green endless remove coast wood",
+    )
+    .unwrap();
+
+    HttpApi::new(1, "127.0.0.1:8888", storage, identity, db)
         .unwrap()
         .run()
         .await

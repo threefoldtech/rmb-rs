@@ -13,7 +13,7 @@ use uriparse::{Authority, Path, Scheme, URIBuilder};
 
 use crate::{
     cache::Cache,
-    identity::Identity,
+    identity::{Identity, Signer},
     storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::{Message, QueuedMessage},
@@ -50,7 +50,7 @@ enum SendError {
 pub struct WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
-    I: Identity,
+    I: Signer,
     S: Storage,
 {
     twin_db: SubstrateTwinDB<C>,
@@ -62,7 +62,7 @@ where
 impl<C, I, S> WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
-    I: Identity,
+    I: Signer,
     S: Storage,
 {
     pub fn new(
@@ -191,7 +191,7 @@ where
 impl<C, I, S> Work for WorkRunner<C, I, S>
 where
     C: Cache<Twin>,
-    I: Identity,
+    I: Signer,
     S: Storage,
 {
     type Job = QueuedMessage;
@@ -227,10 +227,7 @@ where
             msg.now = Utc::now().timestamp() as usize;
 
             // signing the message
-            let msg = match self.identity.sign(msg) {
-                Ok(msg) => msg,
-                Err(err) => todo!(),
-            };
+            msg.sign(&self.identity);
 
             // posting the message to the remote twin
             let mut result = Ok(());
