@@ -56,9 +56,10 @@ async fn main() {
 
     let identity = Ed25519Identity::try_from(
         "junior sock chunk accident pilot under ask green endless remove coast wood",
-    );
+    )
+    .unwrap();
 
-    HttpApi::new("127.0.0.1", 8888, storage, identity)
+    HttpApi::new(1, "127.0.0.1:8888", storage, identity, db)
         .unwrap()
         .run()
         .await

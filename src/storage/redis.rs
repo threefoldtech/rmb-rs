@@ -72,7 +72,7 @@ impl RedisStorageBuilder {
     }
 
     pub fn build(&self) -> RedisStorage {
-        RedisStorage::new(self.prefix, self.pool, self.ttl, self.max_commands)
+        RedisStorage::new(&self.prefix, self.pool.clone(), self.ttl, self.max_commands)
     }
 }
 
@@ -117,7 +117,8 @@ struct ForwardedMessage {
 
 impl ForwardedMessage {
     pub fn from_str_pair<S: Into<String>>(pair: S) -> Result<Self> {
-        let parts: Vec<&str> = pair.into().rsplitn(2, '.').collect();
+        let str_pair = pair.into();
+        let parts: Vec<&str> = str_pair.rsplitn(2, '.').collect();
         let dest_str = parts[0].to_string();
         let dest = dest_str.parse::<u32>()?;
 
