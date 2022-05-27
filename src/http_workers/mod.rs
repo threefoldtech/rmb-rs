@@ -44,10 +44,8 @@ where
             loop {
                 let worker_handler = self.pool.get().await;
 
-                match self.storage.queued().await {
-                    Ok(job) => {
-                        worker_handler.send(job).await;
-                    }
+                let job = match self.storage.queued().await {
+                    Ok(job) => job,
                     Err(err) => {
                         log::debug!("error while process the storage because of '{}'", err);
                         tokio::time::sleep(Duration::from_secs(1)).await;

@@ -58,7 +58,7 @@ async fn main() {
         "junior sock chunk accident pilot under ask green endless remove coast wood",
     );
 
-    HttpApi::new(1, "127.0.0.1:8888", storage, identity, db)
+    HttpApi::new("127.0.0.1", 8888, storage, identity)
         .unwrap()
         .run()
         .await

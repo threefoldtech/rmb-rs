@@ -134,9 +134,9 @@ impl ForwardedMessage {
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn get(&self, id: String) -> Result<Option<Message>> {
+    async fn get(&self, id: &str) -> Result<Option<Message>> {
         let mut conn = self.get_connection().await?;
-        let key = self.prefixed(Queue::Backlog(id));
+        let key = self.prefixed(Queue::Backlog(String::from(id)));
         let ret: Option<Vec<u8>> = conn.get(key).await?;
 
         match ret {
@@ -216,7 +216,7 @@ impl Storage for RedisStorage {
                 forward_queue => {
                     let forwarded = ForwardedMessage::from_str_pair(value)?;
                     //  message can expire
-                    let ret = self.get(forwarded.id).await?;
+                    let ret = self.get(&forwarded.id).await?;
                     match ret {
                         Some(mut msg) => {
                             msg.destination = vec![forwarded.destination];
