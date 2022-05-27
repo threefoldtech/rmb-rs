@@ -11,15 +11,15 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 
-enum Queue {
-    Backlog(String),
-    Run(String),
+enum Queue<'a> {
+    Backlog(&'a str),
+    Run(&'a str),
     Local,
     Forward,
     Reply,
 }
 
-impl std::fmt::Display for Queue {
+impl std::fmt::Display for Queue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Queue::Backlog(id) => write!(f, "backlog.{}", id),
@@ -137,7 +137,7 @@ impl ForwardedMessage {
 impl Storage for RedisStorage {
     async fn get(&self, id: &str) -> Result<Option<Message>> {
         let mut conn = self.get_connection().await?;
-        let key = self.prefixed(Queue::Backlog(String::from(id)));
+        let key = self.prefixed(Queue::Backlog(id));
         let ret: Option<Vec<u8>> = conn.get(key).await?;
 
         match ret {
@@ -151,7 +151,7 @@ impl Storage for RedisStorage {
 
     async fn run(&self, msg: Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let queue = self.prefixed(Queue::Run(msg.command));
+        let queue = self.prefixed(Queue::Run(&msg.command));
         let value = msg.to_json()?;
 
         conn.rpush(&queue, &value).await?;
@@ -165,14 +165,14 @@ impl Storage for RedisStorage {
         let value = msg.to_json()?;
 
         // add to backlog
-        let key = self.prefixed(Queue::Backlog(msg.id));
+        let key = self.prefixed(Queue::Backlog(&msg.id));
         conn.set_ex(&key, &value, self.ttl as usize).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
         for destination in &msg.destination {
             let forwarded = ForwardedMessage {
-                id: msg.id,
+                id: msg.id.to_owned(),
                 destination: *destination,
             };
 
@@ -205,11 +205,11 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         let forward_queue = self.prefixed(Queue::Forward);
         let reply_queue = self.prefixed(Queue::Reply);
+        let queues = (forward_queue, reply_queue);
 
         let result;
 
         loop {
-            let queues = (forward_queue, reply_queue);
             let ret: (String, String) = conn.blpop(&queues, 0).await?;
             let (queue, value) = ret;
 
