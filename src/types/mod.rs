@@ -1,4 +1,4 @@
-use crate::workers::Work;
+use crate::identity::{Identity, Signer};
 use async_trait::async_trait;
 use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
@@ -60,4 +60,12 @@ impl Default for Message {
     }
 }
 
-impl Message {}
+impl Message {
+    fn challenge(&self) {}
+
+    pub fn sign<S: Signer>(&mut self, signer: &S) {}
+
+    pub fn verify<I: Identity>(&mut self, identity: &I) -> bool {
+        false
+    }
+}

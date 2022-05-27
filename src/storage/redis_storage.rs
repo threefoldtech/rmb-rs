@@ -8,7 +8,7 @@ pub struct RedisStorage;
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn get(&self, _id: String) -> anyhow::Result<Option<Message>> {
+    async fn get(&self, id: &str) -> anyhow::Result<Option<Message>> {
         unimplemented!()
     }
 

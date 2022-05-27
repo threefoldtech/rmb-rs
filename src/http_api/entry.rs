@@ -74,6 +74,9 @@ enum HandlerError {
 
     #[error("invalid source twin {0}: {1}")]
     InvalidSource(u32, anyhow::Error),
+
+    #[error("internal server error")]
+    InternalError(#[from] anyhow::Error),
 }
 
 impl HandlerError {
@@ -86,21 +89,24 @@ impl HandlerError {
             // Unauthorized errors
             HandlerError::UnAuthorized(_) => StatusCode::UNAUTHORIZED,
             HandlerError::InvalidSource(_, _) => StatusCode::UNAUTHORIZED,
+
+            // Internal server error
+            HandlerError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
 
-async fn handler<S: Storage, I: Identity, D: TwinDB>(
+async fn message<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
-    data: AppData<S, I, D>,
-) -> Result<(), HandlerError> {
+    data: &AppData<S, I, D>,
+) -> Result<Message, HandlerError> {
     // getting request body
     let body = hyper::body::to_bytes(request.into_body())
         .await
         .context("failed to read request body")
         .map_err(HandlerError::BadRequest)?;
 
-    let message: Message = serde_json::from_slice(&body.to_vec())
+    let mut message: Message = serde_json::from_slice(&body.to_vec())
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
@@ -114,8 +120,7 @@ async fn handler<S: Storage, I: Identity, D: TwinDB>(
         .twin_db
         .get_twin(message.source as u32)
         .await
-        .context("failed to get source twin")
-        .map_err(|e| HandlerError::InvalidSource(message.source, e))?;
+        .context("failed to get source twin")?;
 
     let sender_twin = match sender_twin {
         Some(twin) => twin,
@@ -128,27 +133,34 @@ async fn handler<S: Storage, I: Identity, D: TwinDB>(
     };
 
     //verify the message
-    let verified = data.identity.verify(
-        message.signature.as_bytes(),
-        &message.data,
-        sender_twin.account,
-    );
 
+    let verified = message.verify(&sender_twin.account);
     if !verified {
         return Err(HandlerError::UnAuthorized(anyhow::anyhow!(
             "failed to validate signature"
         )));
     }
 
-    data.storage.run(message);
-    Ok(())
+    Ok(message)
+}
+
+async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> Result<(), HandlerError> {
+    let message = message(request, &data).await?;
+
+    data.storage
+        .run(message)
+        .await
+        .map_err(HandlerError::InternalError)
 }
 
 pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
     data: AppData<S, I, D>,
 ) -> HTTPResult<Response<(Body)>> {
-    match handler(request, data).await {
+    match rmb_remote_handler(request, data).await {
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
@@ -158,13 +170,46 @@ pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     }
 }
 
+async fn rmb_reply_handler<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> Result<(), HandlerError> {
+    let mut message = message(request, &data).await?;
+    let source = data
+        .storage
+        .get(&message.id)
+        .await
+        .context("failed to get source message")?;
+
+    let source = match source {
+        Some(source) => source,
+        None => {
+            // if source message is now none, it means it probably
+            // has timed out. so we just drop it
+            return Ok(());
+        }
+    };
+
+    message.reply = source.reply;
+
+    data.storage
+        .reply(message)
+        .await
+        .map_err(HandlerError::InternalError)
+}
+
 pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
-    _req: Request<Body>,
-    _data: AppData<S, I, D>,
+    request: Request<Body>,
+    data: AppData<S, I, D>,
 ) -> HTTPResult<Response<Body>> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .body(Body::from("RMB Reply endpoint"))
+    match rmb_reply_handler(request, data).await {
+        Ok(_) => Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Body::empty()),
+        Err(error) => Response::builder()
+            .status(error.code())
+            .body(Body::from(error.to_string())),
+    }
 }
 
 pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
