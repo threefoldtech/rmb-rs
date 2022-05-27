@@ -1,10 +1,9 @@
 use super::{Identity, Signer, SIGNATURE_LENGTH};
-use crate::types::Message;
 use anyhow::Result;
 use hyper::server::accept::Accept;
 use sp_core::{
     crypto::AccountId32,
-    ed25519::{Pair as EdPair, Public, Signature},
+    ed25519::{Pair as EdPair, Public},
     Pair,
 };
 
@@ -18,6 +17,10 @@ pub struct Ed25519Identity(Public);
 impl Identity for Ed25519Identity {
     fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
         verify(&self.0, sig, message)
+    }
+
+    fn account(&self) -> AccountId32 {
+        self.0.into()
     }
 }
 
@@ -49,6 +52,10 @@ impl Signer for Ed25519Signer {
 impl Identity for Ed25519Signer {
     fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
         verify(&self.pair.public(), sig, message)
+    }
+
+    fn account(&self) -> AccountId32 {
+        self.pair.public().into()
     }
 }
 

@@ -1,5 +1,4 @@
 use super::{Identity, Signer, SIGNATURE_LENGTH};
-use crate::types::Message;
 use anyhow::Result;
 use sp_core::{
     crypto::AccountId32,
@@ -17,6 +16,10 @@ pub struct Sr25519Identity(Public);
 impl Identity for Sr25519Identity {
     fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
         verify(&self.0, sig, message)
+    }
+
+    fn account(&self) -> AccountId32 {
+        self.0.into()
     }
 }
 
@@ -48,6 +51,10 @@ impl Signer for Sr25519Signer {
 impl Identity for Sr25519Signer {
     fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
         verify(&self.pair.public(), sig, message)
+    }
+
+    fn account(&self) -> AccountId32 {
+        self.pair.public().into()
     }
 }
 

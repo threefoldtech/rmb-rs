@@ -85,9 +85,6 @@ impl Message {
         let digest = self.challenge().unwrap();
         let signature = signer.sign(&digest[..]);
 
-        // todo!: we need to include the signer type in the signature
-        // because remote twin will not have no idea how to interpret
-        // the twin account id
         self.signature = hex::encode(signature);
     }
 

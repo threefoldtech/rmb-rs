@@ -1,7 +1,8 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use codec::{Decode, Encode};
+use sp_core::crypto::AccountId32;
 use sp_core::ed25519;
 use substrate_api_client::Api;
 
@@ -28,11 +29,7 @@ impl SubstrateClient {
         Ok(twin)
     }
 
-    pub fn get_twin_id_by_account_id(&self, account_id: String) -> Result<u32> {
-        let account_id = sp_core::ed25519::Public::from_str(&account_id)
-            .map_err(|err| anyhow::anyhow!(format!("{:?}", err)))
-            .context("failed to get ed25519 key from account id")?;
-
+    pub fn get_twin_id_by_account_id(&self, account_id: AccountId32) -> Result<u32> {
         let twin_id: u32 = self
             .api
             .get_storage_map(
