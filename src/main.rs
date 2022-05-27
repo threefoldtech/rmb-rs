@@ -6,6 +6,8 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
+use std::time::Duration;
+
 use anyhow::Context;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 
@@ -41,12 +43,14 @@ async fn main() {
         .unwrap();
 
     const PREFIX: &str = "msgbus";
-    const TTL: usize = 20;
+    const TTL: Duration = Duration::from_secs(20);
     const MAX_COMMANDS: isize = 500;
 
-    let storage = RedisStorage::new(String::from(PREFIX), pool, TTL, MAX_COMMANDS)
-        .context("unable to create redis storage")
-        .unwrap();
+    let storage = RedisStorage::builder(pool)
+        .prefix(PREFIX)
+        .ttl(TTL)
+        .max_commands(500)
+        .build();
 
     let ret = storage.local().await;
     match ret {

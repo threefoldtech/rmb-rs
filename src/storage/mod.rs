@@ -1,5 +1,5 @@
-mod redis_storage;
-pub use redis_storage::*;
+mod redis;
+pub use redis::*;
 
 use crate::types::{Message, QueuedMessage};
 use anyhow::Result;
@@ -41,8 +41,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // until a message is available
     async fn local(&self) -> Result<Message>;
 
-    // find a better name
     // process will wait on both msgbus.system.forward AND msgbus.system.reply
     // and return the first message available with the correct Queue type
-    async fn queued(&self) -> Result<Option<QueuedMessage>>;
+    async fn queued(&self) -> Result<QueuedMessage>;
 }

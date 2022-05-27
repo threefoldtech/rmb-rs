@@ -20,7 +20,7 @@ pub struct Message {
     pub command: String,
     #[serde(rename = "exp")]
     pub expiration: usize,
-    #[serde(rename = "retry")]
+    #[serde(rename = "try")]
     pub retry: usize,
     #[serde(rename = "dat")]
     pub data: String,
@@ -60,4 +60,12 @@ impl Default for Message {
     }
 }
 
-impl Message {}
+impl Message {
+    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+
+    pub fn from_json(json: Vec<u8>) -> serde_json::Result<Self> {
+        serde_json::from_slice(&json)
+    }
+}
