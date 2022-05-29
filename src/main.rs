@@ -5,6 +5,8 @@
 extern crate log;
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate lru;
 
 use std::time::Duration;
 

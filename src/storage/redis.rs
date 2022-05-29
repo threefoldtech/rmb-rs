@@ -1,4 +1,4 @@
-use std::{str::from_utf8, time::Duration};
+use std::{str::from_utf8, sync::Arc, time::Duration};
 
 use crate::types::{Message, QueuedMessage};
 
@@ -13,6 +13,8 @@ use bb8_redis::{
     },
     RedisConnectionManager,
 };
+use lru::{DefaultHasher, LruCache};
+use tokio::sync::Mutex;
 
 enum Queue<'a> {
     Backlog(&'a str),
@@ -40,12 +42,14 @@ pub struct RedisStorage {
     pool: Pool<RedisConnectionManager>,
     ttl: u64,
     max_commands: isize,
+    lru_cache: Arc<Mutex<LruCache<String, Message>>>,
 }
 
 pub struct RedisStorageBuilder {
     pool: Pool<RedisConnectionManager>,
     prefix: String,
     ttl: Duration,
+    cache_size: usize,
     max_commands: isize,
 }
 
@@ -56,6 +60,7 @@ impl RedisStorageBuilder {
             prefix: String::from("msgbus"),
             ttl: Duration::from_secs(20),
             max_commands: 500,
+            cache_size: 500,
         }
     }
 
@@ -74,8 +79,19 @@ impl RedisStorageBuilder {
         self
     }
 
+    pub fn cache_size(mut self, cache_size: usize) -> Self {
+        self.cache_size = cache_size;
+        self
+    }
+
     pub fn build(&self) -> RedisStorage {
-        RedisStorage::new(&self.prefix, self.pool.clone(), self.ttl, self.max_commands)
+        RedisStorage::new(
+            &self.prefix,
+            self.pool.clone(),
+            self.ttl,
+            self.max_commands,
+            self.cache_size,
+        )
     }
 }
 
@@ -85,12 +101,16 @@ impl RedisStorage {
         pool: Pool<RedisConnectionManager>,
         ttl: Duration,
         max_commands: isize,
+        cache_size: usize,
     ) -> Self {
+        let cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
+
         Self {
             prefix: prefix.into(),
             pool: pool,
             ttl: ttl.as_secs(),
             max_commands: max_commands,
+            lru_cache: cache,
         }
     }
 
@@ -106,6 +126,15 @@ impl RedisStorage {
 
     fn prefixed(&self, queue: Queue) -> String {
         format!("{}.{}", self.prefix, queue)
+    }
+
+    async fn get_cached(&self, id: &str) -> Option<Message> {
+        self.lru_cache.lock().await.pop(id)
+    }
+
+    async fn cache(&self, id: &str, msg: &Message) -> Option<Message> {
+        let mut cache = self.lru_cache.lock().await;
+        cache.put(id.to_owned(), msg.clone())
     }
 
     pub fn builder(pool: Pool<RedisConnectionManager>) -> RedisStorageBuilder {
@@ -250,11 +279,20 @@ impl Storage for RedisStorage {
             match queue {
                 forward_queue => {
                     let forwarded = ForwardedMessage::from_bytes_pair(&value)?;
-                    //  message can expire
-                    let ret = self.get(&forwarded.id).await?;
+
+                    let mut ret = self.get_cached(&forwarded.id).await;
+                    let not_cached = ret.is_none();
+
+                    if not_cached {
+                        ret = self.get(&forwarded.id).await?;
+                    }
+
                     match ret {
                         Some(mut msg) => {
                             msg.destination = vec![forwarded.destination];
+                            if not_cached {
+                                self.cache(&msg.id, &msg);
+                            }
                             result = QueuedMessage::Forward(msg);
                             break;
                         }
