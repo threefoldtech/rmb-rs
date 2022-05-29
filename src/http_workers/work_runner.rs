@@ -178,7 +178,7 @@ where
 
         if let Err(err) = self
             .storage
-            .reply(msg)
+            .reply(&msg)
             .await
             .context("can not send a reply message")
         {

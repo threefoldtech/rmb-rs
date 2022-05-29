@@ -217,22 +217,22 @@ impl Storage for RedisStorage {
         }
     }
 
-    async fn run(&self, msg: Message) -> Result<()> {
+    async fn run(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let queue = self.prefixed(Queue::Run(&msg.command));
 
-        conn.rpush(&queue, &msg).await?;
+        conn.rpush(&queue, msg).await?;
         conn.ltrim(&queue, 0, self.max_commands).await?;
 
         Ok(())
     }
 
-    async fn forward(&self, msg: Message) -> Result<()> {
+    async fn forward(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
         // add to backlog
         let key = self.prefixed(Queue::Backlog(&msg.id));
-        conn.set_ex(&key, &msg, self.ttl as usize).await?;
+        conn.set_ex(&key, msg, self.ttl as usize).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
@@ -247,10 +247,10 @@ impl Storage for RedisStorage {
         Ok(())
     }
 
-    async fn reply(&self, msg: Message) -> Result<()> {
+    async fn reply(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        conn.rpush(&msg.reply, &msg).await?;
+        conn.rpush(&msg.reply, msg).await?;
         Ok(())
     }
 
@@ -378,16 +378,18 @@ mod tests {
         let msg = storage.local().await.unwrap();
         assert_eq!(msg.id, id);
 
-        storage.forward(msg).await;
+        storage.forward(&msg).await;
         let queued_msg = storage.queued().await.unwrap();
 
         match queued_msg {
             QueuedMessage::Forward(msg) => {
-                storage.run(msg);
+                storage.run(&msg).await;
             }
             QueuedMessage::Reply(msg) => {
-                storage.run(msg);
+                storage.run(&msg).await;
             }
         }
+
+        storage.reply(&msg).await;
     }
 }

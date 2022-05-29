@@ -26,16 +26,16 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // SUGGESTED FIX: instead of setting TTL on the $cmd queue we can limit the length
     // of the queue. So for example, we allow maximum of 500 message to be on this queue
     // after that we need to trim the queue to specific length after push (so drop older messages)
-    async fn run(&self, msg: Message) -> Result<()>;
+    async fn run(&self, msg: &Message) -> Result<()>;
 
     // forward stores the message in backlog.$id, and for each twin id in the message
     // destination, a new tuple of (id, dst) is pushed to the forward queue.
     // it also need to set TTL on the `backlog.$id` queue. This will make sure
     // message will be auto-dropped when it times out.
-    async fn forward(&self, msg: Message) -> Result<()>;
+    async fn forward(&self, msg: &Message) -> Result<()>;
 
     // pushes message to `msg.$ret` queue.
-    async fn reply(&self, msg: Message) -> Result<()>;
+    async fn reply(&self, msg: &Message) -> Result<()>;
 
     // gets a message from local queue waits
     // until a message is available
