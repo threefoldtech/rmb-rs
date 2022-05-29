@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{str::from_utf8, time::Duration};
 
 use crate::types::{Message, QueuedMessage};
 
@@ -7,7 +7,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
-    redis::AsyncCommands,
+    redis::{
+        AsyncCommands, ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs,
+        Value,
+    },
     RedisConnectionManager,
 };
 
@@ -128,8 +131,44 @@ impl ForwardedMessage {
         })
     }
 
+    pub fn from_bytes_pair(bytes: &Vec<u8>) -> Result<Self> {
+        let pair = from_utf8(bytes)?;
+        Self::from_str_pair(pair)
+    }
+
     pub fn to_str_pair(&self) -> String {
         format!("{}.{}", self.id, self.destination)
+    }
+}
+
+impl ToRedisArgs for ForwardedMessage {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + RedisWrite,
+    {
+        let pair = self.to_str_pair();
+        out.write_arg(&pair.as_bytes());
+    }
+}
+
+impl FromRedisValue for ForwardedMessage {
+    fn from_redis_value(v: &Value) -> RedisResult<Self> {
+        if let Value::Data(data) = v {
+            let ret = ForwardedMessage::from_bytes_pair(data);
+            match ret {
+                Ok(bytes) => Ok(bytes),
+                Err(err) => Err(RedisError::from((
+                    ErrorKind::ResponseError,
+                    "cannot decode a forwarded message from from pair {}",
+                    err.to_string(),
+                ))),
+            }
+        } else {
+            Err(RedisError::from((
+                ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
     }
 }
 
@@ -142,7 +181,7 @@ impl Storage for RedisStorage {
 
         match ret {
             Some(val) => {
-                let msg = Message::from_json(val)?;
+                let msg = Message::from_json(&val)?;
                 Ok(Some(msg))
             }
             None => Ok(None),
@@ -152,9 +191,8 @@ impl Storage for RedisStorage {
     async fn run(&self, msg: Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let queue = self.prefixed(Queue::Run(&msg.command));
-        let value = msg.to_json()?;
 
-        conn.rpush(&queue, &value).await?;
+        conn.rpush(&queue, &msg).await?;
         conn.ltrim(&queue, 0, self.max_commands).await?;
 
         Ok(())
@@ -162,11 +200,10 @@ impl Storage for RedisStorage {
 
     async fn forward(&self, msg: Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let value = msg.to_json()?;
 
         // add to backlog
         let key = self.prefixed(Queue::Backlog(&msg.id));
-        conn.set_ex(&key, &value, self.ttl as usize).await?;
+        conn.set_ex(&key, &msg, self.ttl as usize).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
@@ -175,9 +212,7 @@ impl Storage for RedisStorage {
                 id: msg.id.to_owned(),
                 destination: *destination,
             };
-
-            let value = forwarded.to_str_pair();
-            conn.rpush(&queue, &value).await?
+            conn.rpush(&queue, &forwarded).await?
         }
 
         Ok(())
@@ -185,9 +220,8 @@ impl Storage for RedisStorage {
 
     async fn reply(&self, msg: Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let value = msg.to_json()?;
 
-        conn.rpush(&msg.reply, &value).await?;
+        conn.rpush(&msg.reply, &msg).await?;
         Ok(())
     }
 
@@ -197,7 +231,7 @@ impl Storage for RedisStorage {
         let ret: (Vec<u8>, Vec<u8>) = conn.blpop(&queue, 0).await?;
 
         let (_, value) = ret;
-        let msg = Message::from_json(value)?;
+        let msg = Message::from_json(&value)?;
         Ok(msg)
     }
 
@@ -210,12 +244,12 @@ impl Storage for RedisStorage {
         let result;
 
         loop {
-            let ret: (String, String) = conn.blpop(&queues, 0).await?;
+            let ret: (String, Vec<u8>) = conn.blpop(&queues, 0).await?;
             let (queue, value) = ret;
 
             match queue {
                 forward_queue => {
-                    let forwarded = ForwardedMessage::from_str_pair(value)?;
+                    let forwarded = ForwardedMessage::from_bytes_pair(&value)?;
                     //  message can expire
                     let ret = self.get(&forwarded.id).await?;
                     match ret {
@@ -233,7 +267,7 @@ impl Storage for RedisStorage {
                 reply_queue => {
                     // reply queue had the message itself
                     // decode it directly
-                    let msg = Message::from_json(value.as_bytes().to_vec())?;
+                    let msg = Message::from_json(&value)?;
                     result = QueuedMessage::Reply(msg);
                     break;
                 }
@@ -292,8 +326,7 @@ mod tests {
             signature: String::from(""),
         };
 
-        let value = msg.to_json()?;
-        conn.rpush(&queue, &value).await?;
+        conn.rpush(&queue, &msg).await?;
 
         Ok(())
     }

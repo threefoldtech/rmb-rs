@@ -2,6 +2,7 @@
 use crate::identity::{Identity, Signer};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use bb8_redis::redis;
 use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -68,7 +69,7 @@ impl Message {
         serde_json::to_vec(self)
     }
 
-    pub fn from_json(json: Vec<u8>) -> serde_json::Result<Self> {
+    pub fn from_json(json: &Vec<u8>) -> serde_json::Result<Self> {
         serde_json::from_slice(&json)
     }
 
@@ -108,5 +109,58 @@ impl Message {
         }
 
         Ok(())
+    }
+}
+
+impl TryFrom<Vec<u8>> for Message {
+    type Error = serde_json::Error;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        Message::from_json(&value)
+    }
+}
+
+impl TryInto<Vec<u8>> for Message {
+    type Error = serde_json::Error;
+
+    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
+        self.to_json()
+    }
+}
+
+impl redis::ToRedisArgs for Message {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let ret = self.to_json();
+
+        match ret {
+            Ok(bytes) => out.write_arg(&bytes),
+            Err(err) => {
+                log::debug!("cannot encode message of {:?} to redis args: {}", self, err);
+            }
+        }
+    }
+}
+
+impl redis::FromRedisValue for Message {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            let ret = Message::from_json(data);
+            match ret {
+                Ok(bytes) => Ok(bytes),
+                Err(err) => Err(redis::RedisError::from((
+                    redis::ErrorKind::ResponseError,
+                    "cannot decode a message from json {}",
+                    err.to_string(),
+                ))),
+            }
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
     }
 }
