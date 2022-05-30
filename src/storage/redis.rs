@@ -57,7 +57,7 @@ pub struct RedisStorageBuilder {
 impl RedisStorageBuilder {
     pub fn new(pool: Pool<RedisConnectionManager>) -> RedisStorageBuilder {
         RedisStorageBuilder {
-            pool: pool,
+            pool,
             prefix: String::from("msgbus"),
             max_commands: 500,
         }
