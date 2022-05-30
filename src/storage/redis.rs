@@ -222,7 +222,12 @@ impl Storage for RedisStorage {
         let queue = self.prefixed(Queue::Run(&msg.command));
 
         conn.rpush(&queue, msg).await?;
-        conn.ltrim(&queue, 0, self.max_commands).await?;
+
+        // only keep `max_commands` in this queue
+        let len: isize = conn.llen(&queue).await?;
+        if len > self.max_commands {
+            conn.ltrim(&queue, self.max_commands, -1).await?;
+        }
 
         Ok(())
     }
