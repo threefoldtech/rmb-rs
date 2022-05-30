@@ -73,8 +73,8 @@ impl RedisStorageBuilder {
         self
     }
 
-    pub fn build(&self) -> RedisStorage {
-        RedisStorage::new(&self.prefix, self.pool.clone(), self.max_commands)
+    pub fn build(self) -> RedisStorage {
+        RedisStorage::new(&self.prefix, self.pool, self.max_commands)
     }
 }
 
