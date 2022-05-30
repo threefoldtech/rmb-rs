@@ -210,7 +210,7 @@ impl Storage for RedisStorage {
         // add to backlog
         let key = self.prefixed(Queue::Backlog(&msg.id));
         let mut expiration = msg.expiration;
-        if expiration <= 0 {
+        if expiration == 0 {
             expiration = MAX_TTL;
         }
         conn.set_ex(&key, msg, expiration).await?;
