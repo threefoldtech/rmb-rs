@@ -28,7 +28,7 @@ use log::kv::Key;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::time::Duration;
-use storage::RedisStorage;
+use storage::{RedisStorage, Storage};
 use twin::{SubstrateTwinDB, TwinDB};
 
 #[derive(Debug)]
@@ -129,7 +129,19 @@ async fn app(args: &Args) -> Result<()> {
         .await
         .context("failed to get own twin id")?;
 
+    let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
+
+    // spawn the processor
+    let handler = tokio::spawn(processor(id, storage.clone()));
+
+    // todo!:
+    // - you need to spawn the http api server and the http workers here
+    // - you need to use tokio::spawn so each of those services are running in their own task
+    // - you collect all handlers here (like above)
+    // - you need to do a select! on all handlers. so in case any of them exits, you need to log the error
+    // and exit because the system can't work with any of those components down.
+
     // let storage = RedisStorage;
     // let identity = Ed25519Signer::try_from(
     //     "junior sock chunk accident pilot under ask green endless remove coast wood",
@@ -143,6 +155,37 @@ async fn app(args: &Args) -> Result<()> {
     //     .unwrap();
 
     Ok(())
+}
+
+/// processor processes the local client queues, and fill up the message for processing
+/// before pushing it to the forward queue. where they gonna be picked up by the workers
+async fn processor<S: Storage>(id: u32, storage: S) {
+    use std::time::Duration;
+    use tokio::time::sleep;
+    let wait = Duration::from_secs(1);
+    loop {
+        let mut msg = match storage.local().await {
+            Ok(msg) => msg,
+            Err(err) => {
+                log::error!("failed to process local messages: {}", err);
+                sleep(wait).await;
+                continue;
+            }
+        };
+
+        msg.version = 1;
+        // set the source
+        msg.source = id;
+        // set the message id.
+        msg.id = uuid::Uuid::new_v4().to_string();
+        // todo: validates values on expiration, retry, etc.. to make sure
+        // the values are sane.
+        // push message to forward.
+        while let Err(err) = storage.forward(&msg).await {
+            log::error!("failed to push message for forwarding: {}", err);
+            sleep(wait).await;
+        }
+    }
 }
 
 #[tokio::main]
