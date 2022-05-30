@@ -134,29 +134,21 @@ impl redis::ToRedisArgs for Message {
     where
         W: ?Sized + redis::RedisWrite,
     {
-        let ret = self.to_json();
-
-        match ret {
-            Ok(bytes) => out.write_arg(&bytes),
-            Err(err) => {
-                log::debug!("cannot encode message of {:?} to redis args: {}", self, err);
-            }
-        }
+        let bytes = self.to_json().expect("failed to json encode message");
+        out.write_arg(&bytes);
     }
 }
 
 impl redis::FromRedisValue for Message {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         if let redis::Value::Data(data) = v {
-            let ret = Message::from_json(data);
-            match ret {
-                Ok(bytes) => Ok(bytes),
-                Err(err) => Err(redis::RedisError::from((
+            Message::from_json(data).map_err(|e| {
+                redis::RedisError::from((
                     redis::ErrorKind::TypeError,
                     "cannot decode a message from json {}",
-                    err.to_string(),
-                ))),
-            }
+                    e.to_string(),
+                ))
+            })
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::TypeError,

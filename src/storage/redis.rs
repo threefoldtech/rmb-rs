@@ -120,33 +120,31 @@ impl FromStr for ForwardedMessage {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.rsplitn(2, '.').collect();
-        let dest_str = parts[0].to_string();
-
-        let out = dest_str.parse::<u32>();
-
-        match out {
-            Ok(dest) => Ok(Self {
-                id: parts[1].to_string(),
-                destination: dest,
-            }),
-            Err(_) => Err(anyhow!(
-                "cannot parse forwarded message from string of {}",
-                s
-            )),
+        if parts.len() != 2 {
+            bail!("invalid message address string");
         }
+
+        let out: u32 = parts[0]
+            .parse()
+            .with_context(|| format!("invalid destination twin format {}", parts[0]))?;
+
+        Ok(Self {
+            id: parts[1].into(),
+            destination: out,
+        })
     }
 }
 
-impl ToString for ForwardedMessage {
-    fn to_string(&self) -> String {
-        format!("{}.{}", self.id, self.destination)
+impl std::fmt::Display for ForwardedMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.id, self.destination)
     }
 }
 
 impl ForwardedMessage {
-    pub fn from_bytes_pair(bytes: &Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Result<Self> {
         let pair = from_utf8(bytes)?;
-        pair.parse::<Self>()
+        pair.parse()
     }
 }
 
@@ -163,15 +161,13 @@ impl ToRedisArgs for ForwardedMessage {
 impl FromRedisValue for ForwardedMessage {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         if let Value::Data(data) = v {
-            let ret = ForwardedMessage::from_bytes_pair(data);
-            match ret {
-                Ok(bytes) => Ok(bytes),
-                Err(err) => Err(RedisError::from((
+            ForwardedMessage::from_bytes(data).map_err(|e| {
+                RedisError::from((
                     ErrorKind::TypeError,
                     "cannot decode a forwarded message from from pair {}",
-                    err.to_string(),
-                ))),
-            }
+                    e.to_string(),
+                ))
+            })
         } else {
             Err(RedisError::from((
                 ErrorKind::TypeError,
@@ -193,13 +189,8 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         let queue = self.prefixed(Queue::Run(&msg.command));
 
-        conn.rpush(&queue, msg).await?;
-
-        // only keep `max_commands` in this queue
-        let len: isize = conn.llen(&queue).await?;
-        if len > self.max_commands {
-            conn.ltrim(&queue, self.max_commands, -1).await?;
-        }
+        conn.lpush(&queue, msg).await?;
+        conn.ltrim(&queue, 0, self.max_commands - 1).await?;
 
         Ok(())
     }
@@ -219,10 +210,10 @@ impl Storage for RedisStorage {
         let queue = self.prefixed(Queue::Forward);
         for destination in &msg.destination {
             let forwarded = ForwardedMessage {
-                id: msg.id.to_owned(),
+                id: msg.id.clone(),
                 destination: *destination,
             };
-            conn.rpush(&queue, &forwarded).await?
+            conn.lpush(&queue, &forwarded).await?
         }
 
         Ok(())
@@ -231,14 +222,14 @@ impl Storage for RedisStorage {
     async fn reply(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        conn.rpush(&msg.reply, msg).await?;
+        conn.lpush(&msg.reply, msg).await?;
         Ok(())
     }
 
     async fn local(&self) -> Result<Message> {
         let mut conn = self.get_connection().await?;
         let queue = self.prefixed(Queue::Local);
-        let ret: (Vec<u8>, Message) = conn.blpop(&queue, 0).await?;
+        let ret: (Vec<u8>, Message) = conn.brpop(&queue, 0).await?;
 
         Ok(ret.1)
     }
@@ -250,34 +241,24 @@ impl Storage for RedisStorage {
         let queues = (forward_queue, reply_queue);
 
         loop {
-            let ret: (String, Value) = conn.blpop(&queues, 0).await?;
+            let ret: (String, Value) = conn.brpop(&queues, 0).await?;
             let (queue, value) = ret;
 
             match queue {
                 forward_queue => {
-                    let forwarded;
-
-                    let ret = ForwardedMessage::from_redis_value(&value);
-                    match ret {
-                        Ok(msg) => forwarded = msg,
+                    let forward = match ForwardedMessage::from_redis_value(&value) {
+                        Ok(msg) => msg,
                         Err(err) => {
                             log::debug!("cannot get forwarded message: {}", err.to_string());
                             continue;
                         }
-                    }
+                    };
 
-                    let ret = self.get(&forwarded.id).await?;
-                    match ret {
-                        Some(mut msg) => {
-                            msg.destination = vec![forwarded.destination];
-                            return Ok(QueuedMessage::Forward(msg));
-                        }
-                        None => {
-                            log::debug!("message of {} has been expired", forwarded.id);
-                        }
+                    if let Some(mut msg) = self.get(&forward.id).await? {
+                        msg.destination = vec![forward.destination];
+                        return Ok(QueuedMessage::Forward(msg));
                     }
                 }
-
                 reply_queue => {
                     // reply queue had the message itself
                     // decode it directly
@@ -336,7 +317,7 @@ mod tests {
             signature: String::from(""),
         };
 
-        conn.rpush(&queue, &msg).await?;
+        conn.lpush(&queue, &msg).await?;
 
         Ok(())
     }
@@ -344,11 +325,10 @@ mod tests {
     #[test]
     fn test_parse_forwarded_message() {
         let s = "a.b.c.1";
-        let ret = s.parse::<ForwardedMessage>();
-        let msg = ret.unwrap();
+        let ret: ForwardedMessage = s.parse().expect("failed to parse 'a.b.c.1'");
 
-        assert_eq!(msg.id, "a.b.c");
-        assert_eq!(msg.destination, 1);
+        assert_eq!(ret.id, "a.b.c");
+        assert_eq!(ret.destination, 1);
 
         let bad_s = "abc";
         let err_ret = bad_s.parse::<ForwardedMessage>();
