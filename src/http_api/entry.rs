@@ -147,7 +147,7 @@ async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
     let message = message(request, &data).await?;
 
     data.storage
-        .run(message)
+        .run(&message)
         .await
         .map_err(HandlerError::InternalError)
 }
@@ -189,7 +189,7 @@ async fn rmb_reply_handler<S: Storage, I: Identity, D: TwinDB>(
     message.reply = source.reply;
 
     data.storage
-        .reply(message)
+        .reply(&message)
         .await
         .map_err(HandlerError::InternalError)
 }

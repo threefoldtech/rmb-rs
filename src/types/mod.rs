@@ -2,6 +2,7 @@
 use crate::identity::{Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use bb8_redis::redis;
 use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -23,7 +24,7 @@ pub struct Message {
     pub command: String,
     #[serde(rename = "exp")]
     pub expiration: usize,
-    #[serde(rename = "retry")]
+    #[serde(rename = "try")]
     pub retry: usize,
     #[serde(rename = "dat")]
     pub data: String,
@@ -64,6 +65,14 @@ impl Default for Message {
 }
 
 impl Message {
+    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+
+    pub fn from_json(json: &Vec<u8>) -> serde_json::Result<Self> {
+        serde_json::from_slice(&json)
+    }
+
     fn challenge(&self) -> Result<md5::Digest> {
         let mut hash = md5::Context::new();
         write!(hash, "{}", self.version)?;
@@ -101,5 +110,50 @@ impl Message {
         }
 
         Ok(())
+    }
+}
+
+impl TryFrom<Vec<u8>> for Message {
+    type Error = serde_json::Error;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        Message::from_json(&value)
+    }
+}
+
+impl TryInto<Vec<u8>> for Message {
+    type Error = serde_json::Error;
+
+    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
+        self.to_json()
+    }
+}
+
+impl redis::ToRedisArgs for Message {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let bytes = self.to_json().expect("failed to json encode message");
+        out.write_arg(&bytes);
+    }
+}
+
+impl redis::FromRedisValue for Message {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            Message::from_json(data).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "cannot decode a message from json {}",
+                    e.to_string(),
+                ))
+            })
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
     }
 }
