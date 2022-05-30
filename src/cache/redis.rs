@@ -32,12 +32,12 @@ impl RedisCache {
         pool: Pool<RedisConnectionManager>,
         prefix: P,
         ttl: Duration,
-    ) -> Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             pool,
             prefix: prefix.into(),
             ttl,
-        })
+        }
     }
 
     async fn get_connection(&self) -> Result<PooledConnection<'_, RedisConnectionManager>> {
@@ -108,9 +108,7 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        let cache = RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
-            .context("unable to create redis cache")
-            .unwrap();
+        let cache = RedisCache::new(pool, PREFIX, Duration::from_secs(TTL));
 
         cache
     }

@@ -2,6 +2,7 @@ use crate::cache::Cache;
 use crate::cache::RedisCache;
 use anyhow::Result;
 use async_trait::async_trait;
+use sp_core::crypto::AccountId32;
 use sp_core::ed25519;
 use substrate_client::SubstrateClient;
 use tokio::task::spawn_blocking;
@@ -44,10 +45,10 @@ where
         Ok(Some(twin))
     }
 
-    async fn get_twin_id<S: Into<String> + Send + 'static>(&self, account_id: S) -> Result<u32> {
+    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<u32> {
         let client = self.client.clone();
         let twin_id: u32 =
-            spawn_blocking(move || client.get_twin_id_by_account_id(account_id.into())).await??;
+            spawn_blocking(move || client.get_twin_id_by_account_id(account_id)).await??;
         Ok(twin_id)
     }
 }
@@ -56,10 +57,11 @@ where
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use crate::{cache::MemCache, identity::Ed25519Identity};
+    use crate::{cache::MemCache, identity::Ed25519Signer};
 
     use super::*;
     use anyhow::Context;
+    use sp_core::crypto::Ss58Codec;
 
     #[tokio::test]
     async fn test_get_twin_with_mem_cache() {
@@ -129,11 +131,12 @@ mod tests {
 
         // let identity = Ed25519Identity::try_from("mnemonics").unwrap();
         // let account_id = identity.get_public_key();
-
-        let account_id = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb".to_string();
+        let account_id =
+            AccountId32::from_ss58check("5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb")
+                .unwrap();
 
         let twin_id = db
-            .get_twin_id(account_id)
+            .get_twin_with_account(account_id)
             .await
             .context("can't get twin from substrate")
             .unwrap();
