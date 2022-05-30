@@ -20,6 +20,7 @@ futures = "0.3"
 hex = {version = "0.4", features = ["alloc"]}
 hyper = {version = "0.14", features = ["full"]}
 log = "0.4"
+simple_logger = "2.1"
 parity-scale-codec = {version = "2.0.0", features = ["derive"]}
 serde = {version = "1.0.136", features = ["derive"]}
 serde_json = {version = "1.0.81"}
@@ -33,4 +34,5 @@ uriparse = "0.6.4"
 http = "0.2.7"
 uuid = "1.1.0"
 md5 = "0.7.0"
+clap = {version = "3.1", features = ["derive"]}
 lru = "0.7.6"

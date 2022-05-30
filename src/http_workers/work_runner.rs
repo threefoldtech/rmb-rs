@@ -110,7 +110,7 @@ where
     }
 
     fn encrypt_dat(dat: String, twin: &Twin) -> Result<String> {
-        todo!()
+        Ok(dat)
     }
 
     fn uri_builder<U: AsRef<str>, A: AsRef<str>>(uri_path: U, twin_address: A) -> Result<String> {
