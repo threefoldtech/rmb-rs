@@ -152,7 +152,7 @@ impl redis::FromRedisValue for Message {
             match ret {
                 Ok(bytes) => Ok(bytes),
                 Err(err) => Err(redis::RedisError::from((
-                    redis::ErrorKind::ResponseError,
+                    redis::ErrorKind::TypeError,
                     "cannot decode a message from json {}",
                     err.to_string(),
                 ))),
