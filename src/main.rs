@@ -26,10 +26,13 @@ use identity::Ed25519Signer;
 use identity::Identity;
 use log::kv::Key;
 use std::fmt::Display;
+use std::process::exit;
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
 use twin::{SubstrateTwinDB, TwinDB};
+
+use crate::http_workers::HttpWorker;
 
 #[derive(Debug)]
 enum KeyType {
@@ -133,14 +136,31 @@ async fn app(args: &Args) -> Result<()> {
     log::info!("twin: {}", id);
 
     // spawn the processor
-    let handler = tokio::spawn(processor(id, storage.clone()));
+    let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
+    // spawn the http api server
+    let http_api_handler = tokio::spawn(HttpApi::new(id, "ip", storage.clone(), identity.clone(), db.clone()).unwrap().run());
+    
+    // spawn the http worker
+    let http_worker_handler = tokio::task::spawn_blocking( || HttpWorker::new(1000, storage, db, identity).run());
     // todo!:
     // - you need to spawn the http api server and the http workers here
     // - you need to use tokio::spawn so each of those services are running in their own task
     // - you collect all handlers here (like above)
     // - you need to do a select! on all handlers. so in case any of them exits, you need to log the error
     // and exit because the system can't work with any of those components down.
+
+    tokio::select! {
+        _ = processor_handler => {
+            exit(2);
+        }
+        _ = http_api_handler => {
+            exit(3);
+        }
+        _ = http_worker_handler => {
+            exit(4);
+        }
+    }
 
     // let storage = RedisStorage;
     // let identity = Ed25519Signer::try_from(
