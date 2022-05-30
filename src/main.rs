@@ -139,10 +139,15 @@ async fn app(args: &Args) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
     // spawn the http api server
-    let http_api_handler = tokio::spawn(HttpApi::new(id, "ip", storage.clone(), identity.clone(), db.clone()).unwrap().run());
-    
+    let http_api_handler = tokio::spawn(
+        HttpApi::new(id, "ip", storage.clone(), identity.clone(), db.clone())
+            .unwrap()
+            .run(),
+    );
+
     // spawn the http worker
-    let http_worker_handler = tokio::task::spawn_blocking( || HttpWorker::new(1000, storage, db, identity).run());
+    let http_worker_handler =
+        tokio::task::spawn_blocking(|| HttpWorker::new(1000, storage, db, identity).run());
     // todo!:
     // - you need to spawn the http api server and the http workers here
     // - you need to use tokio::spawn so each of those services are running in their own task
