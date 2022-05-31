@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::str::{from_utf8, FromStr};
 
 use crate::types::{Message, QueuedMessage};
@@ -60,11 +59,13 @@ impl RedisStorageBuilder {
         }
     }
 
+    #[allow(unused)]
     pub fn prefix<S: Into<String>>(mut self, prefix: S) -> Self {
         self.prefix = prefix.into();
         self
     }
 
+    #[allow(unused)]
     pub fn max_commands(mut self, max_commands: isize) -> Self {
         self.max_commands = max_commands;
         self
@@ -235,33 +236,30 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         let forward_queue = self.prefixed(Queue::Forward);
         let reply_queue = self.prefixed(Queue::Reply);
-        let queues = (forward_queue, reply_queue);
+        let queues = (forward_queue.clone(), reply_queue.clone());
 
         loop {
             let ret: (String, Value) = conn.brpop(&queues, 0).await?;
             let (queue, value) = ret;
 
-            match queue {
-                _forward_queue => {
-                    let forward = match ForwardedMessage::from_redis_value(&value) {
-                        Ok(msg) => msg,
-                        Err(err) => {
-                            log::debug!("cannot get forwarded message: {}", err.to_string());
-                            continue;
-                        }
-                    };
-
-                    if let Some(mut msg) = self.get(&forward.id).await? {
-                        msg.destination = vec![forward.destination];
-                        return Ok(QueuedMessage::Forward(msg));
+            if queue == forward_queue {
+                let forward = match ForwardedMessage::from_redis_value(&value) {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        log::debug!("cannot get forwarded message: {}", err.to_string());
+                        continue;
                     }
+                };
+
+                if let Some(mut msg) = self.get(&forward.id).await? {
+                    msg.destination = vec![forward.destination];
+                    return Ok(QueuedMessage::Forward(msg));
                 }
-                _reply_queue => {
-                    // reply queue had the message itself
-                    // decode it directly
-                    let msg = Message::from_redis_value(&value)?;
-                    return Ok(QueuedMessage::Reply(msg));
-                }
+            } else if queue == reply_queue {
+                // reply queue had the message itself
+                // decode it directly
+                let msg = Message::from_redis_value(&value)?;
+                return Ok(QueuedMessage::Reply(msg));
             }
         }
     }

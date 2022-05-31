@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::RwLock;
@@ -13,6 +12,7 @@ pub struct MemCache<V> {
 }
 
 impl<V> MemCache<V> {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self {
             mem: Arc::new(RwLock::new(HashMap::new())),

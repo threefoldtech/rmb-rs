@@ -82,6 +82,10 @@ impl Message {
         }
         write!(hash, "{}", self.reply)?;
         write!(hash, "{}", self.now)?;
+        // this is for backward compatibility
+        // this replaces the `proxy` flag which is
+        // no obsolete
+        write!(hash, "false")?;
 
         Ok(hash.compute())
     }

@@ -115,7 +115,6 @@ where
             .method(Method::POST)
             .header("content-type", "application/json");
 
-        log::debug!("building the uri");
         let uri = uri_builder(uri_path, &twin.address);
         log::debug!("sending message to '{}'", uri);
         let req = req.uri(uri);
