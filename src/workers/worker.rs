@@ -1,6 +1,4 @@
-use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use super::Work;
 
@@ -28,7 +26,7 @@ where
 
                 match rx.await {
                     Ok(job) => self.work.run(job).await,
-                    Err(e) => {
+                    Err(_) => {
                         log::debug!("worker handler dropped without receiving a job");
                     }
                 };

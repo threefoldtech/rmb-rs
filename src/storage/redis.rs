@@ -1,7 +1,5 @@
-use std::{
-    str::{from_utf8, FromStr},
-    sync::Arc,
-};
+#![allow(unused)]
+use std::str::{from_utf8, FromStr};
 
 use crate::types::{Message, QueuedMessage};
 
@@ -16,7 +14,6 @@ use bb8_redis::{
     },
     RedisConnectionManager,
 };
-use tokio::sync::Mutex;
 
 // max TTL in seconds = 1 hour
 const MAX_TTL: usize = 3600;
@@ -245,7 +242,7 @@ impl Storage for RedisStorage {
             let (queue, value) = ret;
 
             match queue {
-                forward_queue => {
+                _forward_queue => {
                     let forward = match ForwardedMessage::from_redis_value(&value) {
                         Ok(msg) => msg,
                         Err(err) => {
@@ -259,7 +256,7 @@ impl Storage for RedisStorage {
                         return Ok(QueuedMessage::Forward(msg));
                     }
                 }
-                reply_queue => {
+                _reply_queue => {
                     // reply queue had the message itself
                     // decode it directly
                     let msg = Message::from_redis_value(&value)?;
@@ -272,13 +269,9 @@ impl Storage for RedisStorage {
 
 #[cfg(test)]
 mod tests {
-    use anyhow;
-    use serde::Deserialize;
-
     use super::*;
 
     const PREFIX: &str = "msgbus.test";
-    const MAX_COMMANDS: isize = 500;
 
     async fn create_redis_storage() -> RedisStorage {
         let manager = RedisConnectionManager::new("redis://127.0.0.1/")
@@ -340,11 +333,11 @@ mod tests {
         let storage = create_redis_storage().await;
         let id = "e60b5d65-dcf7-4894-91b9-4e546a0c0904";
 
-        push_msg_to_local(id, &storage).await;
+        let _ = push_msg_to_local(id, &storage).await;
         let msg = storage.local().await.unwrap();
         assert_eq!(msg.id, id);
 
-        storage.forward(&msg).await;
+        let _ = storage.forward(&msg).await;
 
         let opt = storage.get(id).await.unwrap();
         assert_eq!(opt.is_some(), true);
@@ -352,13 +345,13 @@ mod tests {
         let queued_msg = storage.queued().await.unwrap();
         match queued_msg {
             QueuedMessage::Forward(msg) => {
-                storage.run(&msg).await;
+                let _ = storage.run(&msg).await;
             }
             QueuedMessage::Reply(msg) => {
-                storage.run(&msg).await;
+                let _ = storage.run(&msg).await;
             }
         }
 
-        storage.reply(&msg).await;
+        let _ = storage.reply(&msg).await;
     }
 }

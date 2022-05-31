@@ -1,13 +1,10 @@
 //use std::io::Write;
 use crate::identity::{Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use bb8_redis::redis;
-use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub enum QueuedMessage {
     Forward(Message),

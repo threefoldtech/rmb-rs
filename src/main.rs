@@ -1,12 +1,5 @@
-#![allow(dead_code)]
-#![allow(unused)]
-
-#[macro_use]
-extern crate log;
 #[macro_use]
 extern crate anyhow;
-#[macro_use]
-extern crate clap;
 
 mod cache;
 mod http_api;
@@ -22,11 +15,8 @@ use anyhow::{Context, Result};
 use cache::RedisCache;
 use clap::Parser;
 use http_api::HttpApi;
-use identity::Ed25519Signer;
 use identity::Identity;
-use log::kv::Key;
 use std::fmt::Display;
-use std::process::exit;
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
@@ -99,7 +89,7 @@ struct Args {
 async fn app(args: &Args) -> Result<()> {
     // we have to initialize a signer key based on the given
     // key type
-    let logger = simple_logger::SimpleLogger::new()
+    simple_logger::SimpleLogger::new()
         .with_level(if args.debug {
             log::LevelFilter::Debug
         } else {
@@ -107,7 +97,7 @@ async fn app(args: &Args) -> Result<()> {
         })
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
-        .init();
+        .init()?;
 
     let identity = match args.key_type {
         KeyType::Ed25519 => {
@@ -197,7 +187,6 @@ async fn app(args: &Args) -> Result<()> {
 /// processor processes the local client queues, and fill up the message for processing
 /// before pushing it to the forward queue. where they gonna be picked up by the workers
 async fn processor<S: Storage>(id: u32, storage: S) {
-    use std::time::Duration;
     use tokio::time::sleep;
     let wait = Duration::from_secs(1);
     loop {

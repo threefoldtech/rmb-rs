@@ -1,5 +1,4 @@
-use crate::cache::RedisCache;
-use crate::twin::{SubstrateTwinDB, TwinDB};
+use crate::twin::TwinDB;
 use crate::{identity::Identity, storage::Storage};
 
 /// - This is an example struct which holds the shared parameters between all handlers
@@ -19,7 +18,6 @@ use crate::{identity::Identity, storage::Storage};
 ///
 /// ```
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct AppData<S, I, D>
 where

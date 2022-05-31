@@ -1,14 +1,12 @@
 mod work_runner;
-use anyhow::Context;
 use hyper::Client;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
     cache::Cache,
-    identity::{Identity, Signer},
+    identity::Signer,
     storage::Storage,
-    twin::{SubstrateTwinDB, Twin, TwinDB},
-    types::QueuedMessage,
+    twin::{SubstrateTwinDB, Twin},
     workers::WorkerPool,
 };
 

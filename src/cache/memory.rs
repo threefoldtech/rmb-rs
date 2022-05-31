@@ -1,12 +1,11 @@
-use std::{borrow::BorrowMut, collections::HashMap, sync::Arc, time::Duration};
+#![allow(unused)]
+use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use super::Cache;
-use crate::twin::Twin;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::Value;
 
 #[derive(Clone)]
 pub struct MemCache<V> {
@@ -44,6 +43,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context;
     use serde::{Deserialize, Serialize};
 
     use super::*;

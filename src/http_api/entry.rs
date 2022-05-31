@@ -1,6 +1,6 @@
 use super::data::AppData;
-use crate::twin::{SubstrateTwinDB, TwinDB};
-use crate::{cache::RedisCache, identity::Identity, storage::Storage, types::Message};
+use crate::twin::TwinDB;
+use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
 use hyper::http::{Method, Request, Response, Result as HTTPResult, StatusCode};
 use hyper::{
@@ -8,7 +8,6 @@ use hyper::{
     Body, Server,
 };
 use std::convert::Infallible;
-use std::io::ErrorKind;
 use std::net::SocketAddr;
 use thiserror::Error;
 pub struct HttpApi<S, I, D>
@@ -155,7 +154,7 @@ async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
 pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
     data: AppData<S, I, D>,
-) -> HTTPResult<Response<(Body)>> {
+) -> HTTPResult<Response<Body>> {
     match rmb_remote_handler(request, data).await {
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)

@@ -2,7 +2,7 @@ mod worker;
 
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use worker::*;
 
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ where
 
         let (sender, receiver) = mpsc::channel(1);
 
-        for id in 0..size {
+        for _ in 0..size {
             Worker::new(work.clone(), sender.clone()).run();
         }
 
@@ -102,7 +102,7 @@ mod tests {
 
         for _ in 0..=20000 {
             let worker = pool.get().await;
-            worker.send(Arc::clone(&var));
+            let _ = worker.send(Arc::clone(&var));
         }
 
         let var = *var.lock().await;

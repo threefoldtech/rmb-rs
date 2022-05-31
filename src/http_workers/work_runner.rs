@@ -1,17 +1,10 @@
-use std::{any, fmt::Display, sync::Arc, time::SystemTime};
-
 use async_trait::async_trait;
 use chrono::Utc;
-use hyper::{
-    client::{Builder, HttpConnector},
-    Body, Client, Method, Request,
-};
-
-use std::convert::TryFrom;
+use hyper::{client::HttpConnector, Body, Client, Method, Request};
 
 use crate::{
     cache::Cache,
-    identity::{Identity, Signer},
+    identity::Signer,
     storage::Storage,
     twin::{SubstrateTwinDB, Twin, TwinDB},
     types::{Message, QueuedMessage},
@@ -107,7 +100,7 @@ where
         }
     }
 
-    fn encrypt_dat(dat: String, twin: &Twin) -> Result<String> {
+    fn encrypt_dat(dat: String, _twin: &Twin) -> Result<String> {
         Ok(dat)
     }
 
@@ -212,7 +205,7 @@ where
             // encrypt dat
             msg.data = match Self::encrypt_dat(msg.data, &twin) {
                 Ok(dat) => dat,
-                Err(err) => {
+                Err(_err) => {
                     todo!()
                 }
             };
@@ -229,14 +222,15 @@ where
                 log::debug!("trial: {}", i);
                 result = self.send_msg(&twin, &queue, &msg).await;
                 log::debug!("got result: {:?}", result);
-                if let Err(SendError::Error(err)) = &result {
+                if let Err(SendError::Error(_)) = &result {
                     continue;
                 }
                 break;
             }
 
             if result.is_err() && queue == Queue::Forward {
-                self.handle_delivery_err(twin.id, msg, result.err().unwrap());
+                self.handle_delivery_err(twin.id, msg, result.err().unwrap())
+                    .await;
             }
         }
     }

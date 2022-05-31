@@ -1,9 +1,8 @@
 mod substrate;
 
 use crate::types::Message;
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use bb8_redis::redis::FromRedisValue;
 use parity_scale_codec::Decode;
 use serde::{Deserialize, Serialize};
 use sp_core::crypto::AccountId32;
@@ -31,7 +30,7 @@ pub struct Twin {
 }
 
 impl Twin {
-    pub async fn verify(&self, _msg: &Message) -> Result<()> {
+    pub async fn _verify(&self, _msg: &Message) -> Result<()> {
         Ok(())
     }
 }

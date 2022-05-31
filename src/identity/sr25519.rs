@@ -1,5 +1,4 @@
 use super::{Identity, Signer, SIGNATURE_LENGTH};
-use anyhow::Result;
 use sp_core::{
     crypto::AccountId32,
     sr25519::{Pair as SrPair, Public},
