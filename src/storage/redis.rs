@@ -314,7 +314,7 @@ mod tests {
             schema: String::from(""),
             now: 1653454930,
             error: None,
-            signature: String::from(""),
+            signature: None,
         };
 
         conn.lpush(&queue, &msg).await?;

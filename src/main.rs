@@ -82,6 +82,15 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf"))]
     substrate: String,
 
+    /// http api listen address
+    #[clap(short, long, default_value_t = String::from("0.0.0.0:8051"))]
+    listen: String,
+
+    /// number of workers to send messages to remote
+    /// rmbs
+    #[clap(short, long, default_value_t = 1000)]
+    workers: usize,
+
     /// enable debugging logs
     #[clap(short, long)]
     debug: bool,
@@ -139,15 +148,20 @@ async fn app(args: &Args) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
     // spawn the http api server
-    let http_api_handler = tokio::spawn(
-        HttpApi::new(id, "ip", storage.clone(), identity.clone(), db.clone())
-            .unwrap()
-            .run(),
+    let api_handler = tokio::spawn(
+        HttpApi::new(
+            id,
+            &args.listen,
+            storage.clone(),
+            identity.clone(),
+            db.clone(),
+        )?
+        .run(),
     );
 
     // spawn the http worker
-    let http_worker_handler =
-        tokio::task::spawn_blocking(|| HttpWorker::new(1000, storage, db, identity).run());
+    let workers_handler =
+        tokio::task::spawn(HttpWorker::new(args.workers, storage, db, identity).run());
     // todo!:
     // - you need to spawn the http api server and the http workers here
     // - you need to use tokio::spawn so each of those services are running in their own task
@@ -155,31 +169,29 @@ async fn app(args: &Args) -> Result<()> {
     // - you need to do a select! on all handlers. so in case any of them exits, you need to log the error
     // and exit because the system can't work with any of those components down.
 
+    // handlers are Result<result, Error>
     tokio::select! {
-        _ = processor_handler => {
-            exit(2);
+        result = processor_handler => {
+            if let Err(err) = result {
+                bail!("message processor panicked unexpectedly: {}", err);
+            }
         }
-        _ = http_api_handler => {
-            exit(3);
+        result = api_handler => {
+            match result {
+                Err(err) => bail!("http server panicked unexpectedly: {}", err),
+                Ok(Ok(_)) => bail!("http server exited unexpectedly"),
+                Ok(Err(err)) => bail!("http server exited with error: {}", err),
+            }
         }
-        _ = http_worker_handler => {
-            exit(4);
+        result = workers_handler => {
+            if let Err(err) = result {
+                bail!("workers panicked unexpectedly: {}", err);
+            }
         }
     }
 
-    // let storage = RedisStorage;
-    // let identity = Ed25519Signer::try_from(
-    //     "junior sock chunk accident pilot under ask green endless remove coast wood",
-    // )
-    // .unwrap();
-
-    // HttpApi::new(1, "127.0.0.1:8888", storage, identity, db)
-    //     .unwrap()
-    //     .run()
-    //     .await
-    //     .unwrap();
-
-    Ok(())
+    log::warn!("unreachable");
+    unreachable!();
 }
 
 /// processor processes the local client queues, and fill up the message for processing

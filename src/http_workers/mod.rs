@@ -39,24 +39,22 @@ where
         Self { storage, pool }
     }
 
-    pub fn run(mut self) {
-        tokio::spawn(async move {
-            loop {
-                let worker_handler = self.pool.get().await;
+    pub async fn run(mut self) {
+        loop {
+            let worker_handler = self.pool.get().await;
+            log::debug!("workers waiting for messages");
 
-                let job = match self.storage.queued().await {
-                    Ok(job) => job,
-                    Err(err) => {
-                        log::debug!("error while process the storage because of '{}'", err);
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                };
-
-                if let Err(err) = worker_handler.send(job) {
-                    log::error!("failed to send job to worker: {}", err);
+            let job = match self.storage.queued().await {
+                Ok(job) => job,
+                Err(err) => {
+                    log::debug!("error while process the storage because of '{}'", err);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
                 }
+            };
+            if let Err(err) = worker_handler.send(job) {
+                log::error!("failed to send job to worker: {}", err);
             }
-        });
+        }
     }
 }

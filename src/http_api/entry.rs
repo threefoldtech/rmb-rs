@@ -53,8 +53,8 @@ where
             async move { Ok::<_, Infallible>(service) }
         });
 
-        let server = Server::bind(&self.addr).serve(services);
-        log::info!("listening on: {}", self.addr.ip());
+        let server = Server::try_bind(&self.addr)?.serve(services);
+        log::info!("listening on: {}", self.addr);
 
         server.await?;
 

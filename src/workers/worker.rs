@@ -21,7 +21,7 @@ where
             loop {
                 let (tx, rx) = oneshot::channel();
 
-                if let Err(_err) = self.sender.send(tx).await {
+                if let Err(_) = self.sender.send(tx).await {
                     break;
                 }
 

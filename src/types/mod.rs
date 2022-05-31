@@ -41,7 +41,7 @@ pub struct Message {
     #[serde(rename = "err")]
     pub error: Option<String>,
     #[serde(rename = "sig")]
-    pub signature: String,
+    pub signature: Option<String>,
 }
 
 impl Default for Message {
@@ -94,12 +94,16 @@ impl Message {
         let digest = self.challenge().unwrap();
         let signature = signer.sign(&digest[..]);
 
-        self.signature = hex::encode(signature);
+        self.signature = Some(hex::encode(signature));
     }
 
     pub fn verify<I: Identity>(&mut self, identity: &I) -> Result<()> {
+        let signature = match self.signature {
+            Some(ref sig) => sig,
+            None => bail!("message is not signed"),
+        };
         let digest = self.challenge().unwrap();
-        let signature = hex::decode(&self.signature).context("failed to decode signature")?;
+        let signature = hex::decode(signature).context("failed to decode signature")?;
 
         if signature.len() != SIGNATURE_LENGTH {
             bail!("invalid signature length")
