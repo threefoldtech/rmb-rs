@@ -1,4 +1,5 @@
 use super::data::AppData;
+use super::mock::{StorageMock, TwinDBMock};
 use crate::twin::{SubstrateTwinDB, TwinDB};
 use crate::{cache::RedisCache, identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
@@ -219,5 +220,93 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
             .unwrap()),
+    }
+}
+#[cfg(test)]
+mod tests {
+
+    use crate::{
+        cache::Cache,
+        http_api::mock::{Identities, TwinDBMock},
+        identity::Ed25519Identity,
+        storage::RedisStorage,
+        twin::Twin,
+        types::QueuedMessage,
+    };
+
+    use super::*;
+    use async_trait::async_trait;
+    use http::{Request, Response};
+    use hyper::body::HttpBody;
+
+    #[tokio::test]
+    async fn test_rmb_remote() {
+        // In this test account with twin_id=1 sends to account with twin_id=2
+        let twin_db = TwinDBMock;
+        let storage = StorageMock;
+
+        let twin: u32 = 2;
+
+        let sender_pub_key = Identities::get_sender_identity().account();
+
+        let data = AppData {
+            twin,
+            storage,
+            identity: Identities::get_recv_identity(),
+            twin_db,
+        };
+
+        let req = Request::builder()
+            .uri("http://codescalers.com/rmb-remote")
+            .method(Method::POST)
+            .header("content-type", "application/json");
+
+        let mut msg = Message::default();
+        msg.source = 1;
+        msg.destination = vec![2];
+        msg.data = String::from("dsads");
+        msg.sign(&Identities::get_sender_identity());
+
+        let request = req
+            .body(Body::from(serde_json::to_vec(&msg).unwrap()))
+            .with_context(|| format!("can not construct request body for this id '{}'", twin))
+            .unwrap();
+        let response = rmb_remote(request, data).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    #[tokio::test]
+    async fn test_rmb_remote_unauthorized() {
+        // In this test account with twin_id=1 sends to account with twin_id=2
+        let twin_db = TwinDBMock;
+        let storage = StorageMock;
+
+        let twin: u32 = 2;
+
+        let sender_pub_key = Identities::get_sender_identity().account();
+
+        let data = AppData {
+            twin,
+            storage,
+            identity: Identities::get_recv_identity(),
+            twin_db,
+        };
+
+        let req = Request::builder()
+            .uri("http://codescalers.com/rmb-remote")
+            .method(Method::POST)
+            .header("content-type", "application/json");
+
+        let mut msg = Message::default();
+        msg.source = 3;
+        msg.destination = vec![2];
+        msg.data = String::from("message data");
+        msg.sign(&Identities::get_sender_identity());
+
+        let request = req
+            .body(Body::from(serde_json::to_vec(&msg).unwrap()))
+            .with_context(|| format!("can not construct request body for this id '{}'", twin))
+            .unwrap();
+        let response = rmb_remote(request, data).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
