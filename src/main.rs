@@ -64,7 +64,7 @@ fn between<T: Ord>(v: T, min: T, max: T) -> T {
         return max;
     }
 
-    return v;
+    v
 }
 
 /// Simple program to greet a person

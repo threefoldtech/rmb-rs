@@ -2,10 +2,9 @@ use async_trait::async_trait;
 use hyper::{client::HttpConnector, Body, Client, Method, Request};
 
 use crate::{
-    cache::Cache,
     identity::Signer,
     storage::Storage,
-    twin::{SubstrateTwinDB, Twin, TwinDB},
+    twin::{Twin, TwinDB},
     types::{Message, QueuedMessage},
     workers::Work,
 };
@@ -37,30 +36,25 @@ enum SendError {
 }
 
 #[derive(Clone)]
-pub struct WorkRunner<C, I, S>
+pub struct WorkRunner<T, I, S>
 where
-    C: Cache<Twin>,
+    T: TwinDB,
     I: Signer,
     S: Storage,
 {
-    twin_db: SubstrateTwinDB<C>,
+    twin_db: T,
     identity: I,
     storage: S,
     client: Client<HttpConnector, Body>,
 }
 
-impl<C, I, S> WorkRunner<C, I, S>
+impl<T, I, S> WorkRunner<T, I, S>
 where
-    C: Cache<Twin>,
+    T: TwinDB,
     I: Signer,
     S: Storage,
 {
-    pub fn new(
-        twin_db: SubstrateTwinDB<C>,
-        identity: I,
-        storage: S,
-        client: Client<HttpConnector, Body>,
-    ) -> Self {
+    pub fn new(twin_db: T, identity: I, storage: S, client: Client<HttpConnector, Body>) -> Self {
         Self {
             twin_db,
             identity,
@@ -169,9 +163,9 @@ where
 }
 
 #[async_trait]
-impl<C, I, S> Work for WorkRunner<C, I, S>
+impl<T, I, S> Work for WorkRunner<T, I, S>
 where
-    C: Cache<Twin>,
+    T: TwinDB,
     I: Signer,
     S: Storage,
 {
