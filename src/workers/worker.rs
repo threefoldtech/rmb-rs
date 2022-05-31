@@ -1,6 +1,4 @@
-use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use super::Work;
 
@@ -21,13 +19,14 @@ where
             loop {
                 let (tx, rx) = oneshot::channel();
 
-                if let Err(_err) = self.sender.send(tx).await {
+                if self.sender.send(tx).await.is_err() {
+                    log::debug!("worker exiting");
                     break;
                 }
 
                 match rx.await {
                     Ok(job) => self.work.run(job).await,
-                    Err(e) => {
+                    Err(_) => {
                         log::debug!("worker handler dropped without receiving a job");
                     }
                 };

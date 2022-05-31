@@ -1,9 +1,5 @@
-use anyhow::{Context, Result};
-use bb8_redis::{
-    bb8::{Pool, PooledConnection},
-    redis::{cmd, FromRedisValue, ToRedisArgs},
-    RedisConnectionManager,
-};
+use anyhow::Result;
+use bb8_redis::{bb8::Pool, RedisConnectionManager};
 
 pub async fn pool<S: AsRef<str>>(url: S) -> Result<Pool<RedisConnectionManager>> {
     let mgr = RedisConnectionManager::new(url.as_ref())?;

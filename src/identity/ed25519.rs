@@ -1,6 +1,4 @@
 use super::{Identity, Signer, SIGNATURE_LENGTH};
-use anyhow::Result;
-use hyper::server::accept::Accept;
 use sp_core::{
     crypto::AccountId32,
     ed25519::{Pair as EdPair, Public},

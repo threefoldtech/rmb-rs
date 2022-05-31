@@ -1,9 +1,7 @@
 use crate::cache::Cache;
-use crate::cache::RedisCache;
 use anyhow::Result;
 use async_trait::async_trait;
 use sp_core::crypto::AccountId32;
-use sp_core::ed25519;
 use substrate_client::SubstrateClient;
 use tokio::task::spawn_blocking;
 
@@ -55,9 +53,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, time::Duration};
 
-    use crate::{cache::MemCache, identity::Ed25519Signer};
+    use crate::cache::MemCache;
 
     use super::*;
     use anyhow::Context;

@@ -1,13 +1,11 @@
 //use std::io::Write;
 use crate::identity::{Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use bb8_redis::redis;
-use hyper::{Body, Client, Method, Request, Uri};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::time::{Duration, SystemTime};
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub enum QueuedMessage {
     Forward(Message),
@@ -37,11 +35,11 @@ pub struct Message {
     #[serde(rename = "shm")]
     pub schema: String,
     #[serde(rename = "now")]
-    pub now: usize,
+    pub now: u64,
     #[serde(rename = "err")]
     pub error: Option<String>,
     #[serde(rename = "sig")]
-    pub signature: String,
+    pub signature: Option<String>,
 }
 
 impl Default for Message {
@@ -69,8 +67,8 @@ impl Message {
         serde_json::to_vec(self)
     }
 
-    pub fn from_json(json: &Vec<u8>) -> serde_json::Result<Self> {
-        serde_json::from_slice(&json)
+    pub fn from_json(json: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(json)
     }
 
     fn challenge(&self) -> Result<md5::Digest> {
@@ -85,21 +83,31 @@ impl Message {
         }
         write!(hash, "{}", self.reply)?;
         write!(hash, "{}", self.now)?;
+        // this is for backward compatibility
+        // this replaces the `proxy` flag which is
+        // no obsolete
+        write!(hash, "false")?;
 
         Ok(hash.compute())
     }
 
+    /// sign the message with given signer
     pub fn sign<S: Signer>(&mut self, signer: &S) {
         // we do unwrap because this should never fail.
         let digest = self.challenge().unwrap();
         let signature = signer.sign(&digest[..]);
 
-        self.signature = hex::encode(signature);
+        self.signature = Some(hex::encode(signature));
     }
 
+    /// verify the message signatre
     pub fn verify<I: Identity>(&mut self, identity: &I) -> Result<()> {
+        let signature = match self.signature {
+            Some(ref sig) => sig,
+            None => bail!("message is not signed"),
+        };
         let digest = self.challenge().unwrap();
-        let signature = hex::decode(&self.signature).context("failed to decode signature")?;
+        let signature = hex::decode(signature).context("failed to decode signature")?;
 
         if signature.len() != SIGNATURE_LENGTH {
             bail!("invalid signature length")
@@ -107,6 +115,30 @@ impl Message {
 
         if !identity.verify(&signature, &digest[..]) {
             bail!("signature verification failed")
+        }
+
+        Ok(())
+    }
+
+    pub fn set_now(&mut self) {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        self.now = ts.as_secs();
+    }
+
+    /// generic validation on the message
+    pub fn valid(&self) -> Result<()> {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        // ts has to be in the future of self.now
+        let du = match ts.checked_sub(Duration::from_secs(self.now)) {
+            Some(du) => du,
+            None => bail!("message 'now' is in the future"),
+        };
+        if du.as_secs() > 60 {
+            bail!("message is too old ('{}' seconds)", du.as_secs());
         }
 
         Ok(())

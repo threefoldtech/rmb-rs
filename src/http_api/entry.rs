@@ -1,6 +1,6 @@
 use super::data::AppData;
-use crate::twin::{SubstrateTwinDB, TwinDB};
-use crate::{cache::RedisCache, identity::Identity, storage::Storage, types::Message};
+use crate::twin::TwinDB;
+use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
 use hyper::http::{Method, Request, Response, Result as HTTPResult, StatusCode};
 use hyper::{
@@ -8,7 +8,6 @@ use hyper::{
     Body, Server,
 };
 use std::convert::Infallible;
-use std::io::ErrorKind;
 use std::net::SocketAddr;
 use thiserror::Error;
 pub struct HttpApi<S, I, D>
@@ -53,8 +52,8 @@ where
             async move { Ok::<_, Infallible>(service) }
         });
 
-        let server = Server::bind(&self.addr).serve(services);
-        log::info!("listening on: {}", self.addr.ip());
+        let server = Server::try_bind(&self.addr)?.serve(services);
+        log::info!("listening on: {}", self.addr);
 
         server.await?;
 
@@ -132,6 +131,8 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         }
     };
 
+    message.valid().context("message validation failed")?;
+
     //verify the message
     message
         .verify(&sender_twin.account)
@@ -155,7 +156,7 @@ async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
 pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
     data: AppData<S, I, D>,
-) -> HTTPResult<Response<(Body)>> {
+) -> HTTPResult<Response<Body>> {
     match rmb_remote_handler(request, data).await {
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)
@@ -202,9 +203,12 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
-        Err(error) => Response::builder()
-            .status(error.code())
-            .body(Body::from(error.to_string())),
+        Err(err) => {
+            log::error!("failed to handel reply message: {}", err);
+            Response::builder()
+                .status(err.code())
+                .body(Body::from(err.to_string()))
+        }
     }
 }
 
@@ -213,8 +217,8 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
     data: AppData<S, I, D>,
 ) -> HTTPResult<Response<Body>> {
     match (req.method(), req.uri().path()) {
-        (&Method::POST, "/rmb-remote") => rmb_remote(req, data).await,
-        (&Method::POST, "/rmb-reply") => rmb_reply(req, data).await,
+        (&Method::POST, "/zbus-remote") => rmb_remote(req, data).await,
+        (&Method::POST, "/zbus-reply") => rmb_reply(req, data).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())

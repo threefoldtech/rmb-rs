@@ -1,7 +1,4 @@
-use std::{
-    str::{from_utf8, FromStr},
-    sync::Arc,
-};
+use std::str::{from_utf8, FromStr};
 
 use crate::types::{Message, QueuedMessage};
 
@@ -16,7 +13,6 @@ use bb8_redis::{
     },
     RedisConnectionManager,
 };
-use tokio::sync::Mutex;
 
 // max TTL in seconds = 1 hour
 const MAX_TTL: usize = 3600;
@@ -63,11 +59,13 @@ impl RedisStorageBuilder {
         }
     }
 
+    #[allow(unused)]
     pub fn prefix<S: Into<String>>(mut self, prefix: S) -> Self {
         self.prefix = prefix.into();
         self
     }
 
+    #[allow(unused)]
     pub fn max_commands(mut self, max_commands: isize) -> Self {
         self.max_commands = max_commands;
         self
@@ -142,7 +140,7 @@ impl std::fmt::Display for ForwardedMessage {
 }
 
 impl ForwardedMessage {
-    pub fn from_bytes(bytes: &Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let pair = from_utf8(bytes)?;
         pair.parse()
     }
@@ -154,7 +152,7 @@ impl ToRedisArgs for ForwardedMessage {
         W: ?Sized + RedisWrite,
     {
         let pair = self.to_string();
-        out.write_arg(&pair.as_bytes());
+        out.write_arg(pair.as_bytes());
     }
 }
 
@@ -238,33 +236,30 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         let forward_queue = self.prefixed(Queue::Forward);
         let reply_queue = self.prefixed(Queue::Reply);
-        let queues = (forward_queue, reply_queue);
+        let queues = (forward_queue.clone(), reply_queue.clone());
 
         loop {
             let ret: (String, Value) = conn.brpop(&queues, 0).await?;
             let (queue, value) = ret;
 
-            match queue {
-                forward_queue => {
-                    let forward = match ForwardedMessage::from_redis_value(&value) {
-                        Ok(msg) => msg,
-                        Err(err) => {
-                            log::debug!("cannot get forwarded message: {}", err.to_string());
-                            continue;
-                        }
-                    };
-
-                    if let Some(mut msg) = self.get(&forward.id).await? {
-                        msg.destination = vec![forward.destination];
-                        return Ok(QueuedMessage::Forward(msg));
+            if queue == forward_queue {
+                let forward = match ForwardedMessage::from_redis_value(&value) {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        log::debug!("cannot get forwarded message: {}", err.to_string());
+                        continue;
                     }
+                };
+
+                if let Some(mut msg) = self.get(&forward.id).await? {
+                    msg.destination = vec![forward.destination];
+                    return Ok(QueuedMessage::Forward(msg));
                 }
-                reply_queue => {
-                    // reply queue had the message itself
-                    // decode it directly
-                    let msg = Message::from_redis_value(&value)?;
-                    return Ok(QueuedMessage::Reply(msg));
-                }
+            } else if queue == reply_queue {
+                // reply queue had the message itself
+                // decode it directly
+                let msg = Message::from_redis_value(&value)?;
+                return Ok(QueuedMessage::Reply(msg));
             }
         }
     }
@@ -272,13 +267,9 @@ impl Storage for RedisStorage {
 
 #[cfg(test)]
 mod tests {
-    use anyhow;
-    use serde::Deserialize;
-
     use super::*;
 
     const PREFIX: &str = "msgbus.test";
-    const MAX_COMMANDS: isize = 500;
 
     async fn create_redis_storage() -> RedisStorage {
         let manager = RedisConnectionManager::new("redis://127.0.0.1/")
@@ -314,7 +305,7 @@ mod tests {
             schema: String::from(""),
             now: 1653454930,
             error: None,
-            signature: String::from(""),
+            signature: None,
         };
 
         conn.lpush(&queue, &msg).await?;
@@ -340,11 +331,11 @@ mod tests {
         let storage = create_redis_storage().await;
         let id = "e60b5d65-dcf7-4894-91b9-4e546a0c0904";
 
-        push_msg_to_local(id, &storage).await;
+        let _ = push_msg_to_local(id, &storage).await;
         let msg = storage.local().await.unwrap();
         assert_eq!(msg.id, id);
 
-        storage.forward(&msg).await;
+        let _ = storage.forward(&msg).await;
 
         let opt = storage.get(id).await.unwrap();
         assert_eq!(opt.is_some(), true);
@@ -352,13 +343,13 @@ mod tests {
         let queued_msg = storage.queued().await.unwrap();
         match queued_msg {
             QueuedMessage::Forward(msg) => {
-                storage.run(&msg).await;
+                let _ = storage.run(&msg).await;
             }
             QueuedMessage::Reply(msg) => {
-                storage.run(&msg).await;
+                let _ = storage.run(&msg).await;
             }
         }
 
-        storage.reply(&msg).await;
+        let _ = storage.reply(&msg).await;
     }
 }

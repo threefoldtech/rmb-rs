@@ -1,17 +1,15 @@
 use std::time::Duration;
 
-use crate::twin::Twin;
-
 use super::Cache;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
-    redis::{cmd, FromRedisValue, ToRedisArgs},
+    redis::cmd,
     RedisConnectionManager,
 };
-use serde::{de::DeserializeOwned, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Serialize};
 
 //
 // how_to_init
@@ -142,8 +140,6 @@ mod tests {
 
         const KEY: &str = "dummy";
         const VAL: DummyStruct = DummyStruct { k: 55 };
-
-        let cache = create_redis_cache().await;
 
         let cache = create_redis_cache().await;
         cache
