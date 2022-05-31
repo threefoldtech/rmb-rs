@@ -133,7 +133,10 @@ where
         // at this point, the remote rmb received our request but then replied with
         // wrong status code (it didn't accept the message for some reason)
         // hence we assume this is a terminal error, and retrying won't fix it.
-        if response.status() != http::StatusCode::ACCEPTED {
+        // We match with Accepted or Ok too for backward compatibility
+        if response.status() != http::StatusCode::ACCEPTED
+            && response.status() != http::StatusCode::OK
+        {
             let status = response.status();
             if let Ok(bytes) = hyper::body::to_bytes(response.into_body()).await {
                 log::error!("response: {:?}", String::from_utf8(bytes.to_vec()));

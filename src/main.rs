@@ -73,7 +73,7 @@ struct Args {
     substrate: String,
 
     /// http api listen address
-    #[clap(short, long, default_value_t = String::from("0.0.0.0:8051"))]
+    #[clap(short, long, default_value_t = String::from("[::]:8051"))]
     listen: String,
 
     /// number of workers to send messages to remote

@@ -201,9 +201,12 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
-        Err(error) => Response::builder()
-            .status(error.code())
-            .body(Body::from(error.to_string())),
+        Err(err) => {
+            log::error!("failed to handel reply message: {}", err);
+            Response::builder()
+                .status(err.code())
+                .body(Body::from(err.to_string()))
+        }
     }
 }
 
@@ -212,8 +215,8 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
     data: AppData<S, I, D>,
 ) -> HTTPResult<Response<Body>> {
     match (req.method(), req.uri().path()) {
-        (&Method::POST, "/rmb-remote") => rmb_remote(req, data).await,
-        (&Method::POST, "/rmb-reply") => rmb_reply(req, data).await,
+        (&Method::POST, "/zbus-remote") => rmb_remote(req, data).await,
+        (&Method::POST, "/zbus-reply") => rmb_reply(req, data).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
