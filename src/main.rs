@@ -24,6 +24,11 @@ use twin::{SubstrateTwinDB, TwinDB};
 
 use crate::http_workers::HttpWorker;
 
+const MIN_RETRIES: usize = 1;
+const MAX_RETRIES: usize = 5;
+const MIN_DURATION: usize = 10;
+const MAX_DURATION: usize = 60 * 60;
+
 #[derive(Debug)]
 enum KeyType {
     Ed25519,
@@ -50,6 +55,16 @@ impl Display for KeyType {
 
         f.write_str(s)
     }
+}
+
+fn between<T: Ord>(v: T, min: T, max: T) -> T {
+    if v < min {
+        return min;
+    } else if v > max {
+        return max;
+    }
+
+    return v;
 }
 
 /// Simple program to greet a person
@@ -95,6 +110,7 @@ async fn app(args: &Args) -> Result<()> {
         } else {
             log::LevelFilter::Info
         })
+        .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
         .init()?;
@@ -152,12 +168,6 @@ async fn app(args: &Args) -> Result<()> {
     // spawn the http worker
     let workers_handler =
         tokio::task::spawn(HttpWorker::new(args.workers, storage, db, identity).run());
-    // todo!:
-    // - you need to spawn the http api server and the http workers here
-    // - you need to use tokio::spawn so each of those services are running in their own task
-    // - you collect all handlers here (like above)
-    // - you need to do a select! on all handlers. so in case any of them exits, you need to log the error
-    // and exit because the system can't work with any of those components down.
 
     // handlers are Result<result, Error>
     tokio::select! {
@@ -204,8 +214,9 @@ async fn processor<S: Storage>(id: u32, storage: S) {
         msg.source = id;
         // set the message id.
         msg.id = uuid::Uuid::new_v4().to_string();
-        // todo: validates values on expiration, retry, etc.. to make sure
-        // the values are sane.
+        msg.retry = between(msg.retry, MIN_RETRIES, MAX_RETRIES);
+        msg.expiration = between(msg.expiration, MIN_DURATION, MAX_DURATION);
+
         // push message to forward.
         while let Err(err) = storage.forward(&msg).await {
             log::error!("failed to push message for forwarding: {}", err);

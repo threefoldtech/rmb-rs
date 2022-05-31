@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use bb8_redis::redis;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::time::{Duration, SystemTime};
 
 #[derive(Clone)]
 pub enum QueuedMessage {
@@ -34,7 +35,7 @@ pub struct Message {
     #[serde(rename = "shm")]
     pub schema: String,
     #[serde(rename = "now")]
-    pub now: usize,
+    pub now: u64,
     #[serde(rename = "err")]
     pub error: Option<String>,
     #[serde(rename = "sig")]
@@ -90,6 +91,7 @@ impl Message {
         Ok(hash.compute())
     }
 
+    /// sign the message with given signer
     pub fn sign<S: Signer>(&mut self, signer: &S) {
         // we do unwrap because this should never fail.
         let digest = self.challenge().unwrap();
@@ -98,6 +100,7 @@ impl Message {
         self.signature = Some(hex::encode(signature));
     }
 
+    /// verify the message signatre
     pub fn verify<I: Identity>(&mut self, identity: &I) -> Result<()> {
         let signature = match self.signature {
             Some(ref sig) => sig,
@@ -112,6 +115,30 @@ impl Message {
 
         if !identity.verify(&signature, &digest[..]) {
             bail!("signature verification failed")
+        }
+
+        Ok(())
+    }
+
+    pub fn set_now(&mut self) {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        self.now = ts.as_secs();
+    }
+
+    /// generic validation on the message
+    pub fn valid(&self) -> Result<()> {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        // ts has to be in the future of self.now
+        let du = match ts.checked_sub(Duration::from_secs(self.now)) {
+            Some(du) => du,
+            None => bail!("message 'now' is in the future"),
+        };
+        if du.as_secs() > 60 {
+            bail!("message is too old ('{}' seconds)", du.as_secs());
         }
 
         Ok(())

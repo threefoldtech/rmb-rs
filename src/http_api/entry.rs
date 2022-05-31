@@ -131,6 +131,8 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         }
     };
 
+    message.valid().context("message validation failed")?;
+
     //verify the message
     message
         .verify(&sender_twin.account)

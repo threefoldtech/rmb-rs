@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono::Utc;
 use hyper::{client::HttpConnector, Body, Client, Method, Request};
 
 use crate::{
@@ -213,17 +212,15 @@ where
             };
 
             // set time
-            msg.now = Utc::now().timestamp() as usize;
+            msg.set_now();
 
             // signing the message
             msg.sign(&self.identity);
 
             // posting the message to the remote twin
             let mut result = Ok(());
-            for i in 0..retry {
-                log::debug!("trial: {}", i);
+            for _ in 0..retry {
                 result = self.send_msg(&twin, &queue, &msg).await;
-                log::debug!("got result: {:?}", result);
                 if let Err(SendError::Error(_)) = &result {
                     continue;
                 }
