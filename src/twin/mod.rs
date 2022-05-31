@@ -9,7 +9,7 @@ use sp_core::crypto::AccountId32;
 pub use substrate::*;
 
 #[async_trait]
-pub trait TwinDB {
+pub trait TwinDB: Send + Sync + 'static {
     async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>>;
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<u32>;
 }
