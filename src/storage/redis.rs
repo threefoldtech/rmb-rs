@@ -142,7 +142,7 @@ impl std::fmt::Display for ForwardedMessage {
 }
 
 impl ForwardedMessage {
-    pub fn from_bytes(bytes: &Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let pair = from_utf8(bytes)?;
         pair.parse()
     }
@@ -154,7 +154,7 @@ impl ToRedisArgs for ForwardedMessage {
         W: ?Sized + RedisWrite,
     {
         let pair = self.to_string();
-        out.write_arg(&pair.as_bytes());
+        out.write_arg(pair.as_bytes());
     }
 }
 

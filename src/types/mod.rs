@@ -69,8 +69,8 @@ impl Message {
         serde_json::to_vec(self)
     }
 
-    pub fn from_json(json: &Vec<u8>) -> serde_json::Result<Self> {
-        serde_json::from_slice(&json)
+    pub fn from_json(json: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(json)
     }
 
     fn challenge(&self) -> Result<md5::Digest> {

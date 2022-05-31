@@ -21,7 +21,8 @@ where
             loop {
                 let (tx, rx) = oneshot::channel();
 
-                if let Err(_) = self.sender.send(tx).await {
+                if self.sender.send(tx).await.is_err() {
+                    log::debug!("worker exiting");
                     break;
                 }
 
