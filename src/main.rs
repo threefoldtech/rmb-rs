@@ -7,6 +7,8 @@ mod http_workers;
 mod identity;
 mod redis;
 mod storage;
+#[cfg(test)]
+mod tests;
 mod twin;
 mod types;
 mod workers;
