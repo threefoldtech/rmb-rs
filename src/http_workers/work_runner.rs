@@ -192,9 +192,17 @@ where
             // getting twin object
             let twin = match self.get_twin(*id, retry).await {
                 Some(twin) => twin,
-                None => {
+                None if queue == Queue::Forward => {
+                    self.handle_delivery_err(
+                        *id,
+                        msg,
+                        SendError::Terminal(format!("twin with id {} not found", *id)),
+                    )
+                    .await;
+
                     continue;
                 }
+                None => continue,
             };
 
             // encrypt dat
