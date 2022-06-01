@@ -64,7 +64,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-RMB is (reliable message bus) is a set of tools (client and daemon) that aims to abstract inter-process communication between multiple processes running over multiple nodes. see the [design document](https://github.com/threefoldtech/rmb-rs/blob/development/docs/readme.md).
+RMB (reliable message bus) is a set of tools (client and daemon) that aims to abstract inter-process communication between multiple processes running over multiple nodes. see the [design document](https://github.com/threefoldtech/rmb-rs/blob/development/docs/readme.md).
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
