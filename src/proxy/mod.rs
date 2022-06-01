@@ -11,13 +11,14 @@ use crate::{
 };
 
 struct Worker<S, T> {
+    id: u32,
     storage: S,
     db: T,
 }
 
 impl<S, T> Worker<S, T> {
-    pub fn new(storage: S, db: T) -> Self {
-        Worker { storage, db }
+    pub fn new(id: u32, storage: S, db: T) -> Self {
+        Worker { id, storage, db }
     }
 }
 
@@ -32,6 +33,23 @@ where
         // the payload of the message. and then validate this as a separate message
         let payload = base64::decode(&msg.data).context("failed to decode payload")?;
         let mut message = Message::from_json(&payload).context("invalid payload message")?;
+
+        if msg.destination != message.destination {
+            bail!("proxy message payload destination is not the same as the envelope");
+        }
+
+        message
+            .valid()
+            .context("payload message validation failed")?;
+
+        let twin = self
+            .db
+            .get_twin(message.source)
+            .await
+            .context("failed to get twin")?
+            .ok_or_else(|| anyhow!("destination twin not found"))?;
+
+        message.verify(&twin.account)?;
 
         Ok(())
     }
@@ -73,11 +91,10 @@ where
     S: ProxyStorage,
     T: TwinDB,
 {
-    // this must be async because of the workpool new function must be async
-    pub fn new(size: usize, storage: S, twin_db: T) -> Self {
+    pub fn new(id: u32, size: usize, storage: S, twin_db: T) -> Self {
         // it's cheaper to create one http client and then clone it to the workers
         // according to docs this will make it share the same connection pool.
-        let worker = Worker::new(storage.clone(), twin_db);
+        let worker = Worker::new(id, storage.clone(), twin_db);
         let pool = WorkerPool::new(Arc::new(worker), size);
         Self { storage, pool }
     }
