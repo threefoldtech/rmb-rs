@@ -7,8 +7,8 @@ use std::io::Write;
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone)]
-pub enum QueuedMessage {
-    Forward(Message),
+pub enum TransitMessage {
+    Request(Message),
     Reply(Message),
 }
 

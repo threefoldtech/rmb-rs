@@ -1,7 +1,8 @@
 mod redis;
+
 pub use redis::*;
 
-use crate::types::{Message, QueuedMessage};
+use crate::types::{Message, TransitMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -43,5 +44,17 @@ pub trait Storage: Clone + Send + Sync + 'static {
 
     // process will wait on both msgbus.system.forward AND msgbus.system.reply
     // and return the first message available with the correct Queue type
-    async fn queued(&self) -> Result<QueuedMessage>;
+    async fn queued(&self) -> Result<TransitMessage>;
+}
+
+/// extends the storage trait with functionality
+/// for proxy submodule.
+#[async_trait]
+pub trait ProxyStorage: Storage {
+    /// store message in park with proper key
+    async fn park(&self, msg: &Message) -> Result<()>;
+
+    /// proxy returns the next available message from
+    /// the proxy channels (forward or return)
+    async fn proxy(&self) -> Result<TransitMessage>;
 }

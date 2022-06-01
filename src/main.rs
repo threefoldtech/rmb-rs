@@ -5,6 +5,7 @@ mod cache;
 mod http_api;
 mod http_workers;
 mod identity;
+mod proxy;
 mod redis;
 mod storage;
 mod twin;

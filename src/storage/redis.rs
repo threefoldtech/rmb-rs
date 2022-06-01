@@ -1,6 +1,6 @@
 use std::str::{from_utf8, FromStr};
 
-use crate::types::{Message, QueuedMessage};
+use crate::types::{Message, TransitMessage};
 
 use super::Storage;
 use anyhow::{Context, Result};
@@ -232,7 +232,7 @@ impl Storage for RedisStorage {
         Ok(ret.1)
     }
 
-    async fn queued(&self) -> Result<QueuedMessage> {
+    async fn queued(&self) -> Result<TransitMessage> {
         let mut conn = self.get_connection().await?;
         let forward_queue = self.prefixed(Queue::Forward);
         let reply_queue = self.prefixed(Queue::Reply);
@@ -253,13 +253,13 @@ impl Storage for RedisStorage {
 
                 if let Some(mut msg) = self.get(&forward.id).await? {
                     msg.destination = vec![forward.destination];
-                    return Ok(QueuedMessage::Forward(msg));
+                    return Ok(TransitMessage::Request(msg));
                 }
             } else if queue == reply_queue {
                 // reply queue had the message itself
                 // decode it directly
                 let msg = Message::from_redis_value(&value)?;
-                return Ok(QueuedMessage::Reply(msg));
+                return Ok(TransitMessage::Reply(msg));
             }
         }
     }
@@ -342,10 +342,10 @@ mod tests {
 
         let queued_msg = storage.queued().await.unwrap();
         match queued_msg {
-            QueuedMessage::Forward(msg) => {
+            TransitMessage::Request(msg) => {
                 let _ = storage.run(&msg).await;
             }
-            QueuedMessage::Reply(msg) => {
+            TransitMessage::Reply(msg) => {
                 let _ = storage.run(&msg).await;
             }
         }
