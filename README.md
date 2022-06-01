@@ -109,9 +109,9 @@ To get a local RMB up and running follow these simple steps.
 
   **note:** though not required to run fully functionally RMB, it needed if you are going to communicate with other nodes on our planetary network ).
   see the [installation instructions](https://yggdrasil-network.github.io/installation-linux-deb.html)
-### Installation
+### Installation from source
 
-1. Register a twin at [tfchain](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/accounts).
+1. Register a twin at [tfchain](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/accounts). for more info see [Grid3 Get Started](https://library.threefold.me/info/manual#/getstarted/manual__tfgrid3_getstarted) guide.
 2. make sure your yggdrasil service is up and that your ygg address was added to your twin either from [polkadot.js UI](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/extrinsics) or from the [grid portal](https://portal.grid.tf/).
 3. Clone the repo.
    ```sh
