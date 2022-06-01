@@ -86,6 +86,8 @@ To get a local RMB up and running follow these simple steps.
 ### Prerequisites
 
 * Rust
+
+**note**: only needed to Build a binary from source. it is recommended to use the released binaries, in this case you can skip rust installation. 
   ```sh
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
