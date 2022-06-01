@@ -107,7 +107,8 @@ To get a local RMB up and running follow these simple steps.
   see [here](https://hub.docker.com/_/redis) for more info
 * yggdrasil
 
-  see the [installatio instructions](https://yggdrasil-network.github.io/installation-linux-deb.html)
+  **note:** though not required to run fully functionally RMB, it needed if you are going to communicate with other nodes on our planetary network ).
+  see the [installation instructions](https://yggdrasil-network.github.io/installation-linux-deb.html)
 ### Installation
 
 1. Register a twin at [tfchain](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/accounts).
