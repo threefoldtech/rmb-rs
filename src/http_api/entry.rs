@@ -74,7 +74,7 @@ enum HandlerError {
     #[error("invalid source twin {0}: {1}")]
     InvalidSource(u32, anyhow::Error),
 
-    #[error("internal server error")]
+    #[error("internal server error: {0}")]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -148,7 +148,7 @@ async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
     let message = message(request, &data).await?;
 
     data.storage
-        .run(&message)
+        .run(message)
         .await
         .map_err(HandlerError::InternalError)
 }

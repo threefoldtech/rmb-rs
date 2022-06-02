@@ -17,7 +17,7 @@ impl Storage for StorageMock {
     async fn get(&self, _id: &str) -> Result<Option<Message>> {
         Ok(Some(Message::default()))
     }
-    async fn run(&self, _msg: &Message) -> Result<()> {
+    async fn run(&self, _msg: Message) -> Result<()> {
         Ok(())
     }
     async fn forward(&self, _msg: &Message) -> Result<()> {

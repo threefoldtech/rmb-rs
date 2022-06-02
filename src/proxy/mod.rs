@@ -27,47 +27,45 @@ where
     S: ProxyStorage,
     T: TwinDB,
 {
-    async fn request_handler(&self, msg: &Message) -> Result<()> {
+    async fn request_handler(&self, envelope: &Message) -> Result<()> {
         // if we are here this is a msg with command system.proxy.
         // all envelope validation is complete. But we need now to extract
         // the payload of the message. and then validate this as a separate message
-        let payload = base64::decode(&msg.data).context("failed to decode payload")?;
-        let mut message = Message::from_json(&payload).context("invalid payload message")?;
+        let payload = base64::decode(&envelope.data).context("failed to decode payload")?;
+        let mut payload = Message::from_json(&payload).context("invalid payload message")?;
 
-        if let None = message.destination.iter().position(|x| *x == self.id) {
+        if envelope.id != payload.id {
+            bail!("payload message id must be the same as the envelope id");
+        }
+
+        if !payload.destination.iter().any(|x| *x == self.id) {
             // this message is not intended to this destination
             // and this is a violation that is not accepted
             bail!("invalid payload message destination");
         }
 
-        message
+        payload
             .valid()
             .context("payload message validation failed")?;
 
         let twin = self
             .db
-            .get_twin(message.source)
+            .get_twin(payload.source)
             .await
             .context("failed to get twin")?
             .ok_or_else(|| anyhow!("destination twin not found"))?;
 
-        message.verify(&twin.account)?;
+        payload.verify(&twin.account)?;
 
-        // park will keep message in storage for
-        // some time (ttl) until it's processed
-        self.storage
-            .park(&msg)
-            .await
-            .context("failed to park proxy message")?;
-
-        self.storage.run(&message).await
+        // reply queue from storage
+        self.storage.run_proxied(payload).await
     }
 
     async fn handle_err(&self, mut msg: Message, err: anyhow::Error) {
         msg.error = Some(err.to_string());
         msg.data = String::default();
 
-        if let Err(err) = self.storage.respond(&msg).await {
+        if let Err(err) = self.storage.response(&msg).await {
             log::error!("failed to push proxy response: {}", err);
         }
     }
@@ -79,13 +77,13 @@ where
     }
 
     async fn reply_handler(&self, msg: &Message) -> Result<()> {
-        let mut envelope = match self.storage.unpark(&msg.id).await? {
+        let mut envelope = match self.storage.get(&msg.id).await? {
             Some(envelope) => envelope,
             None => return Ok(()), //timedout .. nothing to do.
         };
 
         envelope.data = base64::encode(msg.to_json().context("failed to encode message")?);
-        self.storage.respond(&envelope).await
+        self.storage.response(&envelope).await
     }
 
     async fn reply(&self, msg: Message) {
@@ -137,7 +135,7 @@ where
         loop {
             let handler = self.pool.get().await;
 
-            let job = match self.storage.queued().await {
+            let job = match self.storage.proxied().await {
                 Ok(job) => job,
                 Err(err) => {
                     log::debug!("error while process the storage because of '{}'", err);

@@ -144,10 +144,7 @@ impl Message {
         // to compute the ttl we need to do the following
         // - ttl = expiration - (now - msg.timestamp)
         match now.checked_sub(self.timestamp) {
-            Some(d) => match self.expiration.checked_sub(d) {
-                Some(sec) => Some(Duration::from_secs(sec)),
-                None => None,
-            },
+            Some(d) => self.expiration.checked_sub(d).map(Duration::from_secs),
             None => None,
         }
     }

@@ -2,7 +2,7 @@ use std::str::{from_utf8, FromStr};
 
 use crate::types::{Message, TransitMessage};
 
-use super::Storage;
+use super::{ProxyStorage, Storage};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
@@ -14,15 +14,16 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 
-// max TTL in seconds = 1 hour
-const MAX_TTL: usize = 3600;
-
 enum Queue<'a> {
     Backlog(&'a str),
     Run(&'a str),
     Local,
     Forward,
     Reply,
+
+    // for proxy
+    ProxyRequest,
+    ProxyReply,
 }
 
 impl std::fmt::Display for Queue<'_> {
@@ -33,6 +34,9 @@ impl std::fmt::Display for Queue<'_> {
             Queue::Local => write!(f, "system.local"),
             Queue::Forward => write!(f, "system.forward"),
             Queue::Reply => write!(f, "system.reply"),
+            // Proxy
+            Queue::ProxyRequest => write!(f, "system.proxy.request"),
+            Queue::ProxyReply => write!(f, "system.proxy.reply"),
         }
     }
 }
@@ -89,7 +93,7 @@ impl RedisStorage {
         }
     }
 
-    pub async fn get_connection(&self) -> Result<PooledConnection<'_, RedisConnectionManager>> {
+    async fn get_connection(&self) -> Result<PooledConnection<'_, RedisConnectionManager>> {
         let conn = self
             .pool
             .get()
@@ -97,6 +101,35 @@ impl RedisStorage {
             .context("unable to retrieve a redis connection from the pool")?;
 
         Ok(conn)
+    }
+
+    async fn set(
+        &self,
+        con: &mut PooledConnection<'_, RedisConnectionManager>,
+        msg: &Message,
+    ) -> Result<()> {
+        // add to backlog
+        let ttl = match msg.ttl() {
+            Some(ttl) => ttl,
+            None => bail!("message has expired"),
+        };
+
+        let key = self.prefixed(Queue::Backlog(&msg.id));
+        con.set_ex(&key, msg, ttl.as_secs() as usize).await?;
+
+        Ok(())
+    }
+
+    async fn run_with_repy(&self, queue: Queue<'_>, mut msg: Message) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+        // set reply queue
+        msg.reply = self.prefixed(queue);
+        let cmd = self.prefixed(Queue::Run(&msg.command));
+
+        conn.lpush(&cmd, msg).await?;
+        conn.ltrim(&cmd, 0, self.max_commands - 1).await?;
+
+        Ok(())
     }
 
     fn prefixed(&self, queue: Queue) -> String {
@@ -183,27 +216,14 @@ impl Storage for RedisStorage {
         Ok(conn.get(key).await?)
     }
 
-    async fn run(&self, msg: &Message) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let queue = self.prefixed(Queue::Run(&msg.command));
-
-        conn.lpush(&queue, msg).await?;
-        conn.ltrim(&queue, 0, self.max_commands - 1).await?;
-
-        Ok(())
+    async fn run(&self, msg: Message) -> Result<()> {
+        self.run_with_repy(Queue::Reply, msg).await
     }
 
     async fn forward(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        // add to backlog
-        let ttl = match msg.ttl() {
-            Some(ttl) => ttl,
-            None => bail!("message has expired"),
-        };
-
-        let key = self.prefixed(Queue::Backlog(&msg.id));
-        conn.set_ex(&key, msg, ttl.as_secs() as usize).await?;
+        self.set(&mut conn, msg).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
@@ -237,7 +257,7 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         let forward_queue = self.prefixed(Queue::Forward);
         let reply_queue = self.prefixed(Queue::Reply);
-        let queues = (forward_queue.clone(), reply_queue.clone());
+        let queues = (forward_queue.as_str(), reply_queue.as_str());
 
         loop {
             let ret: (String, Value) = conn.brpop(&queues, 0).await?;
@@ -263,6 +283,38 @@ impl Storage for RedisStorage {
                 return Ok(TransitMessage::Reply(msg));
             }
         }
+    }
+}
+
+#[async_trait]
+impl ProxyStorage for RedisStorage {
+    async fn run_proxied(&self, msg: Message) -> Result<()> {
+        self.run_with_repy(Queue::ProxyReply, msg).await
+    }
+
+    async fn proxied(&self) -> Result<TransitMessage> {
+        let mut conn = self.get_connection().await?;
+        let request = self.prefixed(Queue::ProxyRequest);
+        let response = self.prefixed(Queue::ProxyReply);
+        let queues = (request.as_str(), response.as_str());
+
+        let ret: (String, Message) = conn.brpop(&queues, 0).await?;
+        let (queue, message) = ret;
+
+        if queue == request {
+            return Ok(TransitMessage::Request(message));
+        } else if queue == response {
+            return Ok(TransitMessage::Reply(message));
+        }
+
+        unreachable!();
+    }
+
+    async fn response(&self, msg: &Message) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+
+        conn.lpush(self.prefixed(Queue::Reply), msg).await?;
+        Ok(())
     }
 }
 
@@ -344,10 +396,10 @@ mod tests {
         let queued_msg = storage.queued().await.unwrap();
         match queued_msg {
             TransitMessage::Request(msg) => {
-                let _ = storage.run(&msg).await;
+                let _ = storage.run(msg).await;
             }
             TransitMessage::Reply(msg) => {
-                let _ = storage.run(&msg).await;
+                let _ = storage.run(msg).await;
             }
         }
 
