@@ -4,7 +4,7 @@ use crate::{
     identity::{self, Ed25519Signer, Identity},
     storage::Storage,
     twin::{Twin, TwinDB},
-    types::{Message, QueuedMessage},
+    types::{Message, TransitMessage},
 };
 use anyhow::Result;
 use sp_core::crypto::{AccountId32, Ss58Codec};
@@ -30,8 +30,8 @@ impl Storage for StorageMock {
     async fn local(&self) -> Result<Message> {
         Ok(Message::default())
     }
-    async fn queued(&self) -> Result<QueuedMessage> {
-        Ok(QueuedMessage::Forward(Message::default()))
+    async fn queued(&self) -> Result<TransitMessage> {
+        Ok(TransitMessage::Request(Message::default()))
     }
 }
 #[derive(Clone)]

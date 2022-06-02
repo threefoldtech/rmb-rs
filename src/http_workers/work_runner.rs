@@ -157,7 +157,7 @@ where
             .await
             .context("can not send a reply message")
         {
-            log::error!("{:?}", err);
+            log::error!("failed to deliver failure response: {}", err);
         }
     }
 }
@@ -192,7 +192,7 @@ where
             // getting twin object
             let twin = match self.get_twin(*id, retry).await {
                 Some(twin) => twin,
-                None if queue == Queue::Forward => {
+                None if queue == Queue::Request => {
                     self.handle_delivery_err(
                         *id,
                         msg,

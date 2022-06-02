@@ -27,15 +27,17 @@ where
     S: ProxyStorage,
     T: TwinDB,
 {
-    async fn request_handler(&self, msg: Message) -> Result<()> {
+    async fn request_handler(&self, msg: &Message) -> Result<()> {
         // if we are here this is a msg with command system.proxy.
         // all envelope validation is complete. But we need now to extract
         // the payload of the message. and then validate this as a separate message
         let payload = base64::decode(&msg.data).context("failed to decode payload")?;
         let mut message = Message::from_json(&payload).context("invalid payload message")?;
 
-        if msg.destination != message.destination {
-            bail!("proxy message payload destination is not the same as the envelope");
+        if let None = message.destination.iter().position(|x| *x == self.id) {
+            // this message is not intended to this destination
+            // and this is a violation that is not accepted
+            bail!("invalid payload message destination");
         }
 
         message
@@ -51,11 +53,13 @@ where
 
         message.verify(&twin.account)?;
 
-        Ok(())
+        self.storage.run(&message).await
     }
+
+    async fn handle_err(&self, msg: &Message, err: anyhow::Error) {}
     async fn request(&self, msg: Message) {
-        if let Err(err) = self.request_handler(msg).await {
-            todo!("handle error by sending a response to caller");
+        if let Err(err) = self.request_handler(&msg).await {
+            self.handle_err(&msg, err).await;
         }
     }
 

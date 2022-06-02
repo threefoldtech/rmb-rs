@@ -35,7 +35,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // message will be auto-dropped when it times out.
     async fn forward(&self, msg: &Message) -> Result<()>;
 
-    // pushes message to `msg.$ret` queue.
+    /// pushes message to `msg.$ret` queue.
     async fn reply(&self, msg: &Message) -> Result<()>;
 
     // gets a message from local queue waits
@@ -54,7 +54,11 @@ pub trait ProxyStorage: Storage {
     /// store message in park with proper key
     async fn park(&self, msg: &Message) -> Result<()>;
 
+    async fn unpark(&self, id: &str) -> Result<Option<Message>>;
     /// proxy returns the next available message from
     /// the proxy channels (forward or return)
     async fn proxy(&self) -> Result<TransitMessage>;
+
+    ///
+    async fn respond(&self, msg: &Message) -> Result<()>;
 }
