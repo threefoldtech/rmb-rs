@@ -62,19 +62,19 @@ where
 }
 #[derive(Error, Debug)]
 enum HandlerError {
-    #[error("bad request: {0}")]
+    #[error("bad request: {0:#}")]
     BadRequest(anyhow::Error),
 
-    #[error("un authorized: {0}")]
+    #[error("un authorized: {0:#}")]
     UnAuthorized(anyhow::Error),
 
     #[error("invalid destination twin {0}")]
     InvalidDestination(u32),
 
-    #[error("invalid source twin {0}: {1}")]
+    #[error("invalid source twin {0}: {1:#}")]
     InvalidSource(u32, anyhow::Error),
 
-    #[error("internal server error")]
+    #[error("internal server error: {0:#}")]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -148,7 +148,7 @@ async fn rmb_remote_handler<S: Storage, I: Identity, D: TwinDB>(
     let message = message(request, &data).await?;
 
     data.storage
-        .run(&message)
+        .run(message)
         .await
         .map_err(HandlerError::InternalError)
 }
@@ -259,7 +259,7 @@ mod tests {
         msg.source = 1;
         msg.destination = vec![2];
         msg.data = String::from("dsads");
-        msg.now = SystemTime::now()
+        msg.timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
@@ -296,7 +296,7 @@ mod tests {
         msg.source = 3;
         msg.destination = vec![2];
         msg.data = String::from("message data");
-        msg.now = SystemTime::now()
+        msg.timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();

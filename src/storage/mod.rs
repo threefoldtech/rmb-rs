@@ -1,7 +1,8 @@
 mod redis;
+
 pub use redis::*;
 
-use crate::types::{Message, QueuedMessage};
+use crate::types::{Message, TransitMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -26,7 +27,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // SUGGESTED FIX: instead of setting TTL on the $cmd queue we can limit the length
     // of the queue. So for example, we allow maximum of 500 message to be on this queue
     // after that we need to trim the queue to specific length after push (so drop older messages)
-    async fn run(&self, msg: &Message) -> Result<()>;
+    async fn run(&self, msg: Message) -> Result<()>;
 
     // forward stores the message in backlog.$id, and for each twin id in the message
     // destination, a new tuple of (id, dst) is pushed to the forward queue.
@@ -34,7 +35,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // message will be auto-dropped when it times out.
     async fn forward(&self, msg: &Message) -> Result<()>;
 
-    // pushes message to `msg.$ret` queue.
+    /// pushes message to `msg.$ret` queue.
     async fn reply(&self, msg: &Message) -> Result<()>;
 
     // gets a message from local queue waits
@@ -43,5 +44,21 @@ pub trait Storage: Clone + Send + Sync + 'static {
 
     // process will wait on both msgbus.system.forward AND msgbus.system.reply
     // and return the first message available with the correct Queue type
-    async fn queued(&self) -> Result<QueuedMessage>;
+    async fn queued(&self) -> Result<TransitMessage>;
+}
+
+/// extends the storage trait with functionality
+/// for proxy submodule.
+#[async_trait]
+pub trait ProxyStorage: Storage {
+    /// run proxied runs the command but with an overriden reply queue
+    /// that is specific for the proxy module.
+    async fn run_proxied(&self, msg: Message) -> Result<()>;
+
+    /// proxy returns the next available message from
+    /// the proxy channels (request or reply)
+    async fn proxied(&self) -> Result<TransitMessage>;
+
+    /// send msg back to the reply queue of the storage.
+    async fn response(&self, msg: &Message) -> Result<()>;
 }

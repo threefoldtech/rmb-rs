@@ -38,6 +38,7 @@ where
         }
 
         let client = self.client.clone();
+        log::debug!("getting twin {} from substrate", twin_id);
         let twin: Twin = spawn_blocking(move || client.get_twin(twin_id)).await??;
         self.cache.set(twin.id, twin.clone()).await?;
         Ok(Some(twin))
