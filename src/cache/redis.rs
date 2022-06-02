@@ -121,7 +121,7 @@ mod tests {
             .context("can not set value to cache")
             .unwrap();
         let retrieved_value: Option<String> = cache
-            .get(PREFIX.to_owned() + "." + KEY)
+            .get(KEY.to_owned())
             .await
             .context("can not get value from the cache")
             .unwrap();
@@ -146,7 +146,7 @@ mod tests {
             .context("can not set value to cache")
             .unwrap();
         let retrieved_value: Option<DummyStruct> = cache
-            .get(PREFIX.to_owned() + "." + KEY)
+            .get(KEY.to_owned())
             .await
             .context("can not get value from the cache")
             .unwrap();
