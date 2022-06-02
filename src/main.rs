@@ -216,7 +216,7 @@ async fn processor<S: Storage>(id: u32, storage: S) {
         // set the message id.
         msg.id = uuid::Uuid::new_v4().to_string();
         msg.retry = between(msg.retry, MIN_RETRIES, MAX_RETRIES);
-        msg.expiration = between(msg.expiration, MIN_DURATION, MAX_DURATION);
+        msg.stamp();
 
         // push message to forward.
         while let Err(err) = storage.forward(&msg).await {

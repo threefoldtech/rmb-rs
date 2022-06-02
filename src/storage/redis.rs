@@ -197,12 +197,13 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
 
         // add to backlog
+        let ttl = match msg.ttl() {
+            Some(ttl) => ttl,
+            None => bail!("message has expired"),
+        };
+
         let key = self.prefixed(Queue::Backlog(&msg.id));
-        let mut expiration = msg.expiration;
-        if expiration == 0 {
-            expiration = MAX_TTL;
-        }
-        conn.set_ex(&key, msg, expiration).await?;
+        conn.set_ex(&key, msg, ttl.as_secs() as usize).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
@@ -303,7 +304,7 @@ mod tests {
             reply: String::from("de31075e-9af4-4933-b107-c36887d0c0f0"),
             retry: 2,
             schema: String::from(""),
-            now: 1653454930,
+            timestamp: 1653454930,
             error: None,
             signature: None,
         };

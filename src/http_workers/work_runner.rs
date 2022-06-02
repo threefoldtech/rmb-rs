@@ -213,9 +213,6 @@ where
                 }
             };
 
-            // set time
-            msg.set_now();
-
             // signing the message
             msg.sign(&self.identity);
 

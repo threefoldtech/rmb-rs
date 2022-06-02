@@ -53,18 +53,48 @@ where
 
         message.verify(&twin.account)?;
 
+        // park will keep message in storage for
+        // some time (ttl) until it's processed
+        self.storage
+            .park(&msg)
+            .await
+            .context("failed to park proxy message")?;
+
         self.storage.run(&message).await
     }
 
-    async fn handle_err(&self, msg: &Message, err: anyhow::Error) {}
-    async fn request(&self, msg: Message) {
-        if let Err(err) = self.request_handler(&msg).await {
-            self.handle_err(&msg, err).await;
+    async fn handle_err(&self, mut msg: Message, err: anyhow::Error) {
+        msg.error = Some(err.to_string());
+        msg.data = String::default();
+
+        if let Err(err) = self.storage.respond(&msg).await {
+            log::error!("failed to push proxy response: {}", err);
         }
     }
 
-    async fn reply(&self, msg: Message) {}
+    async fn request(&self, msg: Message) {
+        if let Err(err) = self.request_handler(&msg).await {
+            self.handle_err(msg, err).await;
+        }
+    }
+
+    async fn reply_handler(&self, msg: &Message) -> Result<()> {
+        let mut envelope = match self.storage.unpark(&msg.id).await? {
+            Some(envelope) => envelope,
+            None => return Ok(()), //timedout .. nothing to do.
+        };
+
+        envelope.data = base64::encode(msg.to_json().context("failed to encode message")?);
+        self.storage.respond(&envelope).await
+    }
+
+    async fn reply(&self, msg: Message) {
+        if let Err(err) = self.reply_handler(&msg).await {
+            log::error!("failed to handle proxy reply: {}", err)
+        }
+    }
 }
+
 #[async_trait::async_trait]
 impl<S, T> Work for Worker<S, T>
 where

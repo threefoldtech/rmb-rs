@@ -59,6 +59,6 @@ pub trait ProxyStorage: Storage {
     /// the proxy channels (forward or return)
     async fn proxy(&self) -> Result<TransitMessage>;
 
-    ///
+    /// send msg back to the reply queue of the storage.
     async fn respond(&self, msg: &Message) -> Result<()>;
 }

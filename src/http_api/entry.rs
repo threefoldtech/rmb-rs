@@ -259,7 +259,7 @@ mod tests {
         msg.source = 1;
         msg.destination = vec![2];
         msg.data = String::from("dsads");
-        msg.now = SystemTime::now()
+        msg.timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
@@ -296,7 +296,7 @@ mod tests {
         msg.source = 3;
         msg.destination = vec![2];
         msg.data = String::from("message data");
-        msg.now = SystemTime::now()
+        msg.timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();

@@ -21,7 +21,7 @@ pub struct Message {
     #[serde(rename = "cmd")]
     pub command: String,
     #[serde(rename = "exp")]
-    pub expiration: usize,
+    pub expiration: u64,
     #[serde(rename = "try")]
     pub retry: usize,
     #[serde(rename = "dat")]
@@ -35,7 +35,7 @@ pub struct Message {
     #[serde(rename = "shm")]
     pub schema: String,
     #[serde(rename = "now")]
-    pub now: u64,
+    pub timestamp: u64,
     #[serde(rename = "err")]
     pub error: Option<String>,
     #[serde(rename = "sig")]
@@ -55,7 +55,7 @@ impl Default for Message {
             destination: Default::default(),
             reply: Default::default(),
             schema: Default::default(),
-            now: Default::default(),
+            timestamp: Default::default(),
             error: None,
             signature: Default::default(),
         }
@@ -82,7 +82,7 @@ impl Message {
             write!(hash, "{}", *id)?;
         }
         write!(hash, "{}", self.reply)?;
-        write!(hash, "{}", self.now)?;
+        write!(hash, "{}", self.timestamp)?;
         // this is for backward compatibility
         // this replaces the `proxy` flag which is
         // no obsolete
@@ -120,11 +120,36 @@ impl Message {
         Ok(())
     }
 
-    pub fn set_now(&mut self) {
-        let ts = SystemTime::now()
+    /// stamp sets the correct timestamp on the message. This is done
+    /// by validating the stamp set by the user so if the stamp is
+    /// in the future, the stamp is updated to `now`.
+    pub fn stamp(&mut self) {
+        let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        self.now = ts.as_secs();
+            .unwrap()
+            .as_secs();
+        if self.timestamp > now {
+            self.timestamp = now;
+        }
+    }
+
+    /// ttl returns the time to live of this message
+    /// based it the timestamp expiration value and ttl
+    pub fn ttl(&self) -> Option<Duration> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // to compute the ttl we need to do the following
+        // - ttl = expiration - (now - msg.timestamp)
+        match now.checked_sub(self.timestamp) {
+            Some(d) => match self.expiration.checked_sub(d) {
+                Some(sec) => Some(Duration::from_secs(sec)),
+                None => None,
+            },
+            None => None,
+        }
     }
 
     /// generic validation on the message
@@ -133,7 +158,7 @@ impl Message {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
         // ts has to be in the future of self.now
-        let du = match ts.checked_sub(Duration::from_secs(self.now)) {
+        let du = match ts.checked_sub(Duration::from_secs(self.timestamp)) {
             Some(du) => du,
             None => bail!("message 'now' is in the future"),
         };
