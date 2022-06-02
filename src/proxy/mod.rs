@@ -35,7 +35,6 @@ where
         let mut payload = Message::from_json(&payload).context("invalid payload message")?;
 
         payload.id = envelope.id.clone();
-
         if !payload.destination.iter().any(|x| *x == self.id) {
             // this message is not intended to this destination
             // and this is a violation that is not accepted
