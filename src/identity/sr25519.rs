@@ -59,8 +59,8 @@ impl TryFrom<&str> for Sr25519Signer {
     type Error = anyhow::Error;
 
     fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
-        let (pair, _) = sp_core::sr25519::Pair::from_string_with_seed(s, None)
-            .map_err(|err| anyhow!("{:?}", err))?;
+        let pair =
+            sp_core::sr25519::Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
 
         Ok(Self { pair })
     }
