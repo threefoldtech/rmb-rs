@@ -5,29 +5,28 @@ mod cache;
 mod http_api;
 mod http_workers;
 mod identity;
+mod proxy;
 mod redis;
 mod storage;
 mod twin;
 mod types;
 mod workers;
 
+use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
 use cache::RedisCache;
 use clap::Parser;
 use http_api::HttpApi;
 use identity::Identity;
+use proxy::ProxyWorker;
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
 use twin::{SubstrateTwinDB, TwinDB};
 
-use crate::http_workers::HttpWorker;
-
 const MIN_RETRIES: usize = 1;
 const MAX_RETRIES: usize = 5;
-const MIN_DURATION: usize = 10;
-const MAX_DURATION: usize = 60 * 60;
 
 #[derive(Debug)]
 enum KeyType {
@@ -183,6 +182,8 @@ async fn app(args: &Args) -> Result<()> {
         .run(),
     );
 
+    let proxy_handler = tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone()).run());
+
     // spawn the http worker
     let workers_handler =
         tokio::task::spawn(HttpWorker::new(args.workers, storage, db, identity).run());
@@ -193,19 +194,24 @@ async fn app(args: &Args) -> Result<()> {
             if let Err(err) = result {
                 bail!("message processor panicked unexpectedly: {}", err);
             }
-        }
+        },
         result = api_handler => {
             match result {
                 Err(err) => bail!("http server panicked unexpectedly: {}", err),
                 Ok(Ok(_)) => bail!("http server exited unexpectedly"),
                 Ok(Err(err)) => bail!("http server exited with error: {}", err),
             }
-        }
+        },
         result = workers_handler => {
             if let Err(err) = result {
-                bail!("workers panicked unexpectedly: {}", err);
+                bail!("http workers panicked unexpectedly: {}", err);
             }
-        }
+        },
+        result = proxy_handler => {
+            if let Err(err) = result {
+                bail!("proxy workers panicked unexpectedly: {}", err);
+            }
+        },
     }
 
     log::warn!("unreachable");
@@ -233,12 +239,11 @@ async fn processor<S: Storage>(id: u32, storage: S) {
         // set the message id.
         msg.id = uuid::Uuid::new_v4().to_string();
         msg.retry = between(msg.retry, MIN_RETRIES, MAX_RETRIES);
-        msg.expiration = between(msg.expiration, MIN_DURATION, MAX_DURATION);
+        msg.stamp();
 
         // push message to forward.
-        while let Err(err) = storage.forward(&msg).await {
+        if let Err(err) = storage.forward(&msg).await {
             log::error!("failed to push message for forwarding: {}", err);
-            sleep(wait).await;
         }
     }
 }

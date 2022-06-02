@@ -189,7 +189,7 @@ The point is the 3rd party app, once it receives a `payload` message and once it
 This mean that this envelope message will end up on the `msgbus.system.proxy` queue (if all validation is fine). A special routine handler on this queue will does the following:
 
 - it will extract the `payload` message from the `data` field of the `envelope`
-- it will does payload validation (against the sender twin id), and timestamps validation, etc...
+- it will do payload validation (against the sender twin id), and timestamps validation, etc...
 - the message `$ret` is set to `msgbus.system.proxied`
 - the envelope message is parked in redis (using a special) `proxied.$id` key. TTL is applied
 - the message is sent to `msgbus.$cmd`

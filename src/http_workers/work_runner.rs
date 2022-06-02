@@ -5,7 +5,7 @@ use crate::{
     identity::Signer,
     storage::Storage,
     twin::{Twin, TwinDB},
-    types::{Message, QueuedMessage},
+    types::{Message, TransitMessage},
     workers::Work,
 };
 
@@ -13,14 +13,14 @@ use anyhow::{Context, Result};
 
 #[derive(PartialEq)]
 enum Queue {
-    Forward,
+    Request,
     Reply,
 }
 
 impl std::convert::AsRef<str> for Queue {
     fn as_ref(&self) -> &str {
         match self {
-            Self::Forward => "zbus-remote",
+            Self::Request => "zbus-remote",
             Self::Reply => "zbus-reply",
         }
     }
@@ -31,7 +31,7 @@ enum SendError {
     #[error("receive error reply from remote rmb: `{0}`")]
     Terminal(String),
 
-    #[error("failed to deliver message to remote rmb: {0}")]
+    #[error("failed to deliver message to remote rmb: {0:#}")]
     Error(#[from] anyhow::Error),
 }
 
@@ -157,7 +157,7 @@ where
             .await
             .context("can not send a reply message")
         {
-            log::error!("{:?}", err);
+            log::error!("failed to deliver failure response: {}", err);
         }
     }
 }
@@ -169,14 +169,14 @@ where
     I: Signer,
     S: Storage,
 {
-    type Job = QueuedMessage;
+    type Job = TransitMessage;
 
     async fn run(&self, job: Self::Job) {
         //identify uri and extract msg
         log::debug!("http worker received a job");
         let (queue, msg) = match job {
-            QueuedMessage::Forward(msg) => (Queue::Forward, msg),
-            QueuedMessage::Reply(msg) => (Queue::Reply, msg),
+            TransitMessage::Request(msg) => (Queue::Request, msg),
+            TransitMessage::Reply(msg) => (Queue::Reply, msg),
         };
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
@@ -192,7 +192,7 @@ where
             // getting twin object
             let twin = match self.get_twin(*id, retry).await {
                 Some(twin) => twin,
-                None if queue == Queue::Forward => {
+                None if queue == Queue::Request => {
                     self.handle_delivery_err(
                         *id,
                         msg,
@@ -213,9 +213,6 @@ where
                 }
             };
 
-            // set time
-            msg.set_now();
-
             // signing the message
             msg.sign(&self.identity);
 
@@ -229,7 +226,7 @@ where
                 break;
             }
 
-            if result.is_err() && queue == Queue::Forward {
+            if result.is_err() && queue == Queue::Request {
                 self.handle_delivery_err(twin.id, msg, result.err().unwrap())
                     .await;
             }
@@ -299,5 +296,11 @@ mod test {
 
         let u = uri_builder("rmb-remote", "192.168.12.34:5678");
         assert_eq!(u, "http://192.168.12.34:5678/rmb-remote");
+
+        let u = uri_builder("rmb-remote", "example.com");
+        assert_eq!(u, "http://example.com:8051/rmb-remote");
+
+        let u = uri_builder("rmb-remote", "example.com:1234");
+        assert_eq!(u, "http://example.com:1234/rmb-remote");
     }
 }
