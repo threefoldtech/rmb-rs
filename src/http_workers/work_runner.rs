@@ -31,7 +31,7 @@ enum SendError {
     #[error("receive error reply from remote rmb: `{0}`")]
     Terminal(String),
 
-    #[error("failed to deliver message to remote rmb: {0}")]
+    #[error("failed to deliver message to remote rmb: {0:#}")]
     Error(#[from] anyhow::Error),
 }
 

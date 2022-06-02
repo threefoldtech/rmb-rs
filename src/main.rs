@@ -224,9 +224,8 @@ async fn processor<S: Storage>(id: u32, storage: S) {
         msg.stamp();
 
         // push message to forward.
-        while let Err(err) = storage.forward(&msg).await {
+        if let Err(err) = storage.forward(&msg).await {
             log::error!("failed to push message for forwarding: {}", err);
-            sleep(wait).await;
         }
     }
 }

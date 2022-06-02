@@ -62,19 +62,19 @@ where
 }
 #[derive(Error, Debug)]
 enum HandlerError {
-    #[error("bad request: {0}")]
+    #[error("bad request: {0:#}")]
     BadRequest(anyhow::Error),
 
-    #[error("un authorized: {0}")]
+    #[error("un authorized: {0:#}")]
     UnAuthorized(anyhow::Error),
 
     #[error("invalid destination twin {0}")]
     InvalidDestination(u32),
 
-    #[error("invalid source twin {0}: {1}")]
+    #[error("invalid source twin {0}: {1:#}")]
     InvalidSource(u32, anyhow::Error),
 
-    #[error("internal server error: {0}")]
+    #[error("internal server error: {0:#}")]
     InternalError(#[from] anyhow::Error),
 }
 

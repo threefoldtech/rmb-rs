@@ -34,9 +34,7 @@ where
         let payload = base64::decode(&envelope.data).context("failed to decode payload")?;
         let mut payload = Message::from_json(&payload).context("invalid payload message")?;
 
-        if envelope.id != payload.id {
-            bail!("payload message id must be the same as the envelope id");
-        }
+        payload.id = envelope.id.clone();
 
         if !payload.destination.iter().any(|x| *x == self.id) {
             // this message is not intended to this destination
@@ -62,7 +60,7 @@ where
     }
 
     async fn handle_err(&self, mut msg: Message, err: anyhow::Error) {
-        msg.error = Some(err.to_string());
+        msg.error = Some(format!("{:#}", err));
         msg.data = String::default();
 
         if let Err(err) = self.storage.response(&msg).await {
