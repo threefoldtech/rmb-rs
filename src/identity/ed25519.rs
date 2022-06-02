@@ -33,8 +33,6 @@ impl From<&AccountId32> for Ed25519Identity {
 #[derive(Clone)]
 pub struct Ed25519Signer {
     pair: EdPair,
-    #[allow(unused)]
-    seed: [u8; 32],
 }
 
 impl Signer for Ed25519Signer {
@@ -59,12 +57,11 @@ impl Identity for Ed25519Signer {
 
 impl TryFrom<&str> for Ed25519Signer {
     type Error = anyhow::Error;
-    fn try_from(phrase: &str) -> std::result::Result<Self, Self::Error> {
-        // let (pair, seed) = sp_keyring::ed25519::Pair::from_phrase(phrase, None)?;
-        let (pair, seed) = sp_core::ed25519::Pair::from_phrase(phrase, None)
+    fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
+        let (pair, _) = sp_core::ed25519::Pair::from_string_with_seed(s, None)
             .map_err(|err| anyhow!("{:?}", err))?;
 
-        Ok(Self { pair, seed })
+        Ok(Self { pair })
     }
 }
 
