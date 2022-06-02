@@ -345,18 +345,22 @@ mod tests {
         let mut conn = storage.get_connection().await?;
         let queue = storage.prefixed(Queue::Local);
 
+        use std::time::SystemTime;
         let msg = Message {
             version: 1,
             id: String::from(id),
             command: String::from("test.get"),
-            expiration: 0,
+            expiration: 300,
             data: String::from(""),
             source: 1,
             destination: vec![4],
             reply: String::from("de31075e-9af4-4933-b107-c36887d0c0f0"),
             retry: 2,
             schema: String::from(""),
-            timestamp: 1653454930,
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             error: None,
             signature: None,
         };
