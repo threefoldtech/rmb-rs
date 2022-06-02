@@ -1,11 +1,13 @@
 mod substrate;
 
-use crate::types::Message;
 use anyhow::Result;
 use async_trait::async_trait;
 use parity_scale_codec::Decode;
 use serde::{Deserialize, Serialize};
 use sp_core::crypto::AccountId32;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 pub use substrate::*;
 
 #[async_trait]
@@ -29,8 +31,18 @@ pub struct Twin {
     pub entities: Vec<EntityProof>,
 }
 
-impl Twin {
-    pub async fn _verify(&self, _msg: &Message) -> Result<()> {
-        Ok(())
+#[async_trait]
+impl<T> TwinDB for Arc<Mutex<T>>
+where
+    T: TwinDB,
+{
+    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>> {
+        let inner = self.lock().await;
+        inner.get_twin(twin_id).await
+    }
+
+    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<u32> {
+        let inner = self.lock().await;
+        inner.get_twin_with_account(account_id).await
     }
 }

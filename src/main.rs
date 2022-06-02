@@ -21,8 +21,10 @@ use identity::Identity;
 use proxy::ProxyWorker;
 use std::fmt::Display;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
+use tokio::sync::Mutex;
 use twin::{SubstrateTwinDB, TwinDB};
 
 const MIN_RETRIES: usize = 1;
@@ -141,6 +143,18 @@ async fn app(args: &Args) -> Result<()> {
     )
     .context("cannot create substrate twin db object")?;
 
+    // We are surrounding the twin db in a mutex to avoid race when a lot of workers
+    // are trying to solve the same twin id. When this twin is not yet available in cache
+    // all worker might start trying to get the twin from substrate.
+    // so a 1000 workers might be looking up the same object from substrate.
+    // todo!:
+    // instead of this temporary solution, we need to do the following
+    //  - cache hits can be done in parallel, no locking
+    //  - if twin is not found, we either
+    //  - make sure that only one substrate fetch is running for this twin id
+    //  - or we make sure that there is always max number of fetches running
+    let db = Arc::new(Mutex::new(db));
+
     let id = db
         .get_twin_with_account(identity.account())
         .await
@@ -232,6 +246,9 @@ async fn processor<S: Storage>(id: u32, storage: S) {
 
 #[tokio::main]
 async fn main() {
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 10240, 10240)
+        .unwrap();
+
     let args = Args::parse();
     if let Err(e) = app(&args).await {
         eprintln!("{}", e);

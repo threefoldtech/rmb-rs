@@ -8,7 +8,6 @@ use tokio::task::spawn_blocking;
 use super::Twin;
 use super::TwinDB;
 
-#[derive(Clone)]
 pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
