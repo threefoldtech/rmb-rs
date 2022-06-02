@@ -70,11 +70,9 @@ where
     }
     async fn get<S: ToString + Send + Sync>(&self, key: S) -> Result<Option<T>> {
         let mut conn = self.get_connection().await?;
+        let key = format!("{}.{}", self.prefix, key.to_string());
 
-        let ret: Option<Vec<u8>> = cmd("GET")
-            .arg(key.to_string())
-            .query_async(&mut *conn)
-            .await?;
+        let ret: Option<Vec<u8>> = cmd("GET").arg(key).query_async(&mut *conn).await?;
 
         match ret {
             Some(val) => {
