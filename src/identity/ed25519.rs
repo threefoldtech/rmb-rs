@@ -71,3 +71,27 @@ fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> bo
     assert_eq!(sig[0], PREFIX, "invalid signature type");
     EdPair::verify_weak(&sig[1..], message, pk)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WORDS: &str = "neck stage box cup core magic produce exercise happy rely vocal then";
+    const SEED: &str = "0xaa4e323bade8609a595108b585c4135855430c411ccf7923f81438cd8a188fce";
+
+    #[test]
+    fn test_load_from_mnemonics() {
+        Ed25519Signer::try_from(WORDS).expect("key must be loaded");
+
+        let err = Ed25519Signer::try_from("invalid words");
+        assert_eq!(err.is_err(), true);
+    }
+
+    #[test]
+    fn test_load_from_seed() {
+        Ed25519Signer::try_from(SEED).expect("key must be loaded");
+
+        let err = Ed25519Signer::try_from("0xinvalidseed");
+        assert_eq!(err.is_err(), true);
+    }
+}
