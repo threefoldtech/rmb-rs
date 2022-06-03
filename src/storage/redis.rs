@@ -352,6 +352,7 @@ mod tests {
             command: String::from("test.get"),
             expiration: 300,
             data: String::from(""),
+            tag: None,
             source: 1,
             destination: vec![4],
             reply: String::from("de31075e-9af4-4933-b107-c36887d0c0f0"),
