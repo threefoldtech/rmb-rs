@@ -12,6 +12,10 @@ jobs:
     # we use 18.04 to be compatible with libc version on zos
     runs-on: ubuntu-20.04
     steps:
+      - name: Prepare
+        run: |
+          sudo apt-get update
+          sudo apt-get install musl-dev musl-tools
       - name: Checkout code
         uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
