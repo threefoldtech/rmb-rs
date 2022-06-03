@@ -19,7 +19,7 @@ use clap::Parser;
 use http_api::HttpApi;
 use identity::Identity;
 use proxy::ProxyWorker;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
@@ -66,17 +66,21 @@ fn between<T: Ord>(v: T, min: T, max: T) -> T {
     v
 }
 
-/// Simple program to greet a person
+/// the grid message bus
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// key type
-    #[clap(short, long, default_value_t = KeyType::Ed25519)]
+    #[clap(short, long, default_value_t = KeyType::Sr25519)]
     key_type: KeyType,
 
     /// key mnemonics
     #[clap(short, long)]
-    mnemonics: String,
+    mnemonics: Option<String>,
+
+    /// seed as hex
+    #[clap(long, conflicts_with = "mnemonics")]
+    seed: Option<String>,
 
     /// redis address
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
@@ -114,15 +118,29 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
         .init()?;
 
+    // this will get either a prefixed "0x" seed or mnemonics
+    let secret = if let Some(seed) = &args.seed {
+        if !seed.to_lowercase().starts_with("0x") {
+            format!("0x{}", seed)
+        } else {
+            seed.clone()
+        }
+    } else {
+        match &args.mnemonics {
+            Some(mnemonics) => mnemonics.clone(),
+            None => bail!("either mnemonics or seed must be provided"),
+        }
+    };
+
     let identity = match args.key_type {
         KeyType::Ed25519 => {
-            let sk = identity::Ed25519Signer::try_from(args.mnemonics.as_str())
-                .context("failed to load ed25519 key from mnemonics")?;
+            let sk = identity::Ed25519Signer::try_from(secret.as_str())
+                .context("failed to load ed25519 key from mnemonics or seed")?;
             identity::Signers::Ed25519(sk)
         }
         KeyType::Sr25519 => {
-            let sk = identity::Sr25519Signer::try_from(args.mnemonics.as_str())
-                .context("failed to load sr25519 key from mnemonics")?;
+            let sk = identity::Sr25519Signer::try_from(secret.as_str())
+                .context("failed to load sr25519 key from mnemonics or seed")?;
             identity::Signers::Sr25519(sk)
         }
     };
