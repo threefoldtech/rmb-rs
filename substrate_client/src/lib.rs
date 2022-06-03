@@ -18,15 +18,16 @@ impl SubstrateClient {
         Ok(Self { api })
     }
 
-    pub fn get_twin<T: Decode>(&self, id: u32) -> Result<T> {
-        let twin: T = self
+    pub fn get_twin<T: Decode>(&self, id: u32) -> Result<Option<T>> {
+        let value = self
             .api
-            .get_storage_map("TfgridModule", "Twins", id.encode(), None)?
-            .ok_or(anyhow::anyhow!("twin id is not found"))?
-            .decode()
-            .context("failed to decode twin object")?;
+            .get_storage_map("TfgridModule", "Twins", id.encode(), None)?;
+        let object = match value {
+            Some(value) => Some(value.decode().context("failed to decode object")?),
+            None => return Ok(None),
+        };
 
-        Ok(twin)
+        Ok(object)
     }
 
     pub fn get_twin_id_by_account_id(&self, account_id: AccountId32) -> Result<u32> {

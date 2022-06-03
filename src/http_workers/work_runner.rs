@@ -169,9 +169,10 @@ where
     I: Signer,
     S: Storage,
 {
-    type Job = TransitMessage;
+    type Input = TransitMessage;
+    type Output = ();
 
-    async fn run(&self, job: Self::Job) {
+    async fn run(&self, job: Self::Input) {
         //identify uri and extract msg
         log::debug!("http worker received a job");
         let (queue, msg) = match job {

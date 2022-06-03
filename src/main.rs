@@ -21,10 +21,8 @@ use identity::Identity;
 use proxy::ProxyWorker;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
-use tokio::sync::Mutex;
 use twin::{SubstrateTwinDB, TwinDB};
 
 const MIN_RETRIES: usize = 1;
@@ -135,25 +133,9 @@ async fn app(args: &Args) -> Result<()> {
 
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        Some(cache::RedisCache::new(
-            pool.clone(),
-            "twin",
-            Duration::from_secs(600),
-        )),
+        cache::RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
     .context("cannot create substrate twin db object")?;
-
-    // We are surrounding the twin db in a mutex to avoid race when a lot of workers
-    // are trying to solve the same twin id. When this twin is not yet available in cache
-    // all worker might start trying to get the twin from substrate.
-    // so a 1000 workers might be looking up the same object from substrate.
-    // todo!:
-    // instead of this temporary solution, we need to do the following
-    //  - cache hits can be done in parallel, no locking
-    //  - if twin is not found, we either
-    //  - make sure that only one substrate fetch is running for this twin id
-    //  - or we make sure that there is always max number of fetches running
-    let db = Arc::new(Mutex::new(db));
 
     let id = db
         .get_twin_with_account(identity.account())

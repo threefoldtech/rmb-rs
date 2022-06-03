@@ -32,3 +32,19 @@ where
         }
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct NoCache;
+
+#[async_trait]
+impl<T> Cache<T> for NoCache
+where
+    T: Send + Sync + 'static,
+{
+    async fn set<S: ToString + Send + Sync>(&self, _id: S, _obj: T) -> Result<()> {
+        Ok(())
+    }
+    async fn get<S: ToString + Send + Sync>(&self, _id: S) -> Result<Option<T>> {
+        Ok(None)
+    }
+}
