@@ -133,11 +133,7 @@ async fn app(args: &Args) -> Result<()> {
 
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        Some(cache::RedisCache::new(
-            pool.clone(),
-            "twin",
-            Duration::from_secs(600),
-        )),
+        cache::RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
     .context("cannot create substrate twin db object")?;
 
@@ -232,6 +228,9 @@ async fn processor<S: Storage>(id: u32, storage: S) {
 
 #[tokio::main]
 async fn main() {
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 10240, 10240)
+        .unwrap();
+
     let args = Args::parse();
     if let Err(e) = app(&args).await {
         eprintln!("{}", e);

@@ -1,11 +1,11 @@
 mod substrate;
 
-use crate::types::Message;
 use anyhow::Result;
 use async_trait::async_trait;
 use parity_scale_codec::Decode;
 use serde::{Deserialize, Serialize};
 use sp_core::crypto::AccountId32;
+
 pub use substrate::*;
 
 #[async_trait]
@@ -27,10 +27,4 @@ pub struct Twin {
     pub account: sp_core::crypto::AccountId32,
     pub address: String, // we use string not IP because the twin address can be a dns name
     pub entities: Vec<EntityProof>,
-}
-
-impl Twin {
-    pub async fn _verify(&self, _msg: &Message) -> Result<()> {
-        Ok(())
-    }
 }

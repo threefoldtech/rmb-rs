@@ -1,17 +1,17 @@
 use tokio::sync::{mpsc, oneshot};
 
-use super::Work;
+use super::{Job, Work};
 
 pub struct Worker<W: Work> {
     work: W,
-    sender: mpsc::Sender<oneshot::Sender<W::Job>>,
+    sender: mpsc::Sender<Job<W>>,
 }
 
 impl<W> Worker<W>
 where
     W: Work + Send + Sync + 'static,
 {
-    pub fn new(work: W, sender: mpsc::Sender<oneshot::Sender<W::Job>>) -> Self {
+    pub fn new(work: W, sender: mpsc::Sender<Job<W>>) -> Self {
         Self { work, sender }
     }
     pub fn run(self) {
@@ -25,7 +25,12 @@ where
                 }
 
                 match rx.await {
-                    Ok(job) => self.work.run(job).await,
+                    Ok(job) => {
+                        let result = self.work.run(job.0).await;
+                        if let Some(ch) = job.1 {
+                            let _ = ch.send(result);
+                        }
+                    }
                     Err(_) => {
                         log::debug!("worker handler dropped without receiving a job");
                     }

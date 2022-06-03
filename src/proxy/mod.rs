@@ -96,9 +96,10 @@ where
     S: ProxyStorage,
     T: TwinDB,
 {
-    type Job = TransitMessage;
+    type Input = TransitMessage;
+    type Output = ();
 
-    async fn run(&self, job: Self::Job) {
+    async fn run(&self, job: Self::Input) {
         match job {
             TransitMessage::Request(msg) => self.request(msg).await,
             TransitMessage::Reply(msg) => self.reply(msg).await,
