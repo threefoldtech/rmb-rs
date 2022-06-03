@@ -26,6 +26,8 @@ pub struct Message {
     pub retry: usize,
     #[serde(rename = "dat")]
     pub data: String,
+    #[serde(rename = "tag")]
+    pub tag: Option<String>,
     #[serde(rename = "src")]
     pub source: u32,
     #[serde(rename = "dst")]
@@ -51,6 +53,7 @@ impl Default for Message {
             expiration: Default::default(),
             retry: Default::default(),
             data: Default::default(),
+            tag: None,
             source: Default::default(),
             destination: Default::default(),
             reply: Default::default(),

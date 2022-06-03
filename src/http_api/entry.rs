@@ -187,7 +187,10 @@ async fn rmb_reply_handler<S: Storage, I: Identity, D: TwinDB>(
         }
     };
 
+    // reset the values back to original
+    // as per the source.
     message.reply = source.reply;
+    message.tag = source.tag;
 
     data.storage
         .reply(&message)

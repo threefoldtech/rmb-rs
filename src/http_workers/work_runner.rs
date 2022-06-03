@@ -175,62 +175,69 @@ where
     async fn run(&self, job: Self::Input) {
         //identify uri and extract msg
         log::debug!("http worker received a job");
-        let (queue, msg) = match job {
+        let (queue, mut msg) = match job {
             TransitMessage::Request(msg) => (Queue::Request, msg),
             TransitMessage::Reply(msg) => (Queue::Reply, msg),
         };
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
         let retry = Self::retries(msg.retry);
-        for id in &msg.destination {
-            log::debug!(
-                "forwarding message to destination '{}' '{}'",
-                id,
-                queue.as_ref()
-            );
-            let mut msg = msg.clone();
-            //let uri_path = uri_path.clone();
-            // getting twin object
-            let twin = match self.get_twin(*id, retry).await {
-                Some(twin) => twin,
-                None if queue == Queue::Request => {
-                    self.handle_delivery_err(
-                        *id,
-                        msg,
-                        SendError::Terminal(format!("twin with id {} not found", *id)),
-                    )
-                    .await;
+        assert_eq!(
+            msg.destination.len(),
+            1,
+            "expecting only one destination in worker"
+        );
+        let id = msg.destination[0];
 
-                    continue;
-                }
-                None => continue,
-            };
+        log::debug!(
+            "forwarding message to destination '{}' '{}'",
+            id,
+            queue.as_ref()
+        );
+        // getting twin object
+        let twin = match self.get_twin(id, retry).await {
+            Some(twin) => twin,
+            None if queue == Queue::Request => {
+                self.handle_delivery_err(
+                    id,
+                    msg,
+                    SendError::Terminal(format!("twin with id {} not found", id)),
+                )
+                .await;
 
-            // encrypt dat
-            msg.data = match Self::encrypt_dat(msg.data, &twin) {
-                Ok(dat) => dat,
-                Err(_err) => {
-                    todo!()
-                }
-            };
-
-            // signing the message
-            msg.sign(&self.identity);
-
-            // posting the message to the remote twin
-            let mut result = Ok(());
-            for _ in 0..retry {
-                result = self.send_msg(&twin, &queue, &msg).await;
-                if let Err(SendError::Error(_)) = &result {
-                    continue;
-                }
-                break;
+                return;
             }
+            None => return,
+        };
 
-            if result.is_err() && queue == Queue::Request {
-                self.handle_delivery_err(twin.id, msg, result.err().unwrap())
-                    .await;
+        // encrypt dat
+        msg.data = match Self::encrypt_dat(msg.data, &twin) {
+            Ok(dat) => dat,
+            Err(_err) => {
+                todo!()
             }
+        };
+
+        // we always reset the tag to none before
+        // sending to remote
+        msg.tag = None;
+
+        // signing the message
+        msg.sign(&self.identity);
+
+        // posting the message to the remote twin
+        let mut result = Ok(());
+        for _ in 0..retry {
+            result = self.send_msg(&twin, &queue, &msg).await;
+            if let Err(SendError::Error(_)) = &result {
+                continue;
+            }
+            break;
+        }
+
+        if result.is_err() && queue == Queue::Request {
+            self.handle_delivery_err(twin.id, msg, result.err().unwrap())
+                .await;
         }
     }
 }
