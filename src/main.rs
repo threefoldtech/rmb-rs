@@ -27,6 +27,8 @@ use twin::{SubstrateTwinDB, TwinDB};
 
 const MIN_RETRIES: usize = 1;
 const MAX_RETRIES: usize = 5;
+const GIT_VERSION: &str =
+    git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 
 #[derive(Debug)]
 enum KeyType {
@@ -66,9 +68,9 @@ fn between<T: Ord>(v: T, min: T, max: T) -> T {
     v
 }
 
-/// the grid message bus
+/// the reliable message bus
 #[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
+#[clap(name ="rmb", author, version = GIT_VERSION, about, long_about = None)]
 struct Args {
     /// key type
     #[clap(short, long, default_value_t = KeyType::Sr25519)]
@@ -78,7 +80,7 @@ struct Args {
     #[clap(short, long)]
     mnemonics: Option<String>,
 
-    /// seed as hex
+    /// seed as hex (must start with 0x)
     #[clap(long, conflicts_with = "mnemonics")]
     seed: Option<String>,
 
@@ -118,18 +120,14 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
         .init()?;
 
-    // this will get either a prefixed "0x" seed or mnemonics
-    let secret = if let Some(seed) = &args.seed {
-        if !seed.to_lowercase().starts_with("0x") {
-            format!("0x{}", seed)
-        } else {
-            seed.clone()
-        }
-    } else {
-        match &args.mnemonics {
-            Some(mnemonics) => mnemonics.clone(),
-            None => bail!("either mnemonics or seed must be provided"),
-        }
+    let secret = match args.mnemonics {
+        Some(ref m) => m,
+        None => match args.seed {
+            Some(ref s) => s,
+            None => {
+                bail!("either mnemonics or seed must be provided");
+            }
+        },
     };
 
     let identity = match args.key_type {
@@ -244,10 +242,33 @@ async fn processor<S: Storage>(id: u32, storage: S) {
     }
 }
 
+/// set_ca populate the SSL_CERT_DIR environment variable
+/// only if built against musl and none of the SSL variables
+/// are passed by the user.
+fn set_ca() {
+    if std::cfg!(target_env = "musl") {
+        use std::env;
+        let file = env::var_os("SSL_CERT_FILE");
+        let dir = env::var_os("SSL_CERT_DIR");
+        if file.is_some() || dir.is_some() {
+            // user already setting up environment file
+            // for certificate
+            return;
+        }
+
+        // nothing is set, override
+        env::set_var("SSL_CERT_DIR", "/etc/ssl/certs")
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 10240, 10240)
+    // we set the soft, hard limit of max number of open file to a big value so we can handle as much connections
+    // as possible.
+    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 16384, 16384)
         .unwrap();
+
+    set_ca();
 
     let args = Args::parse();
     if let Err(e) = app(&args).await {
