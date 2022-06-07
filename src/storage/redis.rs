@@ -115,7 +115,9 @@ impl RedisStorage {
         };
 
         let key = self.prefixed(Queue::Backlog(&msg.id));
-        con.set_ex(&key, msg, ttl.as_secs() as usize).await?;
+        con.set_ex(&key, msg, ttl.as_secs() as usize)
+            .await
+            .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
 
         Ok(())
     }
