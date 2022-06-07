@@ -123,17 +123,29 @@ impl Message {
         Ok(())
     }
 
-    /// stamp sets the correct timestamp on the message. This is done
-    /// by validating the stamp set by the user so if the stamp is
-    /// in the future, the stamp is updated to `now`.
+    /// stamp sets the correct timestamp on the message.
+    /// - first validate the timestamp set by a client if in the future, it's reset to now
+    /// - if the timestamp is (now) or in the past. the timestamp is updated also to now
+    ///   but the expiration period is recalculated so the message deadline does not change
     pub fn stamp(&mut self) {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+
         if self.timestamp > now {
             self.timestamp = now;
+            return;
         }
+
+        // we checked above so we sure that du is 0 or higher (no overflow)
+        let du = now - self.timestamp;
+        self.expiration = match self.expiration.checked_sub(du) {
+            Some(v) => v,
+            None => 0,
+        };
+
+        self.timestamp = now;
     }
 
     /// ttl returns the time to live of this message
@@ -144,29 +156,39 @@ impl Message {
             .unwrap()
             .as_secs();
 
-        // to compute the ttl we need to do the following
-        // - ttl = expiration - (now - msg.timestamp)
-        match now.checked_sub(self.timestamp) {
-            Some(d) => self.expiration.checked_sub(d).map(Duration::from_secs),
+        // (ts+exp) - now
+        match (self.timestamp + self.expiration).checked_sub(now) {
             None => None,
+            Some(0) => None,
+            Some(d) => Some(Duration::from_secs(d)),
         }
     }
 
     /// generic validation on the message
     pub fn valid(&self) -> Result<()> {
-        let ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        // ts has to be in the future of self.now
-        let du = match ts.checked_sub(Duration::from_secs(self.timestamp)) {
-            Some(du) => du,
-            None => bail!("message 'now' is in the future"),
-        };
-        if du.as_secs() > 60 {
-            bail!("message is too old ('{}' seconds)", du.as_secs());
+        if self.ttl().is_none() {
+            bail!("message has expired");
         }
 
         Ok(())
+    }
+
+    /// age returns the now - message.timestamp
+    /// this will give how old the message was when
+    /// it was last stamped.
+    /// if timestamp is in the future, age will be MAX
+    pub fn age(&self) -> Duration {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // to compute the ttl we need to do the following
+        // - ttl = expiration - (now - msg.timestamp)
+        match now.checked_sub(self.timestamp) {
+            Some(d) => Duration::from_secs(d),
+            None => Duration::MAX,
+        }
     }
 }
 
