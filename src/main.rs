@@ -273,7 +273,7 @@ async fn main() {
     const MAX_NOFILE: u64 = 63185;
     let max = if max < MAX_NOFILE {
         log::warn!(
-            "maximum possible connections is set at '{}' please set as root for higher value",
+            "maximum possible connections is set at '{}' please run as root for higher value",
             max
         );
         max
