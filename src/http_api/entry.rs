@@ -9,7 +9,11 @@ use hyper::{
 };
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::time::Duration;
 use thiserror::Error;
+
+const MAX_AGE: Duration = Duration::from_secs(60);
+
 pub struct HttpApi<S, I, D>
 where
     S: Storage,
@@ -109,6 +113,12 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
+    // we need to also check the message age to make sure
+    // it's not a 'reply'
+    if message.age() > MAX_AGE {
+        return Err(HandlerError::BadRequest(anyhow!("message is too old")));
+    }
+
     // check the dst of the message is correct
     if message.destination.is_empty() || message.destination[0] != data.twin as u32 {
         return Err(HandlerError::InvalidDestination(message.destination[0]));
@@ -131,7 +141,10 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         }
     };
 
-    message.valid().context("message validation failed")?;
+    message
+        .valid()
+        .context("message validation failed")
+        .map_err(HandlerError::BadRequest)?;
 
     //verify the message
     message
@@ -161,9 +174,12 @@ pub async fn rmb_remote<S: Storage, I: Identity, D: TwinDB>(
         Ok(_) => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
-        Err(error) => Response::builder()
-            .status(error.code())
-            .body(Body::from(error.to_string())),
+        Err(error) => {
+            log::debug!("failed to handle request message: {}", error);
+            Response::builder()
+                .status(error.code())
+                .body(Body::from(error.to_string()))
+        }
     }
 }
 
@@ -266,6 +282,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        msg.expiration = 300;
         msg.sign(&Identities::get_sender_identity());
 
         let request = req
@@ -303,6 +320,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        msg.expiration = 10;
         msg.sign(&Identities::get_sender_identity());
 
         let request = req
