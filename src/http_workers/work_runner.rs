@@ -161,17 +161,18 @@ where
         // we always reset the tag to none before
         // sending to remote
         msg.tag = None;
-        msg.stamp();
-        msg.valid()
-            .context("message validation failed")
-            .map_err(SendError::Error)?;
-
-        // signing the message
-        msg.sign(&self.identity);
 
         // posting the message to the remote twin
         let mut result = Ok(());
         for _ in 0..retry {
+            msg.stamp();
+            msg.valid()
+                .context("message validation failed")
+                .map_err(SendError::Error)?;
+
+            // signing the message
+            msg.sign(&self.identity);
+
             result = self.send_once(&twin, &queue, &msg).await;
             if let Err(SendError::Error(_)) = &result {
                 continue;

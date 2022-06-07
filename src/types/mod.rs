@@ -159,7 +159,7 @@ impl Message {
     /// age returns the now - message.timestamp
     /// this will give how old the message was when
     /// it was last stamped.
-    /// if timestamp is in the future, age will be MAX
+    /// if timestamp is in the future, age will be 0
     pub fn age(&self) -> Duration {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -168,10 +168,12 @@ impl Message {
 
         // to compute the ttl we need to do the following
         // - ttl = expiration - (now - msg.timestamp)
-        match now.checked_sub(self.timestamp) {
-            Some(d) => Duration::from_secs(d),
-            None => Duration::MAX,
-        }
+        let d = match now.checked_sub(self.timestamp) {
+            Some(d) => d,
+            None => 0,
+        };
+
+        Duration::from_secs(d)
     }
 }
 

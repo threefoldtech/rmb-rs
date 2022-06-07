@@ -113,6 +113,12 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
+    // we need to also check the message age to make sure
+    // it's not a 'reply'
+    if message.age() > MAX_AGE {
+        return Err(HandlerError::BadRequest(anyhow!("message is too old")));
+    }
+
     // check the dst of the message is correct
     if message.destination.is_empty() || message.destination[0] != data.twin as u32 {
         return Err(HandlerError::InvalidDestination(message.destination[0]));
@@ -139,12 +145,6 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .valid()
         .context("message validation failed")
         .map_err(HandlerError::BadRequest)?;
-
-    // we need to also check the message age to make sure
-    // it's not a 'reply'
-    if message.age() > MAX_AGE {
-        return Err(HandlerError::BadRequest(anyhow!("message is too old")));
-    }
 
     //verify the message
     message
@@ -282,6 +282,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        msg.expiration = 300;
         msg.sign(&Identities::get_sender_identity());
 
         let request = req
@@ -319,6 +320,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        msg.expiration = 10;
         msg.sign(&Identities::get_sender_identity());
 
         let request = req
