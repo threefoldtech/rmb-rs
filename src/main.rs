@@ -265,8 +265,25 @@ fn set_ca() {
 async fn main() {
     // we set the soft, hard limit of max number of open file to a big value so we can handle as much connections
     // as possible.
-    nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE, 16384, 16384)
+    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+    let (_, max) = getrlimit(Resource::RLIMIT_NOFILE)
+        .context("failed to get rlimit")
         .unwrap();
+
+    const MAX_NOFILE: u64 = 63185;
+    let max = if max < MAX_NOFILE {
+        log::warn!(
+            "maximum possible connections is set at '{}' please set as root for higher value",
+            max
+        );
+        max
+    } else {
+        MAX_NOFILE
+    };
+
+    if let Err(err) = setrlimit(Resource::RLIMIT_NOFILE, max, max) {
+        log::warn!("failed to increase max number of open files: {}", err)
+    }
 
     set_ca();
 
