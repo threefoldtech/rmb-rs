@@ -173,7 +173,7 @@ where
             // signing the message
             msg.sign(&self.identity);
 
-            result = self.send_once(&twin, &queue, &msg).await;
+            result = self.send_once(&twin, &queue, msg).await;
             if let Err(SendError::Error(_)) = &result {
                 continue;
             }

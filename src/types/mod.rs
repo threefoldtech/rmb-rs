@@ -168,12 +168,7 @@ impl Message {
 
         // to compute the ttl we need to do the following
         // - ttl = expiration - (now - msg.timestamp)
-        let d = match now.checked_sub(self.timestamp) {
-            Some(d) => d,
-            None => 0,
-        };
-
-        Duration::from_secs(d)
+        Duration::from_secs(now.saturating_sub(self.timestamp))
     }
 }
 
@@ -234,10 +229,7 @@ fn stamp(now: u64, ts: u64, exp: u64) -> (u64, u64) {
     // we checked above so we sure that du is 0 or higher (no overflow)
     let du = now - ts;
 
-    let exp = match exp.checked_sub(du) {
-        Some(v) => v,
-        None => 0,
-    };
+    let exp = exp.saturating_sub(du);
 
     (now, exp)
 }
