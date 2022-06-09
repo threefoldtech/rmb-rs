@@ -1,4 +1,4 @@
-mod memory;
+pub mod memory;
 mod redis;
 pub use memory::MemCache;
 pub use redis::RedisCache;

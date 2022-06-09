@@ -11,6 +11,7 @@ mod storage;
 mod twin;
 mod types;
 mod workers;
+mod tests;
 
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
