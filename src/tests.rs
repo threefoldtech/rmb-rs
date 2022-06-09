@@ -14,8 +14,35 @@ use crate::anyhow::{Context, Result};
 use crate::http_api::HttpApi;
 use crate::twin::TwinDB;
 
+use std::collections::HashMap;
+
+#[derive(Default, Clone)]
+struct InMemoryDB {
+    pub twins: HashMap<u32, Twin>,
+}
+
+impl InMemoryDB {
+    fn add(&mut self, twin: Twin) {
+        self.twins.insert(twin.id, twin);
+    }
+}
+
+#[async_trait::async_trait]
+impl TwinDB for InMemoryDB {
+    async fn get_twin(&self, twin_id: u32) -> anyhow::Result<Option<Twin>> {
+        Ok(self.twins.get(&twin_id).map(|t| t.clone()))
+    }
+
+    async fn get_twin_with_account(
+        &self,
+        _account_id: sp_runtime::AccountId32,
+    ) -> anyhow::Result<u32> {
+        unimplemented!()
+    }
+}
+
 async fn start_rmb(
-    db: SubstrateTwinDB<MemCache<Twin>>,
+    db: InMemoryDB,
     storage: RedisStorage,
     ident: identity::Ed25519Signer,
     address: String,
@@ -65,8 +92,6 @@ async fn test_end_to_end() {
     let t1 = identity::Ed25519Signer::try_from(WORDS1).unwrap();
     let t2 = identity::Ed25519Signer::try_from(WORDS2).unwrap();
 
-    // create cache
-    let mem: MemCache<Twin> = MemCache::new();
     // create dummy entities for testing
     let twin1: Twin = Twin {
         version: 1,
@@ -82,21 +107,12 @@ async fn test_end_to_end() {
         address: "127.0.0.1:5820".to_string(),
         entities: vec![],
     };
-    // insert dummy entities into cache
-    mem.set(1, twin1.clone())
-        .await
-        .context("can not set value to cache")
-        .unwrap();
-    mem.set(2, twin2.clone())
-        .await
-        .context("can not set value to cache")
-        .unwrap();
-
-    // create db
-    let db1 =
-        SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", mem.clone()).unwrap();
-    let db2 =
-        SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", mem.clone()).unwrap();
+    // creating mock db
+    let mut db1 = InMemoryDB::default();
+    // insert dummy entities into mock db
+    db1.add(twin1.clone());
+    db1.add(twin2.clone());
+    let mut db2 = db1.clone();
 
     // test get fake twin id
     let twin = db1
