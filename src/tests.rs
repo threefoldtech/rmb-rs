@@ -3,12 +3,11 @@ use crate::anyhow::{Context, Result};
 use crate::http_api::HttpApi;
 use crate::http_workers::HttpWorker;
 use crate::identity;
-use crate::identity::Identity;
+use crate::identity::{Identity, Signer};
 use crate::proxy::ProxyWorker;
 use crate::redis;
-use crate::storage::RedisStorage;
-use crate::twin::Twin;
-use crate::twin::TwinDB;
+use crate::storage::{ProxyStorage, RedisStorage, Storage};
+use crate::twin::{Twin, TwinDB};
 use std::collections::HashMap;
 
 #[derive(Default, Clone)]
@@ -36,10 +35,14 @@ impl TwinDB for InMemoryDB {
     }
 }
 
-async fn start_rmb(
-    db: InMemoryDB,
-    storage: RedisStorage,
-    ident: identity::Ed25519Signer,
+async fn start_rmb<
+    D: TwinDB + Clone,
+    S: Storage + ProxyStorage + Clone,
+    I: Identity + Signer + 'static,
+>(
+    db: D,
+    storage: S,
+    ident: I,
     address: String,
 ) -> Result<()> {
     let processor_handler_1 = tokio::spawn(processor(1, storage.clone()));
