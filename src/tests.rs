@@ -1,39 +1,33 @@
 use super::processor;
-use crate::identity;
-use crate::identity::Identity;
 use crate::cache::memory::MemCache;
 use crate::cache::Cache;
-use crate::redis;
-use crate::storage::{RedisStorage};
-use crate::proxy::ProxyWorker;
 use crate::http_workers::HttpWorker;
+use crate::identity;
+use crate::identity::Identity;
+use crate::proxy::ProxyWorker;
+use crate::redis;
+use crate::storage::RedisStorage;
 
 use crate::twin::{SubstrateTwinDB, Twin};
 
 use crate::anyhow::{Context, Result};
-use crate::twin::TwinDB;
 use crate::http_api::HttpApi;
+use crate::twin::TwinDB;
 
-
-async fn start_rmb(db:SubstrateTwinDB::<MemCache<Twin>>, storage:RedisStorage, ident:identity::Ed25519Signer, address:String) -> Result<()> {
-
+async fn start_rmb(
+    db: SubstrateTwinDB<MemCache<Twin>>,
+    storage: RedisStorage,
+    ident: identity::Ed25519Signer,
+    address: String,
+) -> Result<()> {
     let processor_handler_1 = tokio::spawn(processor(1, storage.clone()));
 
-    let api_handler_1 = tokio::spawn(
-        HttpApi::new(
-            1,
-            address,
-            storage.clone(),
-            ident.clone(),
-            db.clone(),
-        )?
-        .run(),
-    );
+    let api_handler_1 =
+        tokio::spawn(HttpApi::new(1, address, storage.clone(), ident.clone(), db.clone())?.run());
 
     let proxy_handler_1 = tokio::spawn(ProxyWorker::new(1, 10, storage.clone(), db.clone()).run());
 
-    let workers_handler_1 =
-        tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
+    let workers_handler_1 = tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
 
     tokio::select! {
         result = processor_handler_1 => {
@@ -59,14 +53,14 @@ async fn start_rmb(db:SubstrateTwinDB::<MemCache<Twin>>, storage:RedisStorage, i
             }
         },
     };
-unreachable!();
+    unreachable!();
 }
-
 
 #[tokio::test]
 async fn test_end_to_end() {
     const WORDS1: &str = "neck stage box cup core magic produce exercise happy rely vocal then";
-    const WORDS2: &str = "nominee slow sting tell point bleak sheriff outer push visual basket grief";
+    const WORDS2: &str =
+        "nominee slow sting tell point bleak sheriff outer push visual basket grief";
     // load from WORD
     let t1 = identity::Ed25519Signer::try_from(WORDS1).unwrap();
     let t2 = identity::Ed25519Signer::try_from(WORDS2).unwrap();
@@ -91,28 +85,27 @@ async fn test_end_to_end() {
         entities: vec![],
     };
     // insert dummy entities into cache
-    mem.set(1, twin1.clone()).await
-    .context("can not set value to cache")
-    .unwrap();
-    mem.set(2, twin2.clone()).await
-    .context("can not set value to cache")
-    .unwrap();
-    
+    mem.set(1, twin1.clone())
+        .await
+        .context("can not set value to cache")
+        .unwrap();
+    mem.set(2, twin2.clone())
+        .await
+        .context("can not set value to cache")
+        .unwrap();
+
     // create db
-    let db1 = SubstrateTwinDB::<MemCache<Twin>>::new(
-        "wss://tfchain.dev.grid.tf",
-        mem.clone(),
-    ).unwrap();
-    let db2 = SubstrateTwinDB::<MemCache<Twin>>::new(
-        "wss://tfchain.dev.grid.tf",
-        mem.clone(),
-    ).unwrap();
+    let db1 =
+        SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", mem.clone()).unwrap();
+    let db2 =
+        SubstrateTwinDB::<MemCache<Twin>>::new("wss://tfchain.dev.grid.tf", mem.clone()).unwrap();
 
     // test get fake twin id
     let twin = db1
         .get_twin(1)
         .await
-        .context("failed to get own twin id").unwrap();
+        .context("failed to get own twin id")
+        .unwrap();
     assert_eq!(twin, Some(twin1.clone()));
 
     // create redis storage
@@ -120,11 +113,13 @@ async fn test_end_to_end() {
     let redis2 = String::from("redis://localhost:6380");
     let pool1 = redis::pool(&redis1)
         .await
-        .context("failed to initialize redis pool").unwrap();
+        .context("failed to initialize redis pool")
+        .unwrap();
     let pool2 = redis::pool(&redis2)
         .await
-        .context("failed to initialize redis pool").unwrap();
-    
+        .context("failed to initialize redis pool")
+        .unwrap();
+
     let storage1 = RedisStorage::builder(pool1).build();
     let storage2 = RedisStorage::builder(pool2).build();
 
