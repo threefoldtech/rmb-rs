@@ -1,12 +1,12 @@
 use super::processor;
-use crate::cache::memory::MemCache;
 use crate::cache::Cache;
+use crate::cache::MemCache;
 use crate::http_workers::HttpWorker;
 use crate::identity;
 use crate::identity::Identity;
 use crate::proxy::ProxyWorker;
 use crate::redis;
-use crate::storage::RedisStorage;
+use crate::storage::{RedisStorage, Storage};
 
 use crate::twin::{SubstrateTwinDB, Twin};
 
@@ -64,23 +64,21 @@ async fn test_end_to_end() {
     // load from WORD
     let t1 = identity::Ed25519Signer::try_from(WORDS1).unwrap();
     let t2 = identity::Ed25519Signer::try_from(WORDS2).unwrap();
-    // get account id
-    let acc1 = identity::Signers::Ed25519(t1.clone()).account();
-    let acc2 = identity::Signers::Ed25519(t2.clone()).account();
+
     // create cache
     let mem: MemCache<Twin> = MemCache::new();
     // create dummy entities for testing
     let twin1: Twin = Twin {
         version: 1,
         id: 1,
-        account: acc1.clone(),
+        account: t1.account(),
         address: "127.0.0.1:5810".to_string(),
         entities: vec![],
     };
     let twin2: Twin = Twin {
         version: 1,
         id: 2,
-        account: acc2.clone(),
+        account: t2.account(),
         address: "127.0.0.1:5820".to_string(),
         entities: vec![],
     };
@@ -109,13 +107,11 @@ async fn test_end_to_end() {
     assert_eq!(twin, Some(twin1.clone()));
 
     // create redis storage
-    let redis1 = String::from("redis://localhost:6379");
-    let redis2 = String::from("redis://localhost:6380");
-    let pool1 = redis::pool(&redis1)
+    let pool1 = redis::pool("redis://localhost:6379")
         .await
         .context("failed to initialize redis pool")
         .unwrap();
-    let pool2 = redis::pool(&redis2)
+    let pool2 = redis::pool("redis://localhost:6380")
         .await
         .context("failed to initialize redis pool")
         .unwrap();
