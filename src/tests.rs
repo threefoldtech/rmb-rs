@@ -18,6 +18,7 @@ use bb8_redis::{
 use crate::twin::{Twin, TwinDB};
 use std::collections::HashMap;
 use crate::types::Message;
+use tokio::time::{sleep, Duration};
 
 const PREFIX: &str = "test";
 
@@ -55,7 +56,7 @@ fn new_message(command: &str, expiration: u64, retry: usize, data: &str, destina
         .unwrap()
         .as_secs();
     Message {
-        command: format!("msgbus.{}", command),
+        command: String::from(command),
         expiration: expiration,
         retry: retry,
         data: data.to_string(),
@@ -115,6 +116,37 @@ async fn wait_for_responses(
     Ok((responses, err_count, success_count))
 }
 
+// def listen(q):
+// while True:
+// result = r.blpop(f'msgbus.{q}')
+// msg = Message.from_json(result[1])
+// msg.epoch = int(time.time())
+// msg.twin_dst, msg.twin_src = [msg.twin_src], msg.twin_dst[0]
+// print(msg)
+// r.lpush(msg.retqueue, msg.to_json())
+
+async fn handle_cmd(cmd: &str, redis: &str) -> Result<()> {
+    let pool = redis::pool(String::from(redis))
+        .await
+        .context("unable to create redis connection")?;
+    let mut conn = pool.get().await.context("unable to get redis connection")?;
+    loop {
+        let result: Option<(String, String)> = conn.blpop(format!("msgbus.{}", cmd), 100).await.context("unable to get response")?;
+        if result.is_none() {
+            ()
+        }
+        let mut response: Message = serde_json::from_str::<Message>(&result.unwrap().1)
+            .context("unable to parse response")?;
+        response.timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (response.destination, response.source) = (vec![response.source], response.destination[0]);
+        let _ = conn.lpush(&response.reply, &response).await.context("unable to push response")?;
+        println!("replay sent");
+    }
+}
+
 async fn start_rmb<
     D: TwinDB + Clone,
     S: Storage + ProxyStorage + Clone,
@@ -123,36 +155,37 @@ async fn start_rmb<
     db: D,
     storage: S,
     ident: I,
-    address: String,
+    address: &str,
+    id: &u32,
 ) -> Result<()> {
-    let processor_handler_1 = tokio::spawn(processor(1, storage.clone()));
+    let processor_handler = tokio::spawn(processor(*id, storage.clone()));
 
-    let api_handler_1 =
-        tokio::spawn(HttpApi::new(1, address, storage.clone(), ident.clone(), db.clone())?.run());
+    let api_handler =
+        tokio::spawn(HttpApi::new(*id, address, storage.clone(), ident.clone(), db.clone())?.run());
 
-    let proxy_handler_1 = tokio::spawn(ProxyWorker::new(1, 10, storage.clone(), db.clone()).run());
+    let proxy_handler = tokio::spawn(ProxyWorker::new(*id, 10, storage.clone(), db.clone()).run());
 
-    let workers_handler_1 = tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
+    let workers_handler = tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
 
     tokio::select! {
-        result = processor_handler_1 => {
+        result = processor_handler => {
             if let Err(err) = result {
                 bail!("message processor panicked unexpectedly: {}", err);
             }
         },
-        result = api_handler_1 => {
+        result = api_handler => {
             match result {
                 Err(err) => bail!("http server panicked unexpectedly: {}", err),
                 Ok(Ok(_)) => bail!("http server exited unexpectedly"),
                 Ok(Err(err)) => bail!("http server exited with error: {}", err),
             }
         },
-        result = workers_handler_1 => {
+        result = workers_handler => {
             if let Err(err) = result {
                 bail!("http workers panicked unexpectedly: {}", err);
             }
         },
-        result = proxy_handler_1 => {
+        result = proxy_handler => {
             if let Err(err) = result {
                 bail!("proxy workers panicked unexpectedly: {}", err);
             }
@@ -163,6 +196,14 @@ async fn start_rmb<
 
 #[tokio::test]
 async fn test_end_to_end() {
+    simple_logger::SimpleLogger::new()
+        .with_level({
+            log::LevelFilter::Debug})
+        .with_module_level("hyper", log::LevelFilter::Off)
+        .with_module_level("ws", log::LevelFilter::Off)
+        .with_module_level("substrate_api_client", log::LevelFilter::Off)
+        .init().unwrap();
+
     const WORDS1: &str = "neck stage box cup core magic produce exercise happy rely vocal then";
     const WORDS2: &str =
         "nominee slow sting tell point bleak sheriff outer push visual basket grief";
@@ -199,7 +240,6 @@ async fn test_end_to_end() {
         .context("failed to get own twin id")
         .unwrap();
     assert_eq!(twin, Some(twin1.clone()));
-    println!("twin1: {:?}", twin);
     // create redis storage
     let pool1 = redis::pool("redis://localhost:6379")
         .await
@@ -214,41 +254,34 @@ async fn test_end_to_end() {
     let storage2 = RedisStorage::builder(pool2).build();
 
     // start two instances of RMB
-    tokio::spawn(async { start_rmb(db1, storage1, t1, twin1.address).await });
-    tokio::spawn(async { start_rmb(db2, storage2, t2, twin2.address).await });
-
-    // TODO: simple flow to test rmb
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, &twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
+    // mimic a process that handle a command `testme` from a remote node
+    let cmd = "testme";
+    let remote_redis = "redis://127.0.0.1:6380";
+    tokio::spawn(async move { handle_cmd(cmd, remote_redis).await.unwrap() });
+    
+    // test simple message exchange
     // this expects that two redis instances are running on localhost:6379 and localhost:6380
     // create a new message
-    let msg1 = new_message(
+    let msg = new_message(
         "testme" as &str,
         120,
         3,
         "TestDataTestDataTestDataTestData",
-        vec![twin2.id],
+        vec![twin2.id, twin2.id],
     );
-    let msg2 = new_message(
-        "testme" as &str,
-        120,
-        3,
-        "TestDataTestDataTestDataTestData",
-        vec![twin2.id],
-    );
-    println!("msg1: {:?}", msg1);
-    // send all messages
-    let mut messages = vec![msg1, msg2];
+    
+    // send 20 messages
+    let messages = std::iter::repeat_with(|| msg.clone())
+    .take(20)
+    .collect::<Vec<_>>();
+    
     let (responses_expected, return_queues) = send_all(messages, "redis://localhost:6379").await.unwrap();
-    assert_eq!(responses_expected, 2);
-    assert_eq!(return_queues.len(), 2);
     // wait for all messages to be processed
     let (responses, err_count, success_count) =
         wait_for_responses(responses_expected, return_queues, 1000, "redis://localhost:6379").await.unwrap();
-    println!("responses: {:?}", responses);
-
     assert_eq!(err_count, 0);
     assert_eq!(success_count, responses_expected);
-
-    // should be received by storage2 on $cmd queue
-    // mimic a process that handle that command and push a reply to storage2 on reply queue
-    // should be received by storage1 on ret queue
+    println!("{}", responses.len());
 }
