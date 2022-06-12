@@ -1,4 +1,3 @@
-
 use super::processor;
 use crate::anyhow::{Context, Result};
 use crate::http_api::HttpApi;
@@ -47,32 +46,6 @@ impl TwinDB for InMemoryDB {
     }
 }
 
-async fn create_redis_storage() -> RedisStorage {
-    let manager = RedisConnectionManager::new("redis://127.0.0.1/")
-        .context("unable to create redis connection manager")
-        .unwrap();
-    let pool = Pool::builder()
-        .build(manager)
-        .await
-        .context("unable to build pool or redis connection manager")
-        .unwrap();
-    let storage = RedisStorage::builder(pool)
-        .prefix(PREFIX)
-        .max_commands(500)
-        .build();
-
-    storage
-}
-
-// def new_message(command: str, twin_dst: list, data: dict = {}, expiration: int = 120, retry: int = 3):
-//     version = 1
-//     id =  str(uuid.uuid4()) # RMB-rs will override this id
-//     twin_src = 0
-//     retqueue = str(uuid.uuid4())
-//     schema = ""
-//     epoch = int(time.time())
-//     err = ""
-//     return Message(version, id, command, expiration, retry, data, twin_src, twin_dst, retqueue, schema, epoch, err)
 
 fn new_message(command: &str, expiration: u64, retry: usize, data: &str, destination: Vec<u32>) -> Message {
     //let id = format!("{}", uuid::Uuid::new_v4());
@@ -82,7 +55,7 @@ fn new_message(command: &str, expiration: u64, retry: usize, data: &str, destina
         .unwrap()
         .as_secs();
     Message {
-        command: command.to_string(),
+        command: format!("msgbus.{}", command),
         expiration: expiration,
         retry: retry,
         data: data.to_string(),
@@ -98,7 +71,7 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
-    let queue = format!("{}:{}", PREFIX, "msgbus.system.local");
+    let queue = "msgbus.system.local";
     let mut responses_expected = 0;
     let mut return_queues = Vec::new();
     for msg in messages {
@@ -109,26 +82,7 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
     Ok((responses_expected, return_queues))
 }
 
-// def wait_all(responses_expected, return_queues, timeout=20):
-//         responses = []
-//         err_count = 0
-//         success_count = 0
-//         
-//             for i in range(responses_expected):
-//                 result = r.blpop(return_queues, timeout=timeout)
-//                 if not result:
-//                     break
-//                 response = json.loads(result[1])
-//                 responses.append(response)
-//                 if response["err"]:
-//                     err_count += 1
-//                     bar.text('received an error ❌')
-//                 else:
-//                     success_count += 1
-//                     
-//         return responses, err_count, success_count
-
-async fn wait_all(
+async fn wait_for_responses(
     responses_expected: usize,
     return_queues: Vec<String>,
     timeout: usize,
@@ -236,7 +190,7 @@ async fn test_end_to_end() {
     // insert dummy entities into mock db
     db1.add(twin1.clone());
     db1.add(twin2.clone());
-    let mut db2 = db1.clone();
+    let db2 = db1.clone();
 
     // test get fake twin id
     let twin = db1
@@ -245,7 +199,7 @@ async fn test_end_to_end() {
         .context("failed to get own twin id")
         .unwrap();
     assert_eq!(twin, Some(twin1.clone()));
-
+    println!("twin1: {:?}", twin);
     // create redis storage
     let pool1 = redis::pool("redis://localhost:6379")
         .await
@@ -265,7 +219,35 @@ async fn test_end_to_end() {
 
     // TODO: simple flow to test rmb
     // this expects that two redis instances are running on localhost:6379 and localhost:6380
-    // push a message to storage1 on local queue
+    // create a new message
+    let msg1 = new_message(
+        "testme" as &str,
+        120,
+        3,
+        "TestDataTestDataTestDataTestData",
+        vec![twin2.id],
+    );
+    let msg2 = new_message(
+        "testme" as &str,
+        120,
+        3,
+        "TestDataTestDataTestDataTestData",
+        vec![twin2.id],
+    );
+    println!("msg1: {:?}", msg1);
+    // send all messages
+    let mut messages = vec![msg1, msg2];
+    let (responses_expected, return_queues) = send_all(messages, "redis://localhost:6379").await.unwrap();
+    assert_eq!(responses_expected, 2);
+    assert_eq!(return_queues.len(), 2);
+    // wait for all messages to be processed
+    let (responses, err_count, success_count) =
+        wait_for_responses(responses_expected, return_queues, 1000, "redis://localhost:6379").await.unwrap();
+    println!("responses: {:?}", responses);
+
+    assert_eq!(err_count, 0);
+    assert_eq!(success_count, responses_expected);
+
     // should be received by storage2 on $cmd queue
     // mimic a process that handle that command and push a reply to storage2 on reply queue
     // should be received by storage1 on ret queue
