@@ -1,3 +1,4 @@
+
 use super::processor;
 use crate::anyhow::{Context, Result};
 use crate::http_api::HttpApi;
@@ -6,9 +7,20 @@ use crate::identity;
 use crate::identity::{Identity, Signer};
 use crate::proxy::ProxyWorker;
 use crate::redis;
-use crate::storage::{ProxyStorage, RedisStorage, Storage};
+use super::storage::{ProxyStorage, RedisStorage, Storage};
+use bb8_redis::{
+    bb8::{Pool, PooledConnection},
+    redis::{
+        AsyncCommands, ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs,
+        Value,
+    },
+    RedisConnectionManager,
+};
 use crate::twin::{Twin, TwinDB};
 use std::collections::HashMap;
+use crate::types::Message;
+
+const PREFIX: &str = "test";
 
 #[derive(Default, Clone)]
 struct InMemoryDB {
@@ -33,6 +45,120 @@ impl TwinDB for InMemoryDB {
     ) -> anyhow::Result<u32> {
         unimplemented!()
     }
+}
+
+async fn create_redis_storage() -> RedisStorage {
+    let manager = RedisConnectionManager::new("redis://127.0.0.1/")
+        .context("unable to create redis connection manager")
+        .unwrap();
+    let pool = Pool::builder()
+        .build(manager)
+        .await
+        .context("unable to build pool or redis connection manager")
+        .unwrap();
+    let storage = RedisStorage::builder(pool)
+        .prefix(PREFIX)
+        .max_commands(500)
+        .build();
+
+    storage
+}
+
+// def new_message(command: str, twin_dst: list, data: dict = {}, expiration: int = 120, retry: int = 3):
+//     version = 1
+//     id =  str(uuid.uuid4()) # RMB-rs will override this id
+//     twin_src = 0
+//     retqueue = str(uuid.uuid4())
+//     schema = ""
+//     epoch = int(time.time())
+//     err = ""
+//     return Message(version, id, command, expiration, retry, data, twin_src, twin_dst, retqueue, schema, epoch, err)
+
+fn new_message(command: &str, expiration: u64, retry: usize, data: &str, destination: Vec<u32>) -> Message {
+    //let id = format!("{}", uuid::Uuid::new_v4());
+    let ret_queue = format!("{}", uuid::Uuid::new_v4());
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    Message {
+        command: command.to_string(),
+        expiration: expiration,
+        retry: retry,
+        data: data.to_string(),
+        destination: destination,
+        reply: ret_queue,
+        timestamp: epoch,
+        ..Message::default()
+    }
+}
+
+async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, Vec<String>)> {
+    let pool = redis::pool(String::from(local_redis))
+        .await
+        .context("unable to create redis connection")?;
+    let mut conn = pool.get().await.context("unable to get redis connection")?;
+    let queue = format!("{}:{}", PREFIX, "msgbus.system.local");
+    let mut responses_expected = 0;
+    let mut return_queues = Vec::new();
+    for msg in messages {
+        let _ = conn.lpush(&queue, msg.clone()).await?;
+        responses_expected += msg.destination.len();
+        return_queues.push(msg.reply);
+    }
+    Ok((responses_expected, return_queues))
+}
+
+// def wait_all(responses_expected, return_queues, timeout=20):
+//         responses = []
+//         err_count = 0
+//         success_count = 0
+//         
+//             for i in range(responses_expected):
+//                 result = r.blpop(return_queues, timeout=timeout)
+//                 if not result:
+//                     break
+//                 response = json.loads(result[1])
+//                 responses.append(response)
+//                 if response["err"]:
+//                     err_count += 1
+//                     bar.text('received an error ❌')
+//                 else:
+//                     success_count += 1
+//                     
+//         return responses, err_count, success_count
+
+async fn wait_all(
+    responses_expected: usize,
+    return_queues: Vec<String>,
+    timeout: usize,
+    local_redis: &str,
+) -> Result<(Vec<Message>, usize, usize)> {
+    let pool = redis::pool(String::from(local_redis))
+        .await
+        .context("unable to create redis connection")?;
+    let mut conn = pool.get().await.context("unable to get redis connection")?;
+    let mut responses = Vec::new();
+    let mut err_count = 0;
+    let mut success_count = 0;
+    for _ in 0..responses_expected {
+        let result: Option<(String, String)> = conn
+            .blpop(return_queues.clone(), timeout)
+            .await
+            .context("unable to get response")?;
+        if result.is_none() {
+            break;
+        }
+        let response = serde_json::from_str::<Message>(&result.unwrap().1)
+            .context("unable to parse response")?;
+        responses.push(response.clone());
+        if response.error.is_some() {
+            err_count += 1;
+        } else {
+            success_count += 1;
+        }
+    }
+    Ok((responses, err_count, success_count))
 }
 
 async fn start_rmb<
