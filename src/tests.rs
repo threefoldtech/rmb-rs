@@ -1,26 +1,21 @@
+use std::collections::HashMap;
+use anyhow::{Context, Result};
+use bb8_redis::{
+    redis::{
+        AsyncCommands,
+    },
+};
 use super::processor;
 use super::storage::{ProxyStorage, RedisStorage, Storage};
-use crate::anyhow::{Context, Result};
-use crate::http_api::HttpApi;
-use crate::http_workers::HttpWorker;
-use crate::identity;
-use crate::identity::{Identity, Signer};
-use crate::proxy::ProxyWorker;
-use crate::redis;
-use crate::twin::{Twin, TwinDB};
-use crate::types::Message;
-use bb8_redis::{
-    bb8::{Pool, PooledConnection},
-    redis::{
-        AsyncCommands, ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs,
-        Value,
-    },
-    RedisConnectionManager,
-};
-use std::collections::HashMap;
-use tokio::time::{sleep, Duration};
+use super::http_api::HttpApi;
+use super::http_workers::HttpWorker;
+use super::identity;
+use super::identity::{Identity, Signer};
+use super::proxy::ProxyWorker;
+use super::redis;
+use super::twin::{Twin, TwinDB};
+use super::types::Message;
 
-const PREFIX: &str = "test";
 
 #[derive(Default, Clone)]
 struct InMemoryDB {
@@ -199,7 +194,7 @@ async fn start_rmb<
 #[tokio::test]
 async fn test_end_to_end() {
     simple_logger::SimpleLogger::new()
-        .with_level({ log::LevelFilter::Debug })
+        .with_level(log::LevelFilter::Debug)
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
