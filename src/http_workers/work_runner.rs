@@ -6,8 +6,9 @@ use crate::{
     storage::Storage,
     twin::{Twin, TwinDB},
     types::{Message, TransitMessage},
-    workers::Work,
 };
+
+use workers::Work;
 
 use anyhow::{Context, Result};
 
