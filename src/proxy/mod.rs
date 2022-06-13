@@ -7,8 +7,9 @@ use crate::{
     storage::ProxyStorage,
     twin::TwinDB,
     types::{Message, TransitMessage},
-    workers::{Work, WorkerPool},
 };
+
+use workers::{Work, WorkerPool};
 
 struct Worker<S, T> {
     id: u32,
