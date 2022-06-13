@@ -23,7 +23,11 @@ jobs:
           args: -- --check
       - name: Start Redis
         uses: supercharge/redis-github-action@1.4.0
-        
+      - name: Start another instance Redis for e2e tests
+        uses: supercharge/redis-github-action@1.4.0
+        with:
+          redis-container-name  : redis-2
+          redis-port: 6380
       - uses: actions-rs/cargo@v1
         name: Run tests (ahm!)
         with:
