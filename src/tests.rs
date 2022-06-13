@@ -194,12 +194,12 @@ async fn test_end_to_end() {
         "nominee slow sting tell point bleak sheriff outer push visual basket grief";
     // load from WORD
     let t1 = identity::Sr25519Signer::try_from(WORDS1).unwrap();
-    let t2 = identity::Sr25519Signer::try_from(WORDS2).unwrap();
+    let t2 = identity::Ed25519Signer::try_from(WORDS2).unwrap();
 
-    // 
+    // we expects to have two instances of redis-server running on localhost:6379 and localhost:6380 on the test machine
     let local_redis = "redis://127.0.0.1:6379";
     let remote_redis = "redis://127.0.0.1:6380";
-    
+
     // create dummy entities for testing
     let twin1: Twin = Twin {
         version: 1,
@@ -256,21 +256,14 @@ async fn test_end_to_end() {
 
 async fn test_messages_exchange(cmd: &str, msg_count: usize, local_redis: &str) {
     // create a new message
-    let msg = new_message(
-        cmd,
-        120,
-        3,
-        "TestDataTestDataTestDataTestData",
-        vec![2],
-    );
+    let msg = new_message(cmd, 120, 3, "TestDataTestDataTestDataTestData", vec![2]);
     // duplicate the message
     let messages = std::iter::repeat_with(|| msg.clone())
         .take(msg_count)
         .collect::<Vec<_>>();
     // send the messages to local redis
-    let (responses_expected, return_queues) =
-        send_all(messages, local_redis).await.unwrap();
-    // wait on the return queues    
+    let (responses_expected, return_queues) = send_all(messages, local_redis).await.unwrap();
+    // wait on the return queues
     let (_responses, err_count, success_count) = wait_for_responses(
         responses_expected,
         return_queues,
