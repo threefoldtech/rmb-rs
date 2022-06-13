@@ -44,7 +44,6 @@ fn new_message(
     data: &str,
     destination: Vec<u32>,
 ) -> Message {
-    //let id = format!("{}", uuid::Uuid::new_v4());
     let ret_queue = format!("{}", uuid::Uuid::new_v4());
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -118,18 +117,12 @@ async fn handle_cmd(cmd: &str, redis: &str) -> Result<()> {
     let mut conn = pool.get().await.context("unable to get redis connection")?;
     loop {
         let result: Option<(String, String)> = conn
-            .blpop(format!("msgbus.{}", cmd), 100)
+            .blpop(format!("msgbus.{}", cmd), 0)
             .await
             .context("unable to get response")?;
-        if result.is_none() {
-            ()
-        }
         let mut response: Message = serde_json::from_str::<Message>(&result.unwrap().1)
             .context("unable to parse response")?;
-        response.timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+
         (response.destination, response.source) = (vec![response.source], response.destination[0]);
         let _ = conn
             .lpush(&response.reply, &response)
@@ -200,9 +193,13 @@ async fn test_end_to_end() {
     const WORDS2: &str =
         "nominee slow sting tell point bleak sheriff outer push visual basket grief";
     // load from WORD
-    let t1 = identity::Ed25519Signer::try_from(WORDS1).unwrap();
-    let t2 = identity::Ed25519Signer::try_from(WORDS2).unwrap();
+    let t1 = identity::Sr25519Signer::try_from(WORDS1).unwrap();
+    let t2 = identity::Sr25519Signer::try_from(WORDS2).unwrap();
 
+    // 
+    let local_redis = "redis://127.0.0.1:6379";
+    let remote_redis = "redis://127.0.0.1:6380";
+    
     // create dummy entities for testing
     let twin1: Twin = Twin {
         version: 1,
@@ -233,11 +230,11 @@ async fn test_end_to_end() {
         .unwrap();
     assert_eq!(twin, Some(twin1.clone()));
     // create redis storage
-    let pool1 = redis::pool("redis://localhost:6379")
+    let pool1 = redis::pool(local_redis)
         .await
         .context("failed to initialize redis pool")
         .unwrap();
-    let pool2 = redis::pool("redis://localhost:6380")
+    let pool2 = redis::pool(remote_redis)
         .await
         .context("failed to initialize redis pool")
         .unwrap();
@@ -250,37 +247,38 @@ async fn test_end_to_end() {
     tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
     // mimic a process that handle a command `testme` from a remote node
     let cmd = "testme";
-    let remote_redis = "redis://127.0.0.1:6380";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis).await.unwrap() });
-
     // test simple message exchange
-    // this expects that two redis instances are running on localhost:6379 and localhost:6380
+    test_messages_exchange(cmd, 1, local_redis).await;
+    test_messages_exchange(cmd, 200, local_redis).await;
+    test_messages_exchange(cmd, 1000, local_redis).await;
+}
+
+async fn test_messages_exchange(cmd: &str, msg_count: usize, local_redis: &str) {
     // create a new message
     let msg = new_message(
-        "testme" as &str,
+        cmd,
         120,
         3,
         "TestDataTestDataTestDataTestData",
-        vec![twin2.id, twin2.id],
+        vec![2],
     );
-
-    // send 20 messages
+    // duplicate the message
     let messages = std::iter::repeat_with(|| msg.clone())
-        .take(20)
+        .take(msg_count)
         .collect::<Vec<_>>();
-
+    // send the messages to local redis
     let (responses_expected, return_queues) =
-        send_all(messages, "redis://localhost:6379").await.unwrap();
-    // wait for all messages to be processed
-    let (responses, err_count, success_count) = wait_for_responses(
+        send_all(messages, local_redis).await.unwrap();
+    // wait on the return queues    
+    let (_responses, err_count, success_count) = wait_for_responses(
         responses_expected,
         return_queues,
-        1000,
-        "redis://localhost:6379",
+        60, // give up if you didn't get all responses and $timeout seconds have passed since the last response was received
+        local_redis,
     )
     .await
     .unwrap();
     assert_eq!(err_count, 0);
     assert_eq!(success_count, responses_expected);
-    println!("{}", responses.len());
 }
