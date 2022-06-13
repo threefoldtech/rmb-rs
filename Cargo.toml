@@ -35,4 +35,4 @@ tokio-retry = "0.3"
 uuid = {version = "1.1.0", features = ["v4"]}
 # for static build
 openssl = {version = "0.10", features = ["vendored"]}
-workers = { package = "tokio-worker-pool", git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
+workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
