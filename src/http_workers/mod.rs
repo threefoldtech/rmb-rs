@@ -2,7 +2,8 @@ mod work_runner;
 use hyper::Client;
 use std::{sync::Arc, time::Duration};
 
-use crate::{identity::Signer, storage::Storage, twin::TwinDB, workers::WorkerPool};
+use crate::{identity::Signer, storage::Storage, twin::TwinDB};
+use workers::WorkerPool;
 
 use self::work_runner::WorkRunner;
 

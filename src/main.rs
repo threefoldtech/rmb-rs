@@ -10,7 +10,6 @@ mod redis;
 mod storage;
 mod twin;
 mod types;
-mod workers;
 
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};

@@ -1,7 +1,6 @@
 use super::Twin;
 use super::TwinDB;
 use crate::cache::Cache;
-use crate::workers::{Work, WorkerPool};
 use anyhow::Result;
 use async_trait::async_trait;
 use sp_core::crypto::AccountId32;
@@ -9,6 +8,7 @@ use std::sync::Arc;
 use substrate_client::SubstrateClient;
 use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
+use workers::{Work, WorkerPool};
 
 const MAX_INFLIGHT: usize = 10;
 
