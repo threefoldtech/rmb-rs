@@ -1,4 +1,5 @@
 use super::processor;
+use super::storage::{ProxyStorage, RedisStorage, Storage};
 use crate::anyhow::{Context, Result};
 use crate::http_api::HttpApi;
 use crate::http_workers::HttpWorker;
@@ -6,7 +7,8 @@ use crate::identity;
 use crate::identity::{Identity, Signer};
 use crate::proxy::ProxyWorker;
 use crate::redis;
-use super::storage::{ProxyStorage, RedisStorage, Storage};
+use crate::twin::{Twin, TwinDB};
+use crate::types::Message;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
     redis::{
@@ -15,9 +17,7 @@ use bb8_redis::{
     },
     RedisConnectionManager,
 };
-use crate::twin::{Twin, TwinDB};
 use std::collections::HashMap;
-use crate::types::Message;
 use tokio::time::{sleep, Duration};
 
 const PREFIX: &str = "test";
@@ -47,8 +47,13 @@ impl TwinDB for InMemoryDB {
     }
 }
 
-
-fn new_message(command: &str, expiration: u64, retry: usize, data: &str, destination: Vec<u32>) -> Message {
+fn new_message(
+    command: &str,
+    expiration: u64,
+    retry: usize,
+    data: &str,
+    destination: Vec<u32>,
+) -> Message {
     //let id = format!("{}", uuid::Uuid::new_v4());
     let ret_queue = format!("{}", uuid::Uuid::new_v4());
     let epoch = std::time::SystemTime::now()
@@ -116,22 +121,16 @@ async fn wait_for_responses(
     Ok((responses, err_count, success_count))
 }
 
-// def listen(q):
-// while True:
-// result = r.blpop(f'msgbus.{q}')
-// msg = Message.from_json(result[1])
-// msg.epoch = int(time.time())
-// msg.twin_dst, msg.twin_src = [msg.twin_src], msg.twin_dst[0]
-// print(msg)
-// r.lpush(msg.retqueue, msg.to_json())
-
 async fn handle_cmd(cmd: &str, redis: &str) -> Result<()> {
     let pool = redis::pool(String::from(redis))
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
     loop {
-        let result: Option<(String, String)> = conn.blpop(format!("msgbus.{}", cmd), 100).await.context("unable to get response")?;
+        let result: Option<(String, String)> = conn
+            .blpop(format!("msgbus.{}", cmd), 100)
+            .await
+            .context("unable to get response")?;
         if result.is_none() {
             ()
         }
@@ -142,7 +141,10 @@ async fn handle_cmd(cmd: &str, redis: &str) -> Result<()> {
             .unwrap()
             .as_secs();
         (response.destination, response.source) = (vec![response.source], response.destination[0]);
-        let _ = conn.lpush(&response.reply, &response).await.context("unable to push response")?;
+        let _ = conn
+            .lpush(&response.reply, &response)
+            .await
+            .context("unable to push response")?;
         println!("replay sent");
     }
 }
@@ -197,12 +199,12 @@ async fn start_rmb<
 #[tokio::test]
 async fn test_end_to_end() {
     simple_logger::SimpleLogger::new()
-        .with_level({
-            log::LevelFilter::Debug})
+        .with_level({ log::LevelFilter::Debug })
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
-        .init().unwrap();
+        .init()
+        .unwrap();
 
     const WORDS1: &str = "neck stage box cup core magic produce exercise happy rely vocal then";
     const WORDS2: &str =
@@ -260,7 +262,7 @@ async fn test_end_to_end() {
     let cmd = "testme";
     let remote_redis = "redis://127.0.0.1:6380";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis).await.unwrap() });
-    
+
     // test simple message exchange
     // this expects that two redis instances are running on localhost:6379 and localhost:6380
     // create a new message
@@ -271,16 +273,23 @@ async fn test_end_to_end() {
         "TestDataTestDataTestDataTestData",
         vec![twin2.id, twin2.id],
     );
-    
+
     // send 20 messages
     let messages = std::iter::repeat_with(|| msg.clone())
-    .take(20)
-    .collect::<Vec<_>>();
-    
-    let (responses_expected, return_queues) = send_all(messages, "redis://localhost:6379").await.unwrap();
+        .take(20)
+        .collect::<Vec<_>>();
+
+    let (responses_expected, return_queues) =
+        send_all(messages, "redis://localhost:6379").await.unwrap();
     // wait for all messages to be processed
-    let (responses, err_count, success_count) =
-        wait_for_responses(responses_expected, return_queues, 1000, "redis://localhost:6379").await.unwrap();
+    let (responses, err_count, success_count) = wait_for_responses(
+        responses_expected,
+        return_queues,
+        1000,
+        "redis://localhost:6379",
+    )
+    .await
+    .unwrap();
     assert_eq!(err_count, 0);
     assert_eq!(success_count, responses_expected);
     println!("{}", responses.len());
