@@ -1,21 +1,16 @@
-use std::collections::HashMap;
-use anyhow::{Context, Result};
-use bb8_redis::{
-    redis::{
-        AsyncCommands,
-    },
-};
-use super::processor;
-use super::storage::{ProxyStorage, RedisStorage, Storage};
 use super::http_api::HttpApi;
 use super::http_workers::HttpWorker;
 use super::identity;
 use super::identity::{Identity, Signer};
+use super::processor;
 use super::proxy::ProxyWorker;
 use super::redis;
+use super::storage::{ProxyStorage, RedisStorage, Storage};
 use super::twin::{Twin, TwinDB};
 use super::types::Message;
-
+use anyhow::{Context, Result};
+use bb8_redis::redis::AsyncCommands;
+use std::collections::HashMap;
 
 #[derive(Default, Clone)]
 struct InMemoryDB {
