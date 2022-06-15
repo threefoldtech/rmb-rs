@@ -177,14 +177,14 @@ async fn start_rmb<
     storage: S,
     ident: I,
     address: &str,
-    id: &u32,
+    id: u32,
 ) -> Result<()> {
-    let processor_handler = tokio::spawn(processor(*id, storage.clone()));
+    let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
     let api_handler =
-        tokio::spawn(HttpApi::new(*id, address, storage.clone(), ident.clone(), db.clone())?.run());
+        tokio::spawn(HttpApi::new(id, address, storage.clone(), ident.clone(), db.clone())?.run());
 
-    let proxy_handler = tokio::spawn(ProxyWorker::new(*id, 10, storage.clone(), db.clone()).run());
+    let proxy_handler = tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone()).run());
 
     let workers_handler = tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
 
@@ -346,8 +346,8 @@ async fn test_message_exchange_with_edpair() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, &twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
     // mimic a process that handle a command `testme` from a remote node
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
@@ -403,8 +403,8 @@ async fn test_message_exchange_with_srpair() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, &twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
     // mimic a process that handle a command `testme` from a remote node
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
@@ -476,9 +476,9 @@ async fn test_multi_dest_message_exchange() {
         .unwrap();
 
     // start three instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, &twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
-    tokio::spawn(async move { start_rmb(db3, storage3, t3, &twin3.address, &twin3.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
+    tokio::spawn(async move { start_rmb(db3, storage3, t3, &twin3.address, twin3.id).await });
     // mimic a process that handle a command `testme` from two remote nodes
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote1_redis_port).await.unwrap() });
@@ -496,4 +496,152 @@ async fn test_multi_dest_message_exchange() {
         send_and_wait(cmd, vec![twin2.id, twin3.id], 1000, local_redis_port).await;
     assert_eq!(err_count, 0);
     assert_eq!(timed_out_count, 0);
+}
+
+#[tokio::test]
+async fn test_twin_not_found() {
+    initialize_logger();
+    let local_redis_port = 6387;
+    let t1 = create_test_signer(KPair::SrPair).unwrap();
+
+    // create dummy entities for testing
+    let twin1: Twin = Twin {
+        version: 1,
+        id: 1,
+        account: t1.account(),
+        address: "127.0.0.1:5880".to_string(),
+        entities: vec![],
+    };
+
+    // creating mock db with dummy entities
+    let db1 = create_mock_db(vec![]).unwrap();
+
+    // start redis servers
+    let redis_manager = RedisManager {
+        ports: vec![local_redis_port],
+    };
+    redis_manager.init();
+    // create redis storage
+    let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
+
+    // start three instances of RMB
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+
+    // test getting twin not found as response error
+    let (_responses, err_count, _success_count, timed_out_count) =
+        send_and_wait("testme", vec![2], 1, local_redis_port).await;
+    assert_eq!(err_count, 1);
+    assert_eq!(timed_out_count, 0);
+    assert!(_responses[0].error.as_ref().unwrap().contains("not found"));
+}
+
+#[tokio::test]
+async fn test_invalid_dest() {
+    initialize_logger();
+    let local_redis_port = 6388;
+    let remote_redis_port = 6389;
+    let t1 = create_test_signer(KPair::SrPair).unwrap();
+    let t2 = create_test_signer(KPair::SrPair).unwrap();
+
+    // create dummy entities for testing
+    let twin1: Twin = Twin {
+        version: 1,
+        id: 1,
+        account: t1.account(),
+        address: "127.0.0.1:5890".to_string(),
+        entities: vec![],
+    };
+    let twin2: Twin = Twin {
+        version: 1,
+        id: 2,
+        account: t2.account(),
+        address: "127.0.0.1:5900".to_string(),
+        entities: vec![],
+    };
+
+    // creating mock db with dummy entities
+    let db1 = create_mock_db(vec![&twin2]).unwrap();
+    let db2 = create_mock_db(vec![&twin1]).unwrap();
+
+    // start redis servers
+    let redis_manager = RedisManager {
+        ports: vec![local_redis_port, remote_redis_port],
+    };
+    redis_manager.init();
+    // create redis storage
+    let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
+    let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
+
+    // start two instances of RMB with id 1, and id 3
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, 3).await });
+    // mimic a process that handle a command `testme` from a remote nodes
+    let cmd = "testme";
+    tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
+    // test getting bad request as response error
+    let (_responses, err_count, _success_count, timed_out_count) =
+        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(err_count, 1);
+    assert_eq!(timed_out_count, 0);
+    assert!(_responses[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("Bad Request"));
+}
+
+#[tokio::test]
+async fn test_unauthorized() {
+    initialize_logger();
+    let local_redis_port = 6390;
+    let remote_redis_port = 6391;
+    let t1 = create_test_signer(KPair::SrPair).unwrap();
+    let t2 = create_test_signer(KPair::SrPair).unwrap();
+    let t3 = create_test_signer(KPair::SrPair).unwrap();
+
+    // create dummy entities for testing
+    let twin1: Twin = Twin {
+        version: 1,
+        id: 1,
+        account: t3.account(), // unmatched public key
+        address: "127.0.0.1:5910".to_string(),
+        entities: vec![],
+    };
+    let twin2: Twin = Twin {
+        version: 1,
+        id: 2,
+        account: t2.account(),
+        address: "127.0.0.1:5920".to_string(),
+        entities: vec![],
+    };
+
+    // creating mock db with dummy entities
+    let db1 = create_mock_db(vec![&twin2]).unwrap();
+    let db2 = create_mock_db(vec![&twin1]).unwrap();
+
+    // start redis servers
+    let redis_manager = RedisManager {
+        ports: vec![local_redis_port, remote_redis_port],
+    };
+    redis_manager.init();
+    // create redis storage
+    let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
+    let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
+
+    // start two instances of RMB
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
+    // mimic a process that handle a command `testme` from a remote nodes
+    let cmd = "testme";
+    tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
+    // test getting Unauthorized as response error
+    let (_responses, err_count, _success_count, timed_out_count) =
+        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(err_count, 1);
+    assert_eq!(timed_out_count, 0);
+    assert!(_responses[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("Unauthorized"));
 }
