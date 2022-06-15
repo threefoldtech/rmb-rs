@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::panic;
 use std::process::Command;
 use std::sync::Once;
+use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
 struct InMemoryDB {
@@ -280,10 +281,11 @@ struct RedisManager {
 }
 
 impl RedisManager {
-    fn init(&self) {
+    async fn init(&self) {
         for port in &self.ports {
             start_redis_server(*port).unwrap();
         }
+        sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -340,7 +342,7 @@ async fn test_message_exchange_with_edpair() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
@@ -397,7 +399,7 @@ async fn test_message_exchange_with_srpair() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
@@ -465,7 +467,7 @@ async fn test_multi_dest_message_exchange() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote1_redis_port, remote2_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote1_redis_port)
@@ -520,7 +522,7 @@ async fn test_twin_not_found() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
 
@@ -567,7 +569,7 @@ async fn test_invalid_dest() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
@@ -623,7 +625,7 @@ async fn test_unauthorized() {
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
-    redis_manager.init();
+    redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
