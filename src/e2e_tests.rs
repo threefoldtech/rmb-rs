@@ -273,20 +273,6 @@ fn stop_redis_server(port: usize) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-fn set_up(redis_ports: &Vec<usize>) {
-    for port in redis_ports {
-        start_redis_server(*port).unwrap();
-    }
-}
-
-#[allow(dead_code)]
-fn tear_down(redis_ports: &Vec<usize>) {
-    for port in redis_ports {
-        stop_redis_server(*port).unwrap();
-    }
-}
-
 struct RedisManager {
     ports: Vec<usize>,
 }
@@ -307,15 +293,25 @@ impl Drop for RedisManager {
     }
 }
 
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+pub fn initialize_logger() {
+    INIT.call_once(|| {
+        simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Warn)
+        .with_module_level("hyper", log::LevelFilter::Off)
+        .with_module_level("ws", log::LevelFilter::Off)
+        .with_module_level("substrate_api_client", log::LevelFilter::Off)
+        .init()
+        .unwrap();
+    });
+}
+
 #[tokio::test]
 async fn test_message_exchange_with_edpair() {
-    /* simple_logger::SimpleLogger::new()
-    .with_level(log::LevelFilter::Debug)
-    .with_module_level("hyper", log::LevelFilter::Off)
-    .with_module_level("ws", log::LevelFilter::Off)
-    .with_module_level("substrate_api_client", log::LevelFilter::Off)
-    .init()
-    .unwrap(); */
+    initialize_logger();
     let local_redis_port = 6380;
     let remote_redis_port = 6381;
     let t1 = create_test_signer(KPair::EdPair).unwrap();
@@ -380,13 +376,7 @@ async fn test_message_exchange_with_edpair() {
 
 #[tokio::test]
 async fn test_message_exchange_with_srpair() {
-    /* simple_logger::SimpleLogger::new()
-    .with_level(log::LevelFilter::Debug)
-    .with_module_level("hyper", log::LevelFilter::Off)
-    .with_module_level("ws", log::LevelFilter::Off)
-    .with_module_level("substrate_api_client", log::LevelFilter::Off)
-    .init()
-    .unwrap(); */
+    initialize_logger();
     let local_redis_port = 6382;
     let remote_redis_port = 6383;
     let t1 = create_test_signer(KPair::SrPair).unwrap();
@@ -449,13 +439,7 @@ async fn test_message_exchange_with_srpair() {
 
 #[tokio::test]
 async fn test_multi_dest_message_exchange() {
-    simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Debug)
-        .with_module_level("hyper", log::LevelFilter::Off)
-        .with_module_level("ws", log::LevelFilter::Off)
-        .with_module_level("substrate_api_client", log::LevelFilter::Off)
-        .init()
-        .unwrap();
+    initialize_logger();
     let local_redis_port = 6384;
     let remote1_redis_port = 6385;
     let remote2_redis_port = 6386;
