@@ -300,12 +300,12 @@ static INIT: Once = Once::new();
 pub fn initialize_logger() {
     INIT.call_once(|| {
         simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Warn)
-        .with_module_level("hyper", log::LevelFilter::Off)
-        .with_module_level("ws", log::LevelFilter::Off)
-        .with_module_level("substrate_api_client", log::LevelFilter::Off)
-        .init()
-        .unwrap();
+            .with_level(log::LevelFilter::Warn)
+            .with_module_level("hyper", log::LevelFilter::Off)
+            .with_module_level("ws", log::LevelFilter::Off)
+            .with_module_level("substrate_api_client", log::LevelFilter::Off)
+            .init()
+            .unwrap();
     });
 }
 
