@@ -12,7 +12,7 @@ use workers::Work;
 
 use anyhow::{Context, Result};
 
-#[derive(PartialEq)]
+#[derive(Eq, PartialEq)]
 enum Queue {
     Request,
     Reply,
