@@ -109,7 +109,7 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .context("failed to read request body")
         .map_err(HandlerError::BadRequest)?;
 
-    let mut message: Message = serde_json::from_slice(&body.to_vec())
+    let mut message: Message = serde_json::from_slice(&body)
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
