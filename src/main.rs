@@ -13,7 +13,7 @@ mod types;
 mod workers;
 
 #[cfg(test)]
-mod tests;
+mod e2e_tests;
 
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
