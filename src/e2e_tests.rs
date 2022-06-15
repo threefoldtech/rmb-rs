@@ -15,6 +15,7 @@ use sp_core::{ed25519::Pair as EdPair, sr25519::Pair as SrPair};
 use std::collections::HashMap;
 use std::panic;
 use std::process::Command;
+use std::sync::Once;
 
 #[derive(Default, Clone)]
 struct InMemoryDB {
@@ -66,7 +67,7 @@ fn new_message(
 }
 
 async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, Vec<String>)> {
-    let pool = redis::pool(String::from(local_redis))
+    let pool = redis::pool(local_redis)
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
@@ -74,7 +75,7 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
     let mut responses_expected = 0;
     let mut return_queues = Vec::new();
     for msg in messages {
-        let _ = conn.lpush(&queue, msg.clone()).await?;
+        let _ = conn.lpush(&queue, &msg).await?;
         responses_expected += msg.destination.len();
         return_queues.push(msg.reply);
     }
@@ -87,7 +88,7 @@ async fn wait_for_responses(
     timeout: usize,
     local_redis: &str,
 ) -> Result<(Vec<Message>, usize, usize, usize)> {
-    let pool = redis::pool(String::from(local_redis))
+    let pool = redis::pool(local_redis)
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
@@ -96,7 +97,7 @@ async fn wait_for_responses(
     let mut success_count = 0;
     for _ in 0..responses_expected {
         let result: Option<(String, String)> = conn
-            .blpop(return_queues.clone(), timeout)
+            .blpop(&return_queues, timeout)
             .await
             .context("unable to get response")?;
         if result.is_none() {
@@ -104,12 +105,12 @@ async fn wait_for_responses(
         }
         let response = serde_json::from_str::<Message>(&result.unwrap().1)
             .context("unable to parse response")?;
-        responses.push(response.clone());
         if response.error.is_some() {
             err_count += 1;
         } else {
             success_count += 1;
         }
+        responses.push(response);
     }
     Ok((
         responses,
@@ -133,13 +134,13 @@ async fn send_and_wait(
         .take(msg_count)
         .collect::<Vec<_>>();
     // send the messages to local redis
-    let (responses_expected, return_queues) = send_all(messages, redis_url.as_ref()).await.unwrap();
+    let (responses_expected, return_queues) = send_all(messages, &redis_url).await.unwrap();
     // wait on the return queues
     wait_for_responses(
         responses_expected,
         return_queues,
         60, // give up if you didn't get all responses and $timeout seconds have passed since the last response was received
-        redis_url.as_ref(),
+        &redis_url,
     )
     .await
     .unwrap()
@@ -147,7 +148,7 @@ async fn send_and_wait(
 
 async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
     let local_redis = format!("redis://localhost:{}", redis_port);
-    let pool = redis::pool(String::from(local_redis))
+    let pool = redis::pool(local_redis)
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
@@ -219,7 +220,6 @@ enum KPair {
 }
 
 fn create_test_signer(p: KPair) -> Result<impl Signer> {
-    // match KPair enum value
     match p {
         KPair::EdPair => {
             let (_pair, string, _seed) = EdPair::generate_with_phrase(None);
@@ -236,7 +236,7 @@ fn create_test_signer(p: KPair) -> Result<impl Signer> {
 
 async fn create_local_redis_storage(port: usize) -> Result<impl Storage + ProxyStorage> {
     let redis_url = format!("redis://localhost:{}", port);
-    let pool = redis::pool(String::from(redis_url))
+    let pool = redis::pool(redis_url)
         .await
         .context("unable to create redis connection")?;
     let storage = RedisStorage::builder(pool).build();
@@ -273,6 +273,8 @@ fn stop_redis_server(port: usize) -> Result<()> {
     Ok(())
 }
 
+// RedisManager used here to spawn number of redis processes
+// and take care of cleaning up when test is done even in case of panic
 struct RedisManager {
     ports: Vec<usize>,
 }
@@ -292,8 +294,6 @@ impl Drop for RedisManager {
         }
     }
 }
-
-use std::sync::Once;
 
 static INIT: Once = Once::new();
 
@@ -336,20 +336,12 @@ async fn test_message_exchange_with_edpair() {
     let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
     let db2 = create_mock_db(vec![&twin1, &twin2]).unwrap();
 
-    // test get fake twin id
-    let twin = db1
-        .get_twin(1)
-        .await
-        .context("failed to get own twin id")
-        .unwrap();
-    assert_eq!(twin, Some(twin1.clone()));
-    // create redis storage
-    // start_redis_server(local_redis_port).unwrap();
-    // start_redis_server(remote_redis_port).unwrap();
+    // start redis servers
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
     redis_manager.init();
+    // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
@@ -401,18 +393,12 @@ async fn test_message_exchange_with_srpair() {
     let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
     let db2 = create_mock_db(vec![&twin1, &twin2]).unwrap();
 
-    // test get fake twin id
-    let twin = db1
-        .get_twin(1)
-        .await
-        .context("failed to get own twin id")
-        .unwrap();
-    assert_eq!(twin, Some(twin1.clone()));
-    // create redis storage
+    // start redis servers
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote_redis_port],
     };
     redis_manager.init();
+    // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
@@ -475,18 +461,12 @@ async fn test_multi_dest_message_exchange() {
     let db2 = create_mock_db(vec![&twin1, &twin2, &twin3]).unwrap();
     let db3 = create_mock_db(vec![&twin1, &twin2, &twin3]).unwrap();
 
-    // test get fake twin id
-    let twin = db1
-        .get_twin(1)
-        .await
-        .context("failed to get own twin id")
-        .unwrap();
-    assert_eq!(twin, Some(twin1.clone()));
-    // create redis storage
+    // start redis servers
     let redis_manager = RedisManager {
         ports: vec![local_redis_port, remote1_redis_port, remote2_redis_port],
     };
     redis_manager.init();
+    // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
     let storage2 = create_local_redis_storage(remote1_redis_port)
         .await
@@ -499,7 +479,7 @@ async fn test_multi_dest_message_exchange() {
     tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, &twin1.id).await });
     tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, &twin2.id).await });
     tokio::spawn(async move { start_rmb(db3, storage3, t3, &twin3.address, &twin3.id).await });
-    // mimic a process that handle a command `testme` from on two remote node
+    // mimic a process that handle a command `testme` from two remote nodes
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote1_redis_port).await.unwrap() });
     tokio::spawn(async move { handle_cmd(cmd, remote2_redis_port).await.unwrap() });
