@@ -83,42 +83,45 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
     Ok((responses_expected, return_queues))
 }
 
+#[derive(Default)]
+struct ExchangeResult {
+    pub responses: Vec<Message>,
+    pub error_count: usize,
+    pub success_count: usize,
+    pub lost_count: usize,
+}
+
 async fn wait_for_responses(
     responses_expected: usize,
     return_queues: Vec<String>,
     timeout: usize,
     local_redis: &str,
-) -> Result<(Vec<Message>, usize, usize, usize)> {
+) -> Result<ExchangeResult> {
     let pool = redis::pool(local_redis)
         .await
         .context("unable to create redis connection")?;
     let mut conn = pool.get().await.context("unable to get redis connection")?;
-    let mut responses = Vec::new();
-    let mut err_count = 0;
-    let mut success_count = 0;
+    let mut exchange_result = ExchangeResult::default();
+
     for _ in 0..responses_expected {
         let result: Option<(String, String)> = conn
             .blpop(&return_queues, timeout)
             .await
             .context("unable to get response")?;
-        if result.is_none() {
-            break;
-        }
-        let response = serde_json::from_str::<Message>(&result.unwrap().1)
-            .context("unable to parse response")?;
+        let response: Message = match result {
+            Some((_, response)) => serde_json::from_str(&response).unwrap(),
+            None => break,
+        };
         if response.error.is_some() {
-            err_count += 1;
+            exchange_result.error_count += 1;
         } else {
-            success_count += 1;
+            exchange_result.success_count += 1;
         }
-        responses.push(response);
+        exchange_result.responses.push(response);
     }
-    Ok((
-        responses,
-        err_count,
-        success_count,
-        responses_expected - (err_count + success_count),
-    ))
+    exchange_result.lost_count =
+        responses_expected - (exchange_result.success_count + exchange_result.error_count);
+    Ok(exchange_result)
 }
 
 async fn send_and_wait(
@@ -126,7 +129,7 @@ async fn send_and_wait(
     twin_dst: Vec<u32>,
     msg_count: usize,
     redis_port: usize,
-) -> (Vec<Message>, usize, usize, usize) {
+) -> ExchangeResult {
     // create a test message
     let redis_url = format!("redis://localhost:{}", redis_port);
     let msg = new_message(cmd, 120, 3, "TestDataTestDataTestDataTestData", twin_dst);
@@ -158,8 +161,8 @@ async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
             .blpop(format!("msgbus.{}", cmd), 0)
             .await
             .context("unable to get response")?;
-        let mut response: Message = serde_json::from_str::<Message>(&result.unwrap().1)
-            .context("unable to parse response")?;
+        let mut response: Message =
+            serde_json::from_str(&result.unwrap().1).context("unable to parse response")?;
 
         (response.destination, response.source) = (vec![response.source], response.destination[0]);
         let _ = conn
@@ -215,27 +218,27 @@ async fn start_rmb<
     };
     unreachable!();
 }
-enum KPair {
+enum KeyType {
     EdPair,
     SrPair,
 }
 
-fn create_test_signer(p: KPair) -> Result<impl Signer> {
+fn create_test_signer(p: KeyType) -> identity::Signers {
     match p {
-        KPair::EdPair => {
+        KeyType::EdPair => {
             let (_pair, string, _seed) = EdPair::generate_with_phrase(None);
             let ed_signer = identity::Ed25519Signer::try_from(string.as_ref()).unwrap();
-            Ok(ed_signer)
+            identity::Signers::Ed25519(ed_signer)
         }
-        KPair::SrPair => {
+        KeyType::SrPair => {
             let (_pair, string, _seed) = SrPair::generate_with_phrase(None);
-            let sr_signer = identity::Ed25519Signer::try_from(string.as_ref()).unwrap();
-            Ok(sr_signer)
+            let sr_signer = identity::Sr25519Signer::try_from(string.as_ref()).unwrap();
+            identity::Signers::Sr25519(sr_signer)
         }
     }
 }
 
-async fn create_local_redis_storage(port: usize) -> Result<impl Storage + ProxyStorage> {
+async fn create_local_redis_storage(port: usize) -> Result<RedisStorage> {
     let redis_url = format!("redis://localhost:{}", port);
     let pool = redis::pool(redis_url)
         .await
@@ -244,7 +247,7 @@ async fn create_local_redis_storage(port: usize) -> Result<impl Storage + ProxyS
     Ok(storage)
 }
 
-fn create_mock_db(twins: Vec<&Twin>) -> Result<impl TwinDB + Clone> {
+fn create_mock_db(twins: Vec<&Twin>) -> Result<InMemoryDB> {
     let mut db = InMemoryDB::default();
 
     for twin in twins {
@@ -253,25 +256,26 @@ fn create_mock_db(twins: Vec<&Twin>) -> Result<impl TwinDB + Clone> {
     Ok(db)
 }
 
-fn start_redis_server(port: usize) -> Result<()> {
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "docker run --name redis-test-{} --rm -d -p {}:6379 redis",
-            port, port
-        ))
+fn start_redis_server(port: usize) {
+    Command::new("docker")
+        .arg("run")
+        .arg("--name")
+        .arg(format!("redis-test-{}", port))
+        .arg("--rm")
+        .arg("-d")
+        .arg("-p")
+        .arg(format!("{}:6379", port))
+        .arg("redis")
         .output()
         .expect("failed to execute process");
-    Ok(())
 }
 
-fn stop_redis_server(port: usize) -> Result<()> {
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!("docker stop redis-test-{}", port))
+fn stop_redis_server(port: usize) {
+    Command::new("docker")
+        .arg("stop")
+        .arg(format!("redis-test-{}", port))
         .output()
         .expect("failed to execute process");
-    Ok(())
 }
 
 // RedisManager used here to spawn number of redis processes
@@ -281,9 +285,13 @@ struct RedisManager {
 }
 
 impl RedisManager {
+    fn new(ports: Vec<usize>) -> Self {
+        Self { ports: ports }
+    }
+
     async fn init(&self) {
         for port in &self.ports {
-            start_redis_server(*port).unwrap();
+            start_redis_server(*port);
         }
         sleep(Duration::from_millis(500)).await;
     }
@@ -292,7 +300,7 @@ impl RedisManager {
 impl Drop for RedisManager {
     fn drop(&mut self) {
         for port in &self.ports {
-            stop_redis_server(*port).unwrap();
+            stop_redis_server(*port);
         }
     }
 }
@@ -316,18 +324,18 @@ async fn test_message_exchange_with_edpair() {
     initialize_logger();
     let local_redis_port = 6380;
     let remote_redis_port = 6381;
-    let t1 = create_test_signer(KPair::EdPair).unwrap();
-    let t2 = create_test_signer(KPair::EdPair).unwrap();
+    let t1 = create_test_signer(KeyType::EdPair);
+    let t2 = create_test_signer(KeyType::EdPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t1.account(),
         address: "127.0.0.1:5810".to_string(),
         entities: vec![],
     };
-    let twin2: Twin = Twin {
+    let twin2 = Twin {
         version: 1,
         id: 2,
         account: t2.account(),
@@ -336,12 +344,10 @@ async fn test_message_exchange_with_edpair() {
     };
     // creating mock db with dummy entities
     let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
-    let db2 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port, remote_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -354,18 +360,15 @@ async fn test_message_exchange_with_edpair() {
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test simple message exchange
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
 }
 
 #[tokio::test]
@@ -373,18 +376,18 @@ async fn test_message_exchange_with_srpair() {
     initialize_logger();
     let local_redis_port = 6382;
     let remote_redis_port = 6383;
-    let t1 = create_test_signer(KPair::SrPair).unwrap();
-    let t2 = create_test_signer(KPair::SrPair).unwrap();
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t1.account(),
         address: "127.0.0.1:5830".to_string(),
         entities: vec![],
     };
-    let twin2: Twin = Twin {
+    let twin2 = Twin {
         version: 1,
         id: 2,
         account: t2.account(),
@@ -393,12 +396,10 @@ async fn test_message_exchange_with_srpair() {
     };
     // creating mock db with dummy entities
     let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
-    let db2 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port, remote_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -411,18 +412,15 @@ async fn test_message_exchange_with_srpair() {
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test simple message exchange
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
 }
 
 #[tokio::test]
@@ -431,26 +429,26 @@ async fn test_multi_dest_message_exchange() {
     let local_redis_port = 6384;
     let remote1_redis_port = 6385;
     let remote2_redis_port = 6386;
-    let t1 = create_test_signer(KPair::SrPair).unwrap();
-    let t2 = create_test_signer(KPair::SrPair).unwrap();
-    let t3 = create_test_signer(KPair::SrPair).unwrap();
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
+    let t3 = create_test_signer(KeyType::SrPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t1.account(),
         address: "127.0.0.1:5850".to_string(),
         entities: vec![],
     };
-    let twin2: Twin = Twin {
+    let twin2 = Twin {
         version: 1,
         id: 2,
         account: t2.account(),
         address: "127.0.0.1:5860".to_string(),
         entities: vec![],
     };
-    let twin3: Twin = Twin {
+    let twin3 = Twin {
         version: 1,
         id: 3,
         account: t3.account(),
@@ -460,13 +458,15 @@ async fn test_multi_dest_message_exchange() {
 
     // creating mock db with dummy entities
     let db1 = create_mock_db(vec![&twin1, &twin2, &twin3]).unwrap();
-    let db2 = create_mock_db(vec![&twin1, &twin2, &twin3]).unwrap();
-    let db3 = create_mock_db(vec![&twin1, &twin2, &twin3]).unwrap();
+    let db2 = db1.clone();
+    let db3 = db1.clone();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port, remote1_redis_port, remote2_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![
+        local_redis_port,
+        remote1_redis_port,
+        remote2_redis_port,
+    ]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -486,28 +486,26 @@ async fn test_multi_dest_message_exchange() {
     tokio::spawn(async move { handle_cmd(cmd, remote1_redis_port).await.unwrap() });
     tokio::spawn(async move { handle_cmd(cmd, remote2_redis_port).await.unwrap() });
     // test simple message exchange
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id, twin3.id], 1, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id, twin3.id], 200, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
-    let (_responses, err_count, _success_count, timed_out_count) =
+    let exchange_result = send_and_wait(cmd, vec![twin2.id, twin3.id], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result = send_and_wait(cmd, vec![twin2.id, twin3.id], 200, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result =
         send_and_wait(cmd, vec![twin2.id, twin3.id], 1000, local_redis_port).await;
-    assert_eq!(err_count, 0);
-    assert_eq!(timed_out_count, 0);
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
 }
 
 #[tokio::test]
 async fn test_twin_not_found() {
     initialize_logger();
     let local_redis_port = 6387;
-    let t1 = create_test_signer(KPair::SrPair).unwrap();
+    let t1 = create_test_signer(KeyType::SrPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t1.account(),
@@ -519,9 +517,7 @@ async fn test_twin_not_found() {
     let db1 = create_mock_db(vec![]).unwrap();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![local_redis_port]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -530,11 +526,14 @@ async fn test_twin_not_found() {
     tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
 
     // test getting twin not found as response error
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait("testme", vec![2], 1, local_redis_port).await;
-    assert_eq!(err_count, 1);
-    assert_eq!(timed_out_count, 0);
-    assert!(_responses[0].error.as_ref().unwrap().contains("not found"));
+    let exchange_result = send_and_wait("testme", vec![2], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 1);
+    assert_eq!(exchange_result.lost_count, 0);
+    assert!(exchange_result.responses[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("not found"));
 }
 
 #[tokio::test]
@@ -542,18 +541,18 @@ async fn test_invalid_dest() {
     initialize_logger();
     let local_redis_port = 6388;
     let remote_redis_port = 6389;
-    let t1 = create_test_signer(KPair::SrPair).unwrap();
-    let t2 = create_test_signer(KPair::SrPair).unwrap();
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t1.account(),
         address: "127.0.0.1:5890".to_string(),
         entities: vec![],
     };
-    let twin2: Twin = Twin {
+    let twin2 = Twin {
         version: 1,
         id: 2,
         account: t2.account(),
@@ -562,13 +561,11 @@ async fn test_invalid_dest() {
     };
 
     // creating mock db with dummy entities
-    let db1 = create_mock_db(vec![&twin2]).unwrap();
-    let db2 = create_mock_db(vec![&twin1]).unwrap();
+    let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port, remote_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -581,11 +578,10 @@ async fn test_invalid_dest() {
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test getting bad request as response error
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
-    assert_eq!(err_count, 1);
-    assert_eq!(timed_out_count, 0);
-    assert!(_responses[0]
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 1);
+    assert_eq!(exchange_result.lost_count, 0);
+    assert!(exchange_result.responses[0]
         .error
         .as_ref()
         .unwrap()
@@ -597,19 +593,19 @@ async fn test_unauthorized() {
     initialize_logger();
     let local_redis_port = 6390;
     let remote_redis_port = 6391;
-    let t1 = create_test_signer(KPair::SrPair).unwrap();
-    let t2 = create_test_signer(KPair::SrPair).unwrap();
-    let t3 = create_test_signer(KPair::SrPair).unwrap();
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
+    let t3 = create_test_signer(KeyType::SrPair);
 
     // create dummy entities for testing
-    let twin1: Twin = Twin {
+    let twin1 = Twin {
         version: 1,
         id: 1,
         account: t3.account(), // unmatched public key
         address: "127.0.0.1:5910".to_string(),
         entities: vec![],
     };
-    let twin2: Twin = Twin {
+    let twin2 = Twin {
         version: 1,
         id: 2,
         account: t2.account(),
@@ -618,13 +614,11 @@ async fn test_unauthorized() {
     };
 
     // creating mock db with dummy entities
-    let db1 = create_mock_db(vec![&twin2]).unwrap();
-    let db2 = create_mock_db(vec![&twin1]).unwrap();
+    let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
 
     // start redis servers
-    let redis_manager = RedisManager {
-        ports: vec![local_redis_port, remote_redis_port],
-    };
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
     redis_manager.init().await;
     // create redis storage
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
@@ -637,11 +631,10 @@ async fn test_unauthorized() {
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test getting Unauthorized as response error
-    let (_responses, err_count, _success_count, timed_out_count) =
-        send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
-    assert_eq!(err_count, 1);
-    assert_eq!(timed_out_count, 0);
-    assert!(_responses[0]
+    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    assert_eq!(exchange_result.error_count, 1);
+    assert_eq!(exchange_result.lost_count, 0);
+    assert!(exchange_result.responses[0]
         .error
         .as_ref()
         .unwrap()
