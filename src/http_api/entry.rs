@@ -69,7 +69,7 @@ enum HandlerError {
     #[error("bad request: {0:#}")]
     BadRequest(anyhow::Error),
 
-    #[error("un authorized: {0:#}")]
+    #[error("unauthorized: {0:#}")]
     UnAuthorized(anyhow::Error),
 
     #[error("invalid destination twin {0}")]
