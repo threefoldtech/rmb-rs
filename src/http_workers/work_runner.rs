@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use fastrand;
 use hyper::{client::HttpConnector, Body, Client, Method, Request};
 use tokio::time::{sleep, Duration};
-use fastrand;
 
 use crate::{
     identity::Signer,
@@ -182,7 +182,10 @@ where
             if let Err(SendError::Error(_)) = &result {
                 // exponential backoff error-handling strategy
                 let random_wait = Duration::from_millis(fastrand::u64(0..150)); // jitter
-                let delay = std::cmp::min(initial_wait * u32::pow(2, i as u32) + random_wait, maximum_backoff);
+                let delay = std::cmp::min(
+                    initial_wait * u32::pow(2, i as u32) + random_wait,
+                    maximum_backoff,
+                );
                 sleep(delay).await;
                 continue;
             }
