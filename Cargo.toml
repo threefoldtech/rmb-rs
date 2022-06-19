@@ -35,3 +35,4 @@ nix = "0.24.1"
 git-version = "0.3.5"
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }
+fastrand = "1.7.0"

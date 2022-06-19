@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use hyper::{client::HttpConnector, Body, Client, Method, Request};
+use tokio::time::{sleep, Duration};
+use fastrand;
 
 use crate::{
     identity::Signer,
@@ -164,7 +166,10 @@ where
 
         // posting the message to the remote twin
         let mut result = Ok(());
-        for _ in 0..retry {
+        let initial_wait = Duration::from_millis(100);
+        // cap wait time between attempts to 3 seconds, but in the current implementation it won't hit this limit as message retries can't set to higher than 5 .
+        let maximum_backoff = Duration::from_millis(3000);
+        for i in 0..retry {
             msg.stamp();
             msg.valid()
                 .context("message validation failed")
@@ -175,6 +180,10 @@ where
 
             result = self.send_once(&twin, &queue, msg).await;
             if let Err(SendError::Error(_)) = &result {
+                // exponential backoff error-handling strategy
+                let random_wait = Duration::from_millis(fastrand::u64(0..150)); // jitter
+                let delay = std::cmp::min(initial_wait * u32::pow(2, i as u32) + random_wait, maximum_backoff);
+                sleep(delay).await;
                 continue;
             }
             break;
