@@ -131,11 +131,20 @@ where
             if let Ok(bytes) = hyper::body::to_bytes(response.into_body()).await {
                 log::error!("response: {:?}", String::from_utf8(bytes.to_vec()));
             };
-
-            Err(SendError::Terminal(format!(
-                "received error {} from remote twin",
-                status
-            )))
+            if status.is_server_error()
+                && status != http::StatusCode::NOT_IMPLEMENTED
+                && status != http::StatusCode::HTTP_VERSION_NOT_SUPPORTED
+            {
+                Err(SendError::Error(anyhow::anyhow!(format!(
+                    "remote rmb replied with status code {}",
+                    status
+                ))))
+            } else {
+                Err(SendError::Terminal(format!(
+                    "received error {} from remote twin",
+                    status
+                )))
+            }
         } else {
             Ok(())
         }
