@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::{sync::Arc, time::Duration};
 
 use crate::{
+    identity::Signer,
     storage::ProxyStorage,
     twin::TwinDB,
     types::{Message, TransitMessage},
@@ -11,22 +12,29 @@ use crate::{
 
 use workers::{Work, WorkerPool};
 
-struct Worker<S, T> {
+struct Worker<S, T, I> {
     id: u32,
     storage: S,
     db: T,
+    identity: I,
 }
 
-impl<S, T> Worker<S, T> {
-    pub fn new(id: u32, storage: S, db: T) -> Self {
-        Worker { id, storage, db }
+impl<S, T, I> Worker<S, T, I> {
+    pub fn new(id: u32, storage: S, db: T, identity: I) -> Self {
+        Worker {
+            id,
+            storage,
+            db,
+            identity,
+        }
     }
 }
 
-impl<S, T> Worker<S, T>
+impl<S, T, I> Worker<S, T, I>
 where
     S: ProxyStorage,
     T: TwinDB,
+    I: Signer,
 {
     async fn request_handler(&self, envelope: &Message) -> Result<()> {
         // if we are here this is a msg with command system.proxy.
@@ -35,7 +43,6 @@ where
         let payload = base64::decode(&envelope.data).context("failed to decode payload")?;
         let mut payload = Message::from_json(&payload).context("invalid payload message")?;
 
-        payload.id = envelope.id.clone();
         if !payload.destination.iter().any(|x| *x == self.id) {
             // this message is not intended to this destination
             // and this is a violation that is not accepted
@@ -53,8 +60,15 @@ where
             .context("failed to get twin")?
             .ok_or_else(|| anyhow!("destination twin not found"))?;
 
-        payload.verify(&twin.account)?;
+        // verify before modifying the message
+        payload
+            .verify(&twin.account)
+            .context("payload verification failed")?;
 
+        payload.id = envelope.id.clone();
+
+        // save the envelope separately
+        self.storage.set_envelope(envelope).await?;
         // reply queue from storage
         self.storage.run_proxied(payload).await
     }
@@ -74,28 +88,41 @@ where
         }
     }
 
-    async fn reply_handler(&self, msg: &Message) -> Result<()> {
-        let mut envelope = match self.storage.get(&msg.id).await? {
+    async fn reply_handler(&self, mut msg: Message) -> Result<()> {
+        let mut envelope = match self.storage.get_envelope(&msg.id).await? {
             Some(envelope) => envelope,
-            None => return Ok(()), //timedout .. nothing to do.
+            None => {
+                // timed-out .. nothing to do.
+                log::debug!("envelope of {} is now expired", &msg.id);
+                return Ok(());
+            }
         };
 
+        // sign the message
+        msg.sign(&self.identity);
+
         envelope.data = base64::encode(msg.to_json().context("failed to encode message")?);
+        // swap the source and destination
+        let source = envelope.source;
+        envelope.source = envelope.destination[0];
+        envelope.destination = vec![source];
+        // send for normal reply
         self.storage.response(&envelope).await
     }
 
     async fn reply(&self, msg: Message) {
-        if let Err(err) = self.reply_handler(&msg).await {
+        if let Err(err) = self.reply_handler(msg).await {
             log::error!("failed to handle proxy reply: {}", err)
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<S, T> Work for Worker<S, T>
+impl<S, T, I> Work for Worker<S, T, I>
 where
     S: ProxyStorage,
     T: TwinDB,
+    I: Signer,
 {
     type Input = TransitMessage;
     type Output = ();
@@ -108,24 +135,26 @@ where
     }
 }
 
-pub struct ProxyWorker<S, T>
+pub struct ProxyWorker<S, T, I>
 where
     S: ProxyStorage,
     T: TwinDB,
+    I: Signer,
 {
     storage: S,
-    pool: WorkerPool<Arc<Worker<S, T>>>,
+    pool: WorkerPool<Arc<Worker<S, T, I>>>,
 }
 
-impl<S, T> ProxyWorker<S, T>
+impl<S, T, I> ProxyWorker<S, T, I>
 where
     S: ProxyStorage,
     T: TwinDB,
+    I: Signer + 'static,
 {
-    pub fn new(id: u32, size: usize, storage: S, twin_db: T) -> Self {
+    pub fn new(id: u32, size: usize, storage: S, twin_db: T, identity: I) -> Self {
         // it's cheaper to create one http client and then clone it to the workers
         // according to docs this will make it share the same connection pool.
-        let worker = Worker::new(id, storage.clone(), twin_db);
+        let worker = Worker::new(id, storage.clone(), twin_db, identity);
         let pool = WorkerPool::new(Arc::new(worker), size);
         Self { storage, pool }
     }

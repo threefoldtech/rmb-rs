@@ -22,6 +22,7 @@ enum Queue<'a> {
     Reply,
 
     // for proxy
+    ProxyBacklog(&'a str),
     ProxyRequest,
     ProxyReply,
 }
@@ -35,6 +36,7 @@ impl std::fmt::Display for Queue<'_> {
             Queue::Forward => write!(f, "system.forward"),
             Queue::Reply => write!(f, "system.reply"),
             // Proxy
+            Queue::ProxyBacklog(id) => write!(f, "proxy.backlog.{}", id),
             Queue::ProxyRequest => write!(f, "system.proxy.request"),
             Queue::ProxyReply => write!(f, "system.proxy.reply"),
         }
@@ -103,26 +105,30 @@ impl RedisStorage {
         Ok(conn)
     }
 
-    async fn set(
-        &self,
-        con: &mut PooledConnection<'_, RedisConnectionManager>,
-        msg: &Message,
-    ) -> Result<()> {
+    async fn set(&self, msg: &Message, queue: Queue<'_>) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+
         // add to backlog
         let ttl = match msg.ttl() {
             Some(ttl) => ttl,
             None => bail!("message has expired"),
         };
 
-        let key = self.prefixed(Queue::Backlog(&msg.id));
-        con.set_ex(&key, msg, ttl.as_secs() as usize)
+        let key = self.prefixed(queue);
+        conn.set_ex(&key, msg, ttl.as_secs() as usize)
             .await
             .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
 
         Ok(())
     }
 
-    async fn run_with_repy(&self, queue: Queue<'_>, mut msg: Message) -> Result<()> {
+    async fn get_from(&self, queue: Queue<'_>) -> Result<Option<Message>> {
+        let mut conn = self.get_connection().await?;
+        let key = self.prefixed(queue);
+        Ok(conn.get(key).await?)
+    }
+
+    async fn run_with_reply(&self, queue: Queue<'_>, mut msg: Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
         msg.reply = self.prefixed(queue);
@@ -213,19 +219,17 @@ impl FromRedisValue for ForwardedMessage {
 #[async_trait]
 impl Storage for RedisStorage {
     async fn get(&self, id: &str) -> Result<Option<Message>> {
-        let mut conn = self.get_connection().await?;
-        let key = self.prefixed(Queue::Backlog(id));
-        Ok(conn.get(key).await?)
+        self.get_from(Queue::Backlog(id)).await
     }
 
     async fn run(&self, msg: Message) -> Result<()> {
-        self.run_with_repy(Queue::Reply, msg).await
+        self.run_with_reply(Queue::Reply, msg).await
     }
 
     async fn forward(&self, msg: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        self.set(&mut conn, msg).await?;
+        self.set(msg, Queue::Backlog(&msg.id)).await?;
 
         // push to forward for every destination
         let queue = self.prefixed(Queue::Forward);
@@ -291,7 +295,15 @@ impl Storage for RedisStorage {
 #[async_trait]
 impl ProxyStorage for RedisStorage {
     async fn run_proxied(&self, msg: Message) -> Result<()> {
-        self.run_with_repy(Queue::ProxyReply, msg).await
+        self.run_with_reply(Queue::ProxyReply, msg).await
+    }
+
+    async fn set_envelope(&self, msg: &Message) -> Result<()> {
+        self.set(msg, Queue::ProxyBacklog(&msg.id)).await
+    }
+
+    async fn get_envelope(&self, id: &str) -> Result<Option<Message>> {
+        self.get_from(Queue::ProxyBacklog(id)).await
     }
 
     async fn proxied(&self) -> Result<TransitMessage> {
