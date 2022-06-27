@@ -222,7 +222,10 @@ impl redis::FromRedisValue for Message {
 /// - timestamp is always now
 /// - expiration is set to a value so that the message deadline doesn't change
 fn stamp(now: u64, ts: u64, exp: u64) -> (u64, u64) {
-    if ts > now {
+    // if timestamp is not set at all, or is in the future
+    // we always return the now as the timestamp. expiration
+    // then is not touched.
+    if ts > now || ts == 0 {
         return (now, exp);
     }
 
