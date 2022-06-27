@@ -55,6 +55,12 @@ pub trait ProxyStorage: Storage {
     /// that is specific for the proxy module.
     async fn run_proxied(&self, msg: Message) -> Result<()>;
 
+    /// get proxied envelope message
+    async fn get_envelope(&self, id: &str) -> Result<Option<Message>>;
+
+    // add proxied envelope in backlog
+    async fn set_envelope(&self, envelope: &Message) -> Result<()>;
+
     /// proxy returns the next available message from
     /// the proxy channels (request or reply)
     async fn proxied(&self) -> Result<TransitMessage>;
