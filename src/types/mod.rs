@@ -254,19 +254,23 @@ mod test {
     fn stamp() {
         use super::stamp;
 
-        let (ts, ex) = stamp(0, 10, 20);
-        assert_eq!(ts, 0);
+        let (ts, ex) = stamp(1, 0, 20);
+        assert_eq!(ts, 1);
         assert_eq!(ex, 20);
 
-        let (ts, ex) = stamp(10, 0, 20);
-        assert_eq!(ts, 10);
-        assert_eq!(ex, 10);
+        let (ts, ex) = stamp(1, 10, 20);
+        assert_eq!(ts, 1);
+        assert_eq!(ex, 20);
 
-        let (ts, ex) = stamp(20, 0, 20);
-        assert_eq!(ts, 20);
+        let (ts, ex) = stamp(10, 1, 20);
+        assert_eq!(ts, 10);
+        assert_eq!(ex, 11);
+
+        let (ts, ex) = stamp(21, 1, 20);
+        assert_eq!(ts, 21);
         assert_eq!(ex, 0);
 
-        let (ts, ex) = stamp(30, 0, 20);
+        let (ts, ex) = stamp(30, 1, 20);
         assert_eq!(ts, 30);
         assert_eq!(ex, 0);
     }
