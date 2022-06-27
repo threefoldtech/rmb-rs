@@ -222,7 +222,10 @@ impl redis::FromRedisValue for Message {
 /// - timestamp is always now
 /// - expiration is set to a value so that the message deadline doesn't change
 fn stamp(now: u64, ts: u64, exp: u64) -> (u64, u64) {
-    if ts > now {
+    // if timestamp is not set at all, or is in the future
+    // we always return the now as the timestamp. expiration
+    // then is not touched.
+    if ts > now || ts == 0 {
         return (now, exp);
     }
 
@@ -251,19 +254,23 @@ mod test {
     fn stamp() {
         use super::stamp;
 
-        let (ts, ex) = stamp(0, 10, 20);
-        assert_eq!(ts, 0);
+        let (ts, ex) = stamp(1, 0, 20);
+        assert_eq!(ts, 1);
         assert_eq!(ex, 20);
 
-        let (ts, ex) = stamp(10, 0, 20);
-        assert_eq!(ts, 10);
-        assert_eq!(ex, 10);
+        let (ts, ex) = stamp(1, 10, 20);
+        assert_eq!(ts, 1);
+        assert_eq!(ex, 20);
 
-        let (ts, ex) = stamp(20, 0, 20);
-        assert_eq!(ts, 20);
+        let (ts, ex) = stamp(10, 1, 20);
+        assert_eq!(ts, 10);
+        assert_eq!(ex, 11);
+
+        let (ts, ex) = stamp(21, 1, 20);
+        assert_eq!(ts, 21);
         assert_eq!(ex, 0);
 
-        let (ts, ex) = stamp(30, 0, 20);
+        let (ts, ex) = stamp(30, 1, 20);
         assert_eq!(ts, 30);
         assert_eq!(ex, 0);
     }
