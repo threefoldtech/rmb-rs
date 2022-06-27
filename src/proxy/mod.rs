@@ -88,7 +88,7 @@ where
         }
     }
 
-    async fn reply_handler(&self, msg: &mut Message) -> Result<()> {
+    async fn reply_handler(&self, mut msg: Message) -> Result<()> {
         let mut envelope = match self.storage.get_envelope(&msg.id).await? {
             Some(envelope) => envelope,
             None => {
@@ -110,7 +110,7 @@ where
         self.storage.response(&envelope).await
     }
 
-    async fn reply(&self, msg: &mut Message) {
+    async fn reply(&self, msg: Message) {
         if let Err(err) = self.reply_handler(msg).await {
             log::error!("failed to handle proxy reply: {}", err)
         }
@@ -130,7 +130,7 @@ where
     async fn run(&self, job: Self::Input) {
         match job {
             TransitMessage::Request(msg) => self.request(msg).await,
-            TransitMessage::Reply(mut msg) => self.reply(&mut msg).await,
+            TransitMessage::Reply(msg) => self.reply(msg).await,
         }
     }
 }
