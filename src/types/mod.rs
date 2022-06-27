@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::time::{Duration, SystemTime};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TransitMessage {
     Request(Message),
     Reply(Message),

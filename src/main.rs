@@ -175,7 +175,8 @@ async fn app(args: &Args) -> Result<()> {
         .run(),
     );
 
-    let proxy_handler = tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone()).run());
+    let proxy_handler =
+        tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone(), identity.clone()).run());
 
     // spawn the http worker
     let workers_handler =
