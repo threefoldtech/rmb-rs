@@ -11,6 +11,9 @@ mod storage;
 mod twin;
 mod types;
 
+#[cfg(test)]
+mod e2e_tests;
+
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
 use cache::RedisCache;
