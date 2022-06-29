@@ -188,7 +188,8 @@ async fn start_rmb<
     let api_handler =
         tokio::spawn(HttpApi::new(id, address, storage.clone(), ident.clone(), db.clone())?.run());
 
-    let proxy_handler = tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone()).run());
+    let proxy_handler =
+        tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone(), ident.clone()).run());
 
     let workers_handler = tokio::task::spawn(HttpWorker::new(1000, storage, db, ident).run());
 
