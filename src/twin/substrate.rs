@@ -4,20 +4,72 @@ use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
 use sp_core::crypto::AccountId32;
+use subxt::{
+    storage::StorageEntry, ClientBuilder, DefaultConfig, StorageEntryKey, StorageHasher,
+    StorageMapKey,
+};
+
 use std::sync::Arc;
-use substrate_client::SubstrateClient;
 use tokio::sync::Mutex;
-use tokio::task::spawn_blocking;
 use workers::{Work, WorkerPool};
 
 const MAX_INFLIGHT: usize = 10;
 
+struct TwinID {
+    id: u32,
+}
+
+impl TwinID {
+    pub fn new(id: u32) -> Self {
+        Self { id }
+    }
+}
+
+impl StorageEntry for TwinID {
+    type Value = Twin;
+    const PALLET: &'static str = "TfgridModule";
+    const STORAGE: &'static str = "Twins";
+
+    fn key(&self) -> StorageEntryKey {
+        let args = vec![StorageMapKey::new(
+            &self.id,
+            StorageHasher::Blake2_128Concat,
+        )];
+        StorageEntryKey::Map(args)
+    }
+}
+
+pub struct TwinAccountID {
+    id: AccountId32,
+}
+
+impl TwinAccountID {
+    pub fn new(id: AccountId32) -> Self {
+        Self { id }
+    }
+}
+
+impl StorageEntry for TwinAccountID {
+    type Value = u32;
+    const PALLET: &'static str = "TfgridModule";
+    const STORAGE: &'static str = "TwinIdByAccountID";
+
+    fn key(&self) -> StorageEntryKey {
+        let args = vec![StorageMapKey::new(
+            &self.id,
+            StorageHasher::Blake2_128Concat,
+        )];
+        StorageEntryKey::Map(args)
+    }
+}
+
+type Client = subxt::Client<DefaultConfig>;
 #[derive(Clone)]
 struct TwinGetter<C>
 where
     C: Cache<Twin>,
 {
-    client: SubstrateClient,
+    client: Client,
     cache: C,
 }
 
@@ -30,9 +82,9 @@ where
     type Output = Result<Option<Twin>>;
 
     async fn run(&self, twin_id: Self::Input) -> Self::Output {
-        // not we hit the cache again so if may requests to query the
+        // note: we hit the cache again so if many requests are querying the
         // same twin and they were "blocked" waiting for a turn to
-        // execute the query. There might be already someone who
+        // execute the query, there might be already someone who
         // have populated the cache with this value. Otherwise
         // we need to do the actual query.
         // this looks ugly we have to hit the cache 2 times for
@@ -42,9 +94,11 @@ where
             return Ok(Some(twin));
         }
 
-        let client = self.client.clone();
-        log::debug!("getting twin {} from substrate", twin_id);
-        spawn_blocking(move || client.get_twin(twin_id)).await?
+        Ok(self
+            .client
+            .storage()
+            .fetch(&TwinID::new(twin_id), None)
+            .await?)
     }
 }
 
@@ -54,7 +108,7 @@ where
     C: Cache<Twin>,
 {
     pool: Arc<Mutex<WorkerPool<TwinGetter<C>>>>,
-    client: SubstrateClient,
+    client: Client,
     cache: C,
 }
 
@@ -62,8 +116,8 @@ impl<C> SubstrateTwinDB<C>
 where
     C: Cache<Twin> + Clone,
 {
-    pub fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
-        let client = SubstrateClient::new(url.into())?;
+    pub async fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
+        let client = ClientBuilder::new().set_url(url).build().await?;
         let work = TwinGetter {
             client: client.clone(),
             cache: cache.clone(),
@@ -100,11 +154,12 @@ where
         Ok(twin)
     }
 
-    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<u32> {
-        let client = self.client.clone();
-        let twin_id: u32 =
-            spawn_blocking(move || client.get_twin_id_by_account_id(account_id)).await??;
-        Ok(twin_id)
+    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
+        Ok(self
+            .client
+            .storage()
+            .fetch(&TwinAccountID::new(account_id), None)
+            .await?)
     }
 }
 
@@ -115,13 +170,13 @@ mod tests {
 
     use super::*;
     use anyhow::Context;
-    use sp_core::crypto::Ss58Codec;
 
     #[tokio::test]
     async fn test_get_twin_with_mem_cache() {
         let mem: MemCache<Twin> = MemCache::new();
 
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", Some(mem.clone()))
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
+            .await
             .context("cannot create substrate twin db object")
             .unwrap();
 
@@ -153,7 +208,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_no_cache() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", NoCache)
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
+            .await
             .context("cannot create substrate twin db object")
             .unwrap();
 
@@ -175,18 +231,16 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_get_twin_id() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", NoCache)
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
+            .await
             .context("cannot create substrate twin db object")
             .unwrap();
 
-        // let identity = Ed25519Identity::try_from("mnemonics").unwrap();
-        // let account_id = identity.get_public_key();
-        let account_id =
-            AccountId32::from_ss58check("5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb")
-                .unwrap();
+        let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
+            .parse()
+            .unwrap();
 
         let twin_id = db
             .get_twin_with_account(account_id)
@@ -194,6 +248,6 @@ mod tests {
             .context("can't get twin from substrate")
             .unwrap();
 
-        assert_eq!(55, twin_id);
+        assert_eq!(Some(55), twin_id);
     }
 }

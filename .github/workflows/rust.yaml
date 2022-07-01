@@ -12,7 +12,7 @@ jobs:
         with:
           fetch-depth: 1
       - uses: actions/cache@v3
-        name: create and restore dependency caches 
+        name: create and restore dependency caches
         with:
           path: |
             ~/.cargo/bin/
@@ -33,12 +33,11 @@ jobs:
           args: -- --check
       - name: Start Redis
         uses: supercharge/redis-github-action@1.4.0
-        
+
       - uses: actions-rs/cargo@v1
         name: Run tests (ahm!)
         with:
           command: test
-          args: --verbose
       - uses: actions-rs/cargo@v1
         name: Run clippy
         with:
@@ -48,4 +47,4 @@ jobs:
         with:
           toolchain: stable
           command: build
-          args: --release --verbose
+          args: --release
