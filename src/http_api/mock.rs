@@ -65,8 +65,8 @@ impl TwinDB for TwinDBMock {
         }
         Ok(Some(twin))
     }
-    async fn get_twin_with_account(&self, _account_id: AccountId32) -> Result<u32> {
-        todo!();
+    async fn get_twin_with_account(&self, _account_id: AccountId32) -> Result<Option<u32>> {
+        unreachable!();
     }
 }
 

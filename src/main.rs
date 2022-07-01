@@ -90,8 +90,8 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
     redis: String,
 
-    /// substrate address
-    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf"))]
+    /// substrate address please make sure the url also include the port number
+    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
     substrate: String,
 
     /// http api listen address
@@ -153,12 +153,17 @@ async fn app(args: &Args) -> Result<()> {
         &args.substrate,
         cache::RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
+    .await
     .context("cannot create substrate twin db object")?;
 
-    let id = db
+    let id = match db
         .get_twin_with_account(identity.account())
         .await
-        .context("failed to get own twin id")?;
+        .context("failed to get own twin id")?
+    {
+        Some(id) => id,
+        None => bail!("no twin found on this network with given key"),
+    };
 
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
@@ -292,7 +297,7 @@ async fn main() {
 
     let args = Args::parse();
     if let Err(e) = app(&args).await {
-        eprintln!("{}", e);
+        eprintln!("{:#}", e);
         std::process::exit(1);
     }
 }
