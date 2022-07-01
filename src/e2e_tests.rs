@@ -38,7 +38,7 @@ impl TwinDB for InMemoryDB {
     async fn get_twin_with_account(
         &self,
         _account_id: sp_runtime::AccountId32,
-    ) -> anyhow::Result<u32> {
+    ) -> anyhow::Result<Option<u32>> {
         unimplemented!()
     }
 }
