@@ -82,9 +82,9 @@ where
     type Output = Result<Option<Twin>>;
 
     async fn run(&self, twin_id: Self::Input) -> Self::Output {
-        // not we hit the cache again so if may requests to query the
+        // note: we hit the cache again so if many requests are querying the
         // same twin and they were "blocked" waiting for a turn to
-        // execute the query. There might be already someone who
+        // execute the query, there might be already someone who
         // have populated the cache with this value. Otherwise
         // we need to do the actual query.
         // this looks ugly we have to hit the cache 2 times for
@@ -170,13 +170,12 @@ mod tests {
 
     use super::*;
     use anyhow::Context;
-    use sp_core::crypto::Ss58Codec;
 
     #[tokio::test]
     async fn test_get_twin_with_mem_cache() {
         let mem: MemCache<Twin> = MemCache::new();
 
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", Some(mem.clone()))
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
             .await
             .context("cannot create substrate twin db object")
             .unwrap();
@@ -209,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_no_cache() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", NoCache)
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
             .await
             .context("cannot create substrate twin db object")
             .unwrap();
@@ -232,19 +231,16 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_get_twin_id() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf", NoCache)
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
             .await
             .context("cannot create substrate twin db object")
             .unwrap();
 
-        // let identity = Ed25519Identity::try_from("mnemonics").unwrap();
-        // let account_id = identity.get_public_key();
-        let account_id =
-            AccountId32::from_ss58check("5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb")
-                .unwrap();
+        let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
+            .parse()
+            .unwrap();
 
         let twin_id = db
             .get_twin_with_account(account_id)
