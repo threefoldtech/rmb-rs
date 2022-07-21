@@ -1,5 +1,6 @@
 use super::data::{AppData, UploadConfig};
 use crate::twin::TwinDB;
+use crate::types::UploadPayload;
 use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
@@ -10,7 +11,10 @@ use hyper::{
 };
 use mpart_async::server::MultipartStream;
 use std::convert::Infallible;
+use std::fs::File;
+use std::io::Write;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -113,7 +117,7 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .context("failed to read request body")
         .map_err(HandlerError::BadRequest)?;
 
-    let mut message: Message = serde_json::from_slice(&body)
+    let message: Message = serde_json::from_slice(&body)
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
@@ -235,81 +239,95 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
     }
 }
 
+fn get_header(request: &Request<Body>, key: &str) -> String {
+    match request.headers().get(key).and_then(|val| val.to_str().ok()) {
+        Some(value) => value.to_string(),
+        None => "".to_string(),
+    }
+}
+
+fn verify_upload_request<S: Storage, I: Identity, D: TwinDB>(
+    data: &AppData<S, I, D>,
+    request: &Request<Body>,
+) -> Result<()> {
+    let source = get_header(&request, "rmb-source-id").parse::<u32>()?;
+    let timestamp = get_header(&request, "rmb-timestamp").parse::<u64>()?;
+
+    let payload = UploadPayload::new(
+        "".to_string(),
+        get_header(&request, "rmb-upload-cmd"),
+        source,
+        timestamp,
+        get_header(&request, "rmb-signature"),
+    );
+
+    log::debug!("payload: {:?}", payload);
+    payload.verify(&data.identity)
+}
+
 async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
     mut request: Request<Body>,
     data: AppData<S, I, D>,
 ) -> Result<(), HandlerError> {
-    let m = request
+    // first verify this upload request
+    if let Err(err) = verify_upload_request(&data, &request) {
+        return Err(HandlerError::BadRequest(err));
+    }
+
+    let m = match request
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|val| val.to_str().ok())
         .and_then(|val| val.parse::<mime::Mime>().ok())
-        .unwrap();
+    {
+        Some(m) => m,
+        None => return Err(HandlerError::BadRequest(anyhow!("cannot get mime type"))),
+    };
 
-    let boundary = m.get_param("boundary").map(|v| v.to_string()).unwrap();
+    let boundary = match m.get_param("boundary").map(|v| v.to_string()) {
+        Some(b) => b,
+        None => {
+            return Err(HandlerError::BadRequest(anyhow!(
+                "cannot get content boundary"
+            )))
+        }
+    };
 
-    let mut body = request.body_mut();
+    let body = request.body_mut();
     let mut stream = MultipartStream::new(boundary, body);
 
     while let Ok(Some(mut field)) = stream.try_next().await {
-        log::debug!("Field received:{}", field.name().unwrap());
+        log::debug!("Field received:{}", field.name().unwrap_or_default());
         if let Ok(filename) = field.filename() {
             log::debug!("Field filename:{}", filename);
-        }
 
-        while let Ok(Some(bytes)) = field.try_next().await {
-            log::debug!("Bytes received:{}", bytes.len());
+            let parent_dir = Path::new(&data.upload_config.files_path);
+            let filename = match Path::new(filename.as_ref()).file_name() {
+                Some(name) => name,
+                None => {
+                    return Err(HandlerError::BadRequest(anyhow!("file name is not valid")));
+                }
+            };
+            let path = parent_dir.join(filename);
+            match File::create(&path) {
+                Ok(mut file) => {
+                    while let Ok(Some(bytes)) = field.try_next().await {
+                        if let Err(err) = file.write_all(&bytes) {
+                            log::error!("error writing to {:?}: {}", path.as_os_str(), err);
+                            return Err(HandlerError::InternalError(anyhow!(
+                                "cannot write to file"
+                            )));
+                        }
+                    }
+                }
+
+                Err(err) => {
+                    log::error!("error creating file of {:?}: {}", path.as_os_str(), err);
+                    return Err(HandlerError::InternalError(anyhow!("cannot create a file")));
+                }
+            }
         }
     }
-
-    // let mut form = FormData::new(
-    //     request.into_body(),
-    //     m.get_param(mime::BOUNDARY).unwrap().as_str(),
-    // );
-
-    // // 512KB for hyper lager buffer
-    // // form.set_max_buf_size(size)?;
-
-    // while let Some(mut field) = form.try_next().await.map_err(|err| anyhow!("{:?}", err))? {
-    //     let name = field.name.to_owned();
-    //     let mut bytes: u64 = 0;
-
-    //     assert_eq!(bytes as usize, field.length);
-
-    //     if let Some(filename) = &field.filename {
-    //         println!("{}", filename)
-    //     }
-    //     //     let filepath = dir.path().join(filename);
-
-    //     //     match filepath.extension().and_then(|s| s.to_str()) {
-    //     //         Some("txt") => {
-    //     //             // buffer <= 8KB
-    //     //             let mut writer = File::create(&filepath).await?;
-    //     //             bytes = copy(&mut field, &mut writer).await?;
-    //     //             writer.close().await?;
-    //     //         }
-    //     //         Some("iso") => {
-    //     //             field.ignore().await?;
-    //     //         }
-    //     //         _ => {
-    //     //             // 8KB <= buffer <= 512KB
-    //     //             // let mut writer = File::create(&filepath).await?;
-    //     //             // bytes = field.copy_to(&mut writer).await?;
-
-    //     //             let mut writer = std::fs::File::create(&filepath)?;
-    //     //             bytes = field.copy_to_file(&mut writer).await?;
-    //     //         }
-    //     //     }
-
-    //     //     tracing::info!("file {} {}", name, bytes);
-    //     //     txt.push_str(&format!("file {} {}\r\n", name, bytes));
-    //     // } else {
-    //     //     let buffer = field.bytes().await?;
-    //     //     bytes = buffer.len() as u64;
-    //     //     tracing::info!("text {} {}", name, bytes);
-    //     //     txt.push_str(&format!("text {} {}\r\n", name, bytes));
-    //     // }
-    // }
 
     Ok(())
 }

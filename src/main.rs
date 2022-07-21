@@ -143,6 +143,26 @@ async fn app(args: &Args) -> Result<()> {
         },
     };
 
+    // uploads config
+    let files_path = match args.files_path.as_ref() {
+        Some(path) => path,
+        None => "",
+    };
+
+    if args.uploads {
+        if files_path.trim().is_empty() {
+            bail!("missing files path (where uploads will be stored)");
+        }
+        if !Path::new(files_path).exists() {
+            bail!("provided files path of '{}' does not exist", files_path);
+        }
+    }
+
+    let upload_config = UploadConfig {
+        enabled: args.uploads,
+        files_path: files_path.to_string(),
+    };
+
     let identity = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret.as_str())
@@ -183,20 +203,6 @@ async fn app(args: &Args) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
     // spawn the http api server
-    let files_path = match args.files_path.as_ref() {
-        Some(path) => path,
-        None => "",
-    };
-
-    if args.uploads && !Path::new(files_path).exists() {
-        bail!("files path of '{}' does not exist", files_path);
-    }
-
-    let upload_config = UploadConfig {
-        enabled: args.uploads,
-        files_path: files_path.to_string(),
-    };
-
     let api_handler = tokio::spawn(
         HttpApi::new(
             id,

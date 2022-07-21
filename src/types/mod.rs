@@ -112,13 +112,13 @@ impl Challengeable for UploadPayload {
 }
 
 impl UploadPayload {
-    pub fn new(path: String, cmd: String, source: u32, timestamp: u64) -> Self {
+    pub fn new(path: String, cmd: String, source: u32, timestamp: u64, signature: String) -> Self {
         Self {
             path: path,
             cmd: cmd,
             timestamp: timestamp,
             source: source,
-            signature: None,
+            signature: Some(signature),
         }
     }
 
@@ -212,8 +212,9 @@ impl Message {
 
         let path = Path::new(&payload.path);
         if path.is_file() && path.exists() {
-            payload.sign(signer);
             payload.timestamp = self.timestamp;
+            payload.source = self.source;
+            payload.sign(signer);
 
             Ok(payload)
         } else {
