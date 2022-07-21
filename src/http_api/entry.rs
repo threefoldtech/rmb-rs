@@ -11,7 +11,7 @@ use hyper::{
 };
 use mpart_async::server::MultipartStream;
 use std::convert::Infallible;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -327,7 +327,6 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
         if let Ok(filename) = field.filename() {
             log::debug!("Field filename:{}", filename);
 
-            let parent_dir = Path::new(&data.upload_config.files_path);
             let filename = match Path::new(filename.as_ref()).file_name() {
                 Some(name) => name,
                 None => {
@@ -335,7 +334,24 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
                 }
             };
 
-            let path_buf = parent_dir.join(filename);
+            let parent_dir =
+                Path::new(&data.upload_config.files_path).join(format!("{}", uuid::Uuid::new_v4()));
+
+            if let Err(err) = fs::create_dir_all(&parent_dir) {
+                log::error!(
+                    "error creating parent directory of {:?} for {:?}: {}",
+                    parent_dir,
+                    filename,
+                    err
+                );
+                return Err(HandlerError::InternalError(anyhow!(
+                    "cannot create parent directory"
+                )));
+            } else {
+                log::debug!("writing {:?} into {:?}", filename, parent_dir);
+            }
+
+            let path_buf = parent_dir.join(&filename);
             // to make it consistent between here and the processor
             let path = path_buf.to_string_lossy();
             payload.path = path.to_string();

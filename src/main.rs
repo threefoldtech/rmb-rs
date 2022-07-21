@@ -23,6 +23,7 @@ use clap::Parser;
 use http_api::HttpApi;
 use identity::Identity;
 use proxy::ProxyWorker;
+use std::env;
 use std::fmt::{Debug, Display};
 use std::path::Path;
 use std::str::FromStr;
@@ -93,7 +94,7 @@ struct Args {
     #[clap(short, long)]
     uploads: bool,
 
-    /// where to save uploaded files
+    /// where to save uploaded files (default is environment temp directory)
     #[clap(short, long)]
     files_path: Option<String>,
 
@@ -144,9 +145,10 @@ async fn app(args: &Args) -> Result<()> {
     };
 
     // uploads config
+    let tmp_path = env::temp_dir();
     let files_path = match args.files_path.as_ref() {
         Some(path) => path,
-        None => "",
+        None => tmp_path.to_str().unwrap_or_else(|| "/tmp"),
     };
 
     if args.uploads {
@@ -287,7 +289,6 @@ async fn processor<S: Storage>(id: u32, storage: S) {
 /// are passed by the user.
 fn set_ca() {
     if std::cfg!(target_env = "musl") {
-        use std::env;
         let file = env::var_os("SSL_CERT_FILE");
         let dir = env::var_os("SSL_CERT_DIR");
         if file.is_some() || dir.is_some() {
