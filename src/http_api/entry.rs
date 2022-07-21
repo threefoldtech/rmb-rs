@@ -338,6 +338,8 @@ async fn process_multipart_field<'a, S: Storage, I: Identity, D: TwinDB>(
             file.write_all(&bytes)
                 .with_context(|| "cannot write data to file")?;
         }
+
+        send_process_upload_message(data, payload).await;
     }
 
     Ok(())
@@ -362,8 +364,6 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
         if let Err(err) = process_multipart_field(&data, &mut payload, &mut field).await {
             log::debug!("error processing multipart field: {}", err.to_string());
             return Err(HandlerError::InternalError(err));
-        } else {
-            send_process_upload_message(&data, &payload).await;
         }
     }
 
