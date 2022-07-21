@@ -261,7 +261,6 @@ fn verify_upload_request<S: Storage, I: Identity, D: TwinDB>(
         get_header(&request, "rmb-signature"),
     );
 
-    log::debug!("payload: {:?}", payload);
     payload.verify(&data.identity)
 }
 
