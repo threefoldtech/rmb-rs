@@ -1,3 +1,4 @@
+use super::http_api::data::UploadConfig;
 use super::http_api::HttpApi;
 use super::http_workers::HttpWorker;
 use super::identity;
@@ -185,8 +186,22 @@ async fn start_rmb<
 ) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
-    let api_handler =
-        tokio::spawn(HttpApi::new(id, address, storage.clone(), ident.clone(), db.clone())?.run());
+    let upload_config = UploadConfig {
+        enabled: false,
+        files_path: String::from(""),
+    };
+
+    let api_handler = tokio::spawn(
+        HttpApi::new(
+            id,
+            address,
+            storage.clone(),
+            ident.clone(),
+            db.clone(),
+            upload_config,
+        )?
+        .run(),
+    );
 
     let proxy_handler =
         tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone(), ident.clone()).run());
