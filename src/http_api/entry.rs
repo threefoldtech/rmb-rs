@@ -9,7 +9,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
-use mpart_async::server::MultipartStream;
+use mpart_async::server::{MultipartField, MultipartStream};
 use std::convert::Infallible;
 use std::fs::{self, File};
 use std::io::Write;
@@ -290,6 +290,59 @@ async fn send_process_upload_message<S: Storage, I: Identity, D: TwinDB>(
     }
 }
 
+fn get_multipart_stream<'a>(
+    request: &'a mut Request<Body>,
+) -> Result<MultipartStream<&'a mut Body, hyper::Error>> {
+    let m = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|val| val.to_str().ok())
+        .and_then(|val| val.parse::<mime::Mime>().ok())
+        .ok_or_else(|| anyhow!("cannot get mime type"))?;
+
+    let boundary = m
+        .get_param("boundary")
+        .map(|v| v.to_string())
+        .ok_or_else(|| anyhow!("cannot get content boundary"))?;
+
+    let body = request.body_mut();
+    let stream = MultipartStream::new(boundary, body);
+
+    Ok(stream)
+}
+
+async fn process_multipart_field<'a, S: Storage, I: Identity, D: TwinDB>(
+    data: &AppData<S, I, D>,
+    payload: &mut UploadPayload,
+    field: &mut MultipartField<&'a mut Body, hyper::Error>,
+) -> Result<()> {
+    log::debug!("Field received:{}", field.name().unwrap_or_default());
+    if let Ok(filename) = field.filename() {
+        log::debug!("Field filename:{}", filename);
+
+        let filename = Path::new(filename.as_ref())
+            .file_name()
+            .ok_or_else(|| anyhow!("file name is not valid"))?;
+
+        let parent_dir =
+            Path::new(&data.upload_config.files_path).join(format!("{}", uuid::Uuid::new_v4()));
+
+        fs::create_dir_all(&parent_dir).with_context(|| "cannot create the parent directory")?;
+
+        let path_buf = parent_dir.join(&filename);
+        // to make it consistent between here and the processor
+        let path = path_buf.to_string_lossy();
+        payload.path = path.to_string();
+        let mut file = File::create(&payload.path).with_context(|| "cannot create the file")?;
+        while let Ok(Some(bytes)) = field.try_next().await {
+            file.write_all(&bytes)
+                .with_context(|| "cannot write data to file")?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
     mut request: Request<Body>,
     data: AppData<S, I, D>,
@@ -300,81 +353,18 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
         Err(err) => return Err(HandlerError::BadRequest(err)),
     };
 
-    let m = match request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|val| val.to_str().ok())
-        .and_then(|val| val.parse::<mime::Mime>().ok())
-    {
-        Some(m) => m,
-        None => return Err(HandlerError::BadRequest(anyhow!("cannot get mime type"))),
+    let mut stream = match get_multipart_stream(&mut request) {
+        Ok(s) => s,
+        Err(err) => return Err(HandlerError::BadRequest(err)),
     };
-
-    let boundary = match m.get_param("boundary").map(|v| v.to_string()) {
-        Some(b) => b,
-        None => {
-            return Err(HandlerError::BadRequest(anyhow!(
-                "cannot get content boundary"
-            )))
-        }
-    };
-
-    let body = request.body_mut();
-    let mut stream = MultipartStream::new(boundary, body);
 
     while let Ok(Some(mut field)) = stream.try_next().await {
-        log::debug!("Field received:{}", field.name().unwrap_or_default());
-        if let Ok(filename) = field.filename() {
-            log::debug!("Field filename:{}", filename);
-
-            let filename = match Path::new(filename.as_ref()).file_name() {
-                Some(name) => name,
-                None => {
-                    return Err(HandlerError::BadRequest(anyhow!("file name is not valid")));
-                }
-            };
-
-            let parent_dir =
-                Path::new(&data.upload_config.files_path).join(format!("{}", uuid::Uuid::new_v4()));
-
-            if let Err(err) = fs::create_dir_all(&parent_dir) {
-                log::error!(
-                    "error creating parent directory of {:?} for {:?}: {}",
-                    parent_dir,
-                    filename,
-                    err
-                );
-                return Err(HandlerError::InternalError(anyhow!(
-                    "cannot create parent directory"
-                )));
-            } else {
-                log::debug!("writing {:?} into {:?}", filename, parent_dir);
-            }
-
-            let path_buf = parent_dir.join(&filename);
-            // to make it consistent between here and the processor
-            let path = path_buf.to_string_lossy();
-            payload.path = path.to_string();
-            match File::create(&payload.path) {
-                Ok(mut file) => {
-                    while let Ok(Some(bytes)) = field.try_next().await {
-                        if let Err(err) = file.write_all(&bytes) {
-                            log::error!("error writing to {:?}: {}", path, err);
-                            return Err(HandlerError::InternalError(anyhow!(
-                                "cannot write to file"
-                            )));
-                        }
-                    }
-                }
-
-                Err(err) => {
-                    log::error!("error creating file of {:?}: {}", path, err);
-                    return Err(HandlerError::InternalError(anyhow!("cannot create a file")));
-                }
-            }
+        if let Err(err) = process_multipart_field(&data, &mut payload, &mut field).await {
+            log::debug!("error processing multipart field: {}", err.to_string());
+            return Err(HandlerError::InternalError(err));
+        } else {
+            send_process_upload_message(&data, &payload).await;
         }
-
-        send_process_upload_message(&data, &payload).await;
     }
 
     Ok(())
