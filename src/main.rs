@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate anyhow;
+extern crate mime;
 
 mod cache;
 mod http_api;
@@ -14,6 +15,7 @@ mod types;
 #[cfg(test)]
 mod e2e_tests;
 
+use crate::http_api::data::UploadConfig;
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
 use cache::RedisCache;
@@ -22,6 +24,7 @@ use http_api::HttpApi;
 use identity::Identity;
 use proxy::ProxyWorker;
 use std::fmt::{Debug, Display};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
@@ -85,6 +88,14 @@ struct Args {
     /// seed as hex (must start with 0x)
     #[clap(long, conflicts_with = "mnemonics")]
     seed: Option<String>,
+
+    /// wither to accept uploads or not
+    #[clap(short, long)]
+    uploads: bool,
+
+    /// where to save uploaded files
+    #[clap(short, long)]
+    files_path: Option<String>,
 
     /// redis address
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
@@ -172,6 +183,20 @@ async fn app(args: &Args) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
     // spawn the http api server
+    let files_path = match args.files_path.as_ref() {
+        Some(path) => path,
+        None => "",
+    };
+
+    if args.uploads && !Path::new(files_path).exists() {
+        bail!("files path of '{}' does not exist", files_path);
+    }
+
+    let upload_config = UploadConfig {
+        enabled: args.uploads,
+        files_path: files_path.to_string(),
+    };
+
     let api_handler = tokio::spawn(
         HttpApi::new(
             id,
@@ -179,6 +204,7 @@ async fn app(args: &Args) -> Result<()> {
             storage.clone(),
             identity.clone(),
             db.clone(),
+            upload_config,
         )?
         .run(),
     );

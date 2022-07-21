@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use hyper::{client::HttpConnector, Body, Client, Method, Request};
+use hyper::{client::HttpConnector, header, Body, Client, Method, Request};
+use mpart_async::client::MultipartRequest;
 
 use crate::{
     identity::Signer,
     storage::Storage,
     twin::{Twin, TwinDB},
-    types::{Message, TransitMessage},
+    types::{Message, TransitMessage, UploadPayload},
 };
 
 use workers::Work;
@@ -16,6 +17,7 @@ use anyhow::{Context, Result};
 enum Queue {
     Request,
     Reply,
+    Upload,
 }
 
 impl std::convert::AsRef<str> for Queue {
@@ -23,6 +25,7 @@ impl std::convert::AsRef<str> for Queue {
         match self {
             Self::Request => "zbus-remote",
             Self::Reply => "zbus-reply",
+            Self::Upload => "zbus-upload",
         }
     }
 }
@@ -92,6 +95,50 @@ where
         } else {
             u
         }
+    }
+
+    async fn upload_once<U: AsRef<str>>(
+        &self,
+        twin: &Twin,
+        uri_path: U,
+        payload: UploadPayload,
+    ) -> Result<(), SendError> {
+        let mut mpart = MultipartRequest::default();
+
+        mpart.add_file("upload", payload.path);
+        let uri = uri_builder(uri_path, &twin.address);
+        log::debug!("sending upload to '{}'", uri);
+
+        let request = Request::post(uri)
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={}", mpart.get_boundary()),
+            )
+            .header("rmb-upload-cmd", payload.cmd)
+            .header("rmb-source-id", payload.source)
+            .header("rmb-timestamp", payload.timestamp)
+            .header(
+                "rmb-signature",
+                payload.signature.unwrap_or_else(|| "".to_string()),
+            )
+            .body(Body::wrap_stream(mpart))
+            .map_err(|err| anyhow!("{:?}", err))?;
+
+        let response = self
+            .client
+            .request(request)
+            .await
+            .map_err(|err| anyhow!("{:?}", err))?;
+
+        let status = response.status();
+        if status != http::StatusCode::ACCEPTED {
+            return Err(SendError::Terminal(format!(
+                "upload failed with status code of {}",
+                status
+            )));
+        }
+
+        Ok(())
     }
 
     async fn send_once<U: AsRef<str>>(
@@ -174,10 +221,19 @@ where
             // signing the message
             msg.sign(&self.identity);
 
-            result = self.send_once(&twin, &queue, msg).await;
+            if *queue == Queue::Upload {
+                // verify if it's uploadable and get the payload signed and stamped
+                // or fail as early as possible
+                let upload_payload = msg.get_upload_payload(&self.identity)?;
+                result = self.upload_once(&twin, &queue, upload_payload).await;
+            } else {
+                result = self.send_once(&twin, &queue, msg).await;
+            }
+
             if let Err(SendError::Error(_)) = &result {
                 continue;
             }
+
             break;
         }
 
@@ -218,6 +274,7 @@ where
         let (queue, mut msg) = match job {
             TransitMessage::Request(msg) => (Queue::Request, msg),
             TransitMessage::Reply(msg) => (Queue::Reply, msg),
+            TransitMessage::Upload(msg) => (Queue::Upload, msg),
         };
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
@@ -236,7 +293,7 @@ where
         );
 
         if let Err(err) = self.send(id, retry, &queue, &mut msg).await {
-            if queue == Queue::Request {
+            if queue == Queue::Request || queue == Queue::Upload {
                 self.handle_delivery_err(id, msg, err).await;
             }
         }

@@ -25,6 +25,8 @@ enum Queue<'a> {
     ProxyBacklog(&'a str),
     ProxyRequest,
     ProxyReply,
+    // for file uploads
+    Upload,
 }
 
 impl std::fmt::Display for Queue<'_> {
@@ -39,6 +41,8 @@ impl std::fmt::Display for Queue<'_> {
             Queue::ProxyBacklog(id) => write!(f, "proxy.backlog.{}", id),
             Queue::ProxyRequest => write!(f, "system.proxy.request"),
             Queue::ProxyReply => write!(f, "system.proxy.reply"),
+            // Uploads
+            Queue::Upload => write!(f, "system.file.upload"),
         }
     }
 }
@@ -280,7 +284,11 @@ impl Storage for RedisStorage {
 
                 if let Some(mut msg) = self.get(&forward.id).await? {
                     msg.destination = vec![forward.destination];
-                    return Ok(TransitMessage::Request(msg));
+                    if msg.command == self.prefixed(Queue::Upload) {
+                        return Ok(TransitMessage::Upload(msg));
+                    } else {
+                        return Ok(TransitMessage::Request(msg));
+                    }
                 }
             } else if queue == reply_queue {
                 // reply queue had the message itself

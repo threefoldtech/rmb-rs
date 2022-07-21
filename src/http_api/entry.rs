@@ -1,12 +1,14 @@
-use super::data::AppData;
+use super::data::{AppData, UploadConfig};
 use crate::twin::TwinDB;
 use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
-use hyper::http::{Method, Request, Response, Result as HTTPResult, StatusCode};
+use futures::TryStreamExt;
+use hyper::http::{header, Method, Request, Response, Result as HTTPResult, StatusCode};
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
+use mpart_async::server::MultipartStream;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -36,6 +38,7 @@ where
         storage: S,
         identity: I,
         twin_db: D,
+        upload_config: UploadConfig,
     ) -> Result<Self> {
         let addr: SocketAddr = listen.as_ref().parse().context("failed to parse address")?;
         Ok(HttpApi {
@@ -45,6 +48,7 @@ where
                 storage,
                 identity,
                 twin_db,
+                upload_config: upload_config,
             },
         })
     }
@@ -148,7 +152,7 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
 
     //verify the message
     message
-        .verify(&sender_twin.account)
+        .verify(sender_twin.account)
         .map_err(HandlerError::UnAuthorized)?;
 
     Ok(message)
@@ -223,7 +227,110 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
         Err(err) => {
-            log::error!("failed to handel reply message: {}", err);
+            log::error!("failed to handle reply message: {}", err);
+            Response::builder()
+                .status(err.code())
+                .body(Body::from(err.to_string()))
+        }
+    }
+}
+
+async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
+    mut request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> Result<(), HandlerError> {
+    let m = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|val| val.to_str().ok())
+        .and_then(|val| val.parse::<mime::Mime>().ok())
+        .unwrap();
+
+    let boundary = m.get_param("boundary").map(|v| v.to_string()).unwrap();
+
+    let mut body = request.body_mut();
+    let mut stream = MultipartStream::new(boundary, body);
+
+    while let Ok(Some(mut field)) = stream.try_next().await {
+        log::debug!("Field received:{}", field.name().unwrap());
+        if let Ok(filename) = field.filename() {
+            log::debug!("Field filename:{}", filename);
+        }
+
+        while let Ok(Some(bytes)) = field.try_next().await {
+            log::debug!("Bytes received:{}", bytes.len());
+        }
+    }
+
+    // let mut form = FormData::new(
+    //     request.into_body(),
+    //     m.get_param(mime::BOUNDARY).unwrap().as_str(),
+    // );
+
+    // // 512KB for hyper lager buffer
+    // // form.set_max_buf_size(size)?;
+
+    // while let Some(mut field) = form.try_next().await.map_err(|err| anyhow!("{:?}", err))? {
+    //     let name = field.name.to_owned();
+    //     let mut bytes: u64 = 0;
+
+    //     assert_eq!(bytes as usize, field.length);
+
+    //     if let Some(filename) = &field.filename {
+    //         println!("{}", filename)
+    //     }
+    //     //     let filepath = dir.path().join(filename);
+
+    //     //     match filepath.extension().and_then(|s| s.to_str()) {
+    //     //         Some("txt") => {
+    //     //             // buffer <= 8KB
+    //     //             let mut writer = File::create(&filepath).await?;
+    //     //             bytes = copy(&mut field, &mut writer).await?;
+    //     //             writer.close().await?;
+    //     //         }
+    //     //         Some("iso") => {
+    //     //             field.ignore().await?;
+    //     //         }
+    //     //         _ => {
+    //     //             // 8KB <= buffer <= 512KB
+    //     //             // let mut writer = File::create(&filepath).await?;
+    //     //             // bytes = field.copy_to(&mut writer).await?;
+
+    //     //             let mut writer = std::fs::File::create(&filepath)?;
+    //     //             bytes = field.copy_to_file(&mut writer).await?;
+    //     //         }
+    //     //     }
+
+    //     //     tracing::info!("file {} {}", name, bytes);
+    //     //     txt.push_str(&format!("file {} {}\r\n", name, bytes));
+    //     // } else {
+    //     //     let buffer = field.bytes().await?;
+    //     //     bytes = buffer.len() as u64;
+    //     //     tracing::info!("text {} {}", name, bytes);
+    //     //     txt.push_str(&format!("text {} {}\r\n", name, bytes));
+    //     // }
+    // }
+
+    Ok(())
+}
+
+pub async fn rmb_upload<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> HTTPResult<Response<Body>> {
+    // only if uploads are enabled
+    if !data.upload_config.enabled {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::empty());
+    }
+
+    match rmb_upload_handler(request, data).await {
+        Ok(_) => Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Body::empty()),
+        Err(err) => {
+            log::error!("failed to handle upload: {}", err);
             Response::builder()
                 .status(err.code())
                 .body(Body::from(err.to_string()))
@@ -238,12 +345,14 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/zbus-remote") => rmb_remote(req, data).await,
         (&Method::POST, "/zbus-reply") => rmb_reply(req, data).await,
+        (&Method::POST, "/zbus-upload") => rmb_upload(req, data).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
             .unwrap()),
     }
 }
+
 #[cfg(test)]
 mod tests {
 

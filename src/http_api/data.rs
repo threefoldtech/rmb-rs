@@ -18,6 +18,12 @@ use crate::{identity::Identity, storage::Storage};
 ///
 /// ```
 
+#[derive(Clone, Debug)]
+pub struct UploadConfig {
+    pub enabled: bool,
+    pub files_path: String,
+}
+
 #[derive(Clone)]
 pub struct AppData<S, I, D>
 where
@@ -29,4 +35,5 @@ where
     pub storage: S,
     pub identity: I,
     pub twin_db: D,
+    pub upload_config: UploadConfig,
 }
