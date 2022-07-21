@@ -101,6 +101,7 @@ where
         &self,
         twin: &Twin,
         uri_path: U,
+        msg: &mut Message,
         payload: UploadPayload,
     ) -> Result<(), SendError> {
         let mut mpart = MultipartRequest::default();
@@ -138,6 +139,8 @@ where
             )));
         }
 
+        self.handle_upload_success(twin.id, msg).await;
+
         Ok(())
     }
 
@@ -145,7 +148,7 @@ where
         &self,
         twin: &Twin,
         uri_path: U,
-        msg: &Message,
+        msg: &mut Message,
     ) -> Result<(), SendError> {
         log::debug!("sending message");
         let req = Request::builder()
@@ -225,7 +228,7 @@ where
                 // verify if it's uploadable and get the payload signed and stamped
                 // or fail as early as possible
                 let upload_payload = msg.get_upload_payload(&self.identity)?;
-                result = self.upload_once(&twin, &queue, upload_payload).await;
+                result = self.upload_once(&twin, &queue, msg, upload_payload).await;
             } else {
                 result = self.send_once(&twin, &queue, msg).await;
             }
@@ -254,6 +257,23 @@ where
             .context("can not send a reply message")
         {
             log::error!("failed to deliver failure response: {}", err);
+        }
+    }
+
+    async fn handle_upload_success(&self, twin: u32, msg: &mut Message) {
+        let dst = vec![msg.source];
+        msg.source = twin;
+        msg.destination = dst;
+        msg.error = None;
+        msg.data = base64::encode("success");
+
+        if let Err(err) = self
+            .storage
+            .reply(msg)
+            .await
+            .context("can not send a reply message")
+        {
+            log::error!("failed to deliver upload success response: {}", err);
         }
     }
 }

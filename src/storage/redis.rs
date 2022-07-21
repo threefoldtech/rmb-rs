@@ -428,6 +428,7 @@ mod tests {
             TransitMessage::Reply(msg) => {
                 let _ = storage.run(msg).await;
             }
+            TransitMessage::Upload(_) => (),
         }
 
         let _ = storage.reply(&msg).await;

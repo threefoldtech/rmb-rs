@@ -195,8 +195,6 @@ impl Message {
 
     fn decode_upload_payload(&self) -> Result<UploadPayload> {
         let data = base64::decode(&self.data).with_context(|| "cannot decode message data")?;
-        let sdata = std::str::from_utf8(&data).unwrap().to_string();
-        log::debug!("data is {:?}", sdata);
         Ok(serde_json::from_slice(&data).with_context(|| "cannot decode upload payload")?)
     }
 

@@ -249,7 +249,7 @@ fn get_header(request: &Request<Body>, key: &str) -> String {
 fn verify_upload_request<S: Storage, I: Identity, D: TwinDB>(
     data: &AppData<S, I, D>,
     request: &Request<Body>,
-) -> Result<()> {
+) -> Result<UploadPayload> {
     let source = get_header(&request, "rmb-source-id").parse::<u32>()?;
     let timestamp = get_header(&request, "rmb-timestamp").parse::<u64>()?;
 
@@ -261,7 +261,33 @@ fn verify_upload_request<S: Storage, I: Identity, D: TwinDB>(
         get_header(&request, "rmb-signature"),
     );
 
-    payload.verify(&data.identity)
+    payload.verify(&data.identity)?;
+    Ok(payload)
+}
+
+async fn send_process_upload_message<S: Storage, I: Identity, D: TwinDB>(
+    data: &AppData<S, I, D>,
+    payload: &UploadPayload,
+) {
+    let mut msg = Message::default();
+
+    let dst = vec![payload.source];
+    msg.source = data.twin;
+    msg.destination = dst;
+    msg.command = payload.cmd.clone();
+    msg.data = base64::encode(&payload.path);
+    msg.stamp();
+
+    log::debug!("sending to upload command: {}", msg.command);
+
+    if let Err(err) = data
+        .storage
+        .run(msg)
+        .await
+        .context("can not run upload command")
+    {
+        log::error!("failed to run upload command: {}", err);
+    }
 }
 
 async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
@@ -269,9 +295,10 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
     data: AppData<S, I, D>,
 ) -> Result<(), HandlerError> {
     // first verify this upload request
-    if let Err(err) = verify_upload_request(&data, &request) {
-        return Err(HandlerError::BadRequest(err));
-    }
+    let mut payload = match verify_upload_request(&data, &request) {
+        Ok(p) => p,
+        Err(err) => return Err(HandlerError::BadRequest(err)),
+    };
 
     let m = match request
         .headers()
@@ -307,12 +334,16 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
                     return Err(HandlerError::BadRequest(anyhow!("file name is not valid")));
                 }
             };
-            let path = parent_dir.join(filename);
-            match File::create(&path) {
+
+            let path_buf = parent_dir.join(filename);
+            // to make it consistent between here and the processor
+            let path = path_buf.to_string_lossy();
+            payload.path = path.to_string();
+            match File::create(&payload.path) {
                 Ok(mut file) => {
                     while let Ok(Some(bytes)) = field.try_next().await {
                         if let Err(err) = file.write_all(&bytes) {
-                            log::error!("error writing to {:?}: {}", path.as_os_str(), err);
+                            log::error!("error writing to {:?}: {}", path, err);
                             return Err(HandlerError::InternalError(anyhow!(
                                 "cannot write to file"
                             )));
@@ -321,11 +352,13 @@ async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
                 }
 
                 Err(err) => {
-                    log::error!("error creating file of {:?}: {}", path.as_os_str(), err);
+                    log::error!("error creating file of {:?}: {}", path, err);
                     return Err(HandlerError::InternalError(anyhow!("cannot create a file")));
                 }
             }
         }
+
+        send_process_upload_message(&data, &payload).await;
     }
 
     Ok(())
@@ -393,6 +426,10 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
+            upload_config: UploadConfig {
+                enabled: true,
+                files_path: "tmp".to_string(),
+            },
         };
 
         let req = Request::builder()
@@ -431,6 +468,10 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
+            upload_config: UploadConfig {
+                enabled: true,
+                files_path: "tmp".to_string(),
+            },
         };
 
         let req = Request::builder()
