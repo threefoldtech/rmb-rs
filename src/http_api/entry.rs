@@ -316,10 +316,7 @@ async fn process_multipart_field<'a, S: Storage, I: Identity, D: TwinDB>(
     payload: &mut UploadPayload,
     field: &mut MultipartField<&'a mut Body, hyper::Error>,
 ) -> Result<()> {
-    log::debug!("Field received:{}", field.name().unwrap_or_default());
     if let Ok(filename) = field.filename() {
-        log::debug!("Field filename:{}", filename);
-
         let filename = Path::new(filename.as_ref())
             .file_name()
             .ok_or_else(|| anyhow!("file name is not valid"))?;
