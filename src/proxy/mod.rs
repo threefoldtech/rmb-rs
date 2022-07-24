@@ -62,7 +62,7 @@ where
 
         // verify before modifying the message
         payload
-            .verify(twin.account)
+            .verify(&twin.account)
             .context("payload verification failed")?;
 
         payload.id = envelope.id.clone();

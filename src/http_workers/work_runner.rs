@@ -234,7 +234,7 @@ where
                 Queue::Upload => {
                     // verify if it's uploadable and get the payload stamped
                     // or fail as early as possible, then sign
-                    let mut upload_payload: UploadPayload = msg.try_into()?;
+                    let upload_payload: UploadPayload = msg.try_into()?;
                     result = self.upload_once(&twin, &queue, msg, upload_payload).await;
                 }
                 Queue::Request => result = self.send_once(&twin, &queue, msg).await,

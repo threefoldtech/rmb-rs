@@ -189,8 +189,8 @@ impl Message {
     }
 
     /// verify the message signature
-    pub fn verify<I: Identity>(&self, identity: I) -> Result<()> {
-        verify(self, &identity, &self.signature)
+    pub fn verify<I: Identity>(&self, identity: &I) -> Result<()> {
+        verify(self, identity, &self.signature)
     }
 
     /// stamp sets the correct timestamp on the message.

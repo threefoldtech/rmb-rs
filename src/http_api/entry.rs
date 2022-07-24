@@ -134,7 +134,7 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
 
     //verify the message
     message
-        .verify(sender_twin.account)
+        .verify(&sender_twin.account)
         .map_err(HandlerError::UnAuthorized)?;
 
     Ok(message)
