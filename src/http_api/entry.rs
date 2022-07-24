@@ -1,22 +1,17 @@
-use super::data::{AppData, UploadConfig};
+use super::data::AppData;
+use super::errors::HandlerError;
+use super::upload::{UploadConfig, UploadHandler};
 use crate::twin::TwinDB;
-use crate::types::UploadPayload;
 use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
-use futures::TryStreamExt;
-use hyper::http::{header, Method, Request, Response, Result as HTTPResult, StatusCode};
+use hyper::http::{Method, Request, Response, Result as HTTPResult, StatusCode};
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
-use mpart_async::server::{MultipartField, MultipartStream};
 use std::convert::Infallible;
-use std::fs::{self, File};
-use std::io::Write;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::time::Duration;
-use thiserror::Error;
 
 const MAX_AGE: Duration = Duration::from_secs(60);
 
@@ -71,23 +66,6 @@ where
 
         Ok(())
     }
-}
-#[derive(Error, Debug)]
-enum HandlerError {
-    #[error("bad request: {0:#}")]
-    BadRequest(anyhow::Error),
-
-    #[error("unauthorized: {0:#}")]
-    UnAuthorized(anyhow::Error),
-
-    #[error("invalid destination twin {0}")]
-    InvalidDestination(u32),
-
-    #[error("invalid source twin {0}: {1:#}")]
-    InvalidSource(u32, anyhow::Error),
-
-    #[error("internal server error: {0:#}")]
-    InternalError(#[from] anyhow::Error),
 }
 
 impl HandlerError {
@@ -239,132 +217,13 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
     }
 }
 
-fn get_header(request: &Request<Body>, key: &str) -> String {
-    match request.headers().get(key).and_then(|val| val.to_str().ok()) {
-        Some(value) => value.to_string(),
-        None => "".to_string(),
-    }
-}
-
-fn verify_upload_request<S: Storage, I: Identity, D: TwinDB>(
-    data: &AppData<S, I, D>,
-    request: &Request<Body>,
-) -> Result<UploadPayload> {
-    let source = get_header(&request, "rmb-source-id").parse::<u32>()?;
-    let timestamp = get_header(&request, "rmb-timestamp").parse::<u64>()?;
-
-    let payload = UploadPayload::new(
-        "".to_string(),
-        get_header(&request, "rmb-upload-cmd"),
-        source,
-        timestamp,
-        get_header(&request, "rmb-signature"),
-    );
-
-    payload.verify(&data.identity)?;
-    Ok(payload)
-}
-
-async fn send_process_upload_message<S: Storage, I: Identity, D: TwinDB>(
-    data: &AppData<S, I, D>,
-    payload: &UploadPayload,
-) {
-    let mut msg = Message::default();
-
-    let dst = vec![payload.source];
-    msg.source = data.twin;
-    msg.destination = dst;
-    msg.command = payload.cmd.clone();
-    msg.data = base64::encode(&payload.path);
-    msg.stamp();
-
-    log::debug!("sending to upload command: {}", msg.command);
-
-    if let Err(err) = data
-        .storage
-        .run(msg)
-        .await
-        .context("can not run upload command")
-    {
-        log::error!("failed to run upload command: {}", err);
-    }
-}
-
-fn get_multipart_stream<'a>(
-    request: &'a mut Request<Body>,
-) -> Result<MultipartStream<&'a mut Body, hyper::Error>> {
-    let m = request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|val| val.to_str().ok())
-        .and_then(|val| val.parse::<mime::Mime>().ok())
-        .ok_or_else(|| anyhow!("cannot get mime type"))?;
-
-    let boundary = m
-        .get_param("boundary")
-        .map(|v| v.to_string())
-        .ok_or_else(|| anyhow!("cannot get content boundary"))?;
-
-    let body = request.body_mut();
-    let stream = MultipartStream::new(boundary, body);
-
-    Ok(stream)
-}
-
-async fn process_multipart_field<'a, S: Storage, I: Identity, D: TwinDB>(
-    data: &AppData<S, I, D>,
-    payload: &mut UploadPayload,
-    field: &mut MultipartField<&'a mut Body, hyper::Error>,
-) -> Result<()> {
-    if let Ok(filename) = field.filename() {
-        let filename = Path::new(filename.as_ref())
-            .file_name()
-            .ok_or_else(|| anyhow!("file name is not valid"))?;
-
-        let parent_dir =
-            Path::new(&data.upload_config.files_path).join(format!("{}", uuid::Uuid::new_v4()));
-
-        fs::create_dir_all(&parent_dir).with_context(|| "cannot create the parent directory")?;
-
-        let path_buf = parent_dir.join(&filename);
-        // to make it consistent between here and the processor
-        let path = path_buf.to_string_lossy().to_string();
-        payload.path = path.clone();
-        let mut file = File::create(&path).with_context(|| "cannot create the file")?;
-        while let Ok(Some(bytes)) = field.try_next().await {
-            file.write_all(&bytes)
-                .with_context(|| "cannot write data to file")?;
-        }
-
-        send_process_upload_message(data, payload).await;
-    }
-
-    Ok(())
-}
-
 async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
-    mut request: Request<Body>,
+    request: Request<Body>,
     data: AppData<S, I, D>,
 ) -> Result<(), HandlerError> {
-    // first verify this upload request
-    let mut payload = match verify_upload_request(&data, &request) {
-        Ok(p) => p,
-        Err(err) => return Err(HandlerError::BadRequest(err)),
-    };
+    let handler = UploadHandler::new(data);
 
-    let mut stream = match get_multipart_stream(&mut request) {
-        Ok(s) => s,
-        Err(err) => return Err(HandlerError::BadRequest(err)),
-    };
-
-    while let Ok(Some(mut field)) = stream.try_next().await {
-        if let Err(err) = process_multipart_field(&data, &mut payload, &mut field).await {
-            log::debug!("error processing multipart field: {}", err.to_string());
-            return Err(HandlerError::InternalError(err));
-        }
-    }
-
-    Ok(())
+    handler.handle(request).await
 }
 
 pub async fn rmb_upload<S: Storage, I: Identity, D: TwinDB>(
@@ -409,7 +268,7 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
 #[cfg(test)]
 mod tests {
 
-    use std::time::SystemTime;
+    use std::{path::PathBuf, time::SystemTime};
 
     use crate::http_api::mock::{Identities, StorageMock, TwinDBMock};
 
@@ -431,7 +290,7 @@ mod tests {
             twin_db,
             upload_config: UploadConfig {
                 enabled: true,
-                files_path: "tmp".to_string(),
+                upload_dir: PathBuf::from("/tmp"),
             },
         };
 
@@ -473,7 +332,7 @@ mod tests {
             twin_db,
             upload_config: UploadConfig {
                 enabled: true,
-                files_path: "tmp".to_string(),
+                upload_dir: PathBuf::from("/tmp"),
             },
         };
 

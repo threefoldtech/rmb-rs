@@ -1,4 +1,3 @@
-use super::http_api::data::UploadConfig;
 use super::http_api::HttpApi;
 use super::http_workers::HttpWorker;
 use super::identity;
@@ -9,6 +8,7 @@ use super::redis;
 use super::storage::{ProxyStorage, RedisStorage, Storage};
 use super::twin::{Twin, TwinDB};
 use super::types::Message;
+use crate::http_api::UploadConfig;
 use anyhow::{Context, Result};
 use bb8_redis::redis::AsyncCommands;
 use sp_core::crypto::Pair;
@@ -188,7 +188,7 @@ async fn start_rmb<
 
     let upload_config = UploadConfig {
         enabled: false,
-        files_path: String::from(""),
+        upload_dir: Path::new("/tmp").to_path_buf(),
     };
 
     let api_handler = tokio::spawn(

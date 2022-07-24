@@ -1,3 +1,5 @@
+use super::upload::UploadConfig;
+
 use crate::twin::TwinDB;
 use crate::{identity::Identity, storage::Storage};
 
@@ -17,12 +19,6 @@ use crate::{identity::Identity, storage::Storage};
 /// };
 ///
 /// ```
-
-#[derive(Clone, Debug)]
-pub struct UploadConfig {
-    pub enabled: bool,
-    pub files_path: String,
-}
 
 #[derive(Clone)]
 pub struct AppData<S, I, D>

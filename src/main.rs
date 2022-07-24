@@ -15,17 +15,17 @@ mod types;
 #[cfg(test)]
 mod e2e_tests;
 
-use crate::http_api::data::UploadConfig;
+use crate::http_api::UploadConfig;
 use crate::http_workers::HttpWorker;
 use anyhow::{Context, Result};
 use cache::RedisCache;
-use clap::Parser;
+use clap::{Parser, ValueHint};
 use http_api::HttpApi;
 use identity::Identity;
 use proxy::ProxyWorker;
 use std::env;
 use std::fmt::{Debug, Display};
-use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use storage::{RedisStorage, Storage};
@@ -95,8 +95,8 @@ struct Args {
     uploads: bool,
 
     /// where to save uploaded files (default is environment temp directory)
-    #[clap(short, long)]
-    files_path: Option<String>,
+    #[clap(long, parse(from_os_str), value_hint = ValueHint::FilePath)]
+    upload_dir: Option<PathBuf>,
 
     /// redis address
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
@@ -145,24 +145,23 @@ async fn app(args: &Args) -> Result<()> {
     };
 
     // uploads config
-    let tmp_path = env::temp_dir();
-    let files_path = match args.files_path.as_ref() {
-        Some(path) => path,
-        None => tmp_path.to_str().unwrap_or_else(|| "/tmp"),
+    let upload_dir = match &args.upload_dir {
+        Some(path) => PathBuf::from(path),
+        None => env::temp_dir(),
     };
 
     if args.uploads {
-        if files_path.trim().is_empty() {
-            bail!("missing files path (where uploads will be stored)");
-        }
-        if !Path::new(files_path).exists() {
-            bail!("provided files path of '{}' does not exist", files_path);
+        if !upload_dir.exists() || !upload_dir.is_dir() {
+            bail!(
+                "provided files path of '{:?}' does not exist or is not a directory",
+                upload_dir
+            );
         }
     }
 
     let upload_config = UploadConfig {
         enabled: args.uploads,
-        files_path: files_path.to_string(),
+        upload_dir: upload_dir,
     };
 
     let identity = match args.key_type {
