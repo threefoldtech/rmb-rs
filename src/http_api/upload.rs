@@ -8,9 +8,9 @@ use futures::TryStreamExt;
 use hyper::http::{header, Request};
 use hyper::Body;
 use mpart_async::server::{MultipartField, MultipartStream};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct UploadConfig {
@@ -45,7 +45,7 @@ where
         let timestamp = self.get_header(request, "rmb-timestamp").parse::<u64>()?;
 
         let payload = UploadPayload::new(
-            "".to_string(),
+            PathBuf::from(""),
             self.get_header(request, "rmb-upload-cmd"),
             source,
             timestamp,
@@ -63,7 +63,9 @@ where
         msg.source = self.data.twin;
         msg.destination = dst;
         msg.command = payload.cmd.clone();
-        msg.data = base64::encode(&payload.path);
+
+        let path_str = payload.path.to_string_lossy();
+        msg.data = base64::encode(&path_str.to_string());
         msg.stamp();
 
         log::debug!("sending to upload command: {}", msg.command);
@@ -106,20 +108,14 @@ where
         payload: &mut UploadPayload,
         field: &mut MultipartField<&'a mut Body, hyper::Error>,
     ) -> Result<()> {
-        if let Ok(filename) = field.filename() {
-            let filename = Path::new(filename.as_ref())
-                .file_name()
-                .ok_or_else(|| anyhow!("file name is not valid"))?;
-
-            let parent_dir = Path::new(&self.data.upload_config.upload_dir)
+        // if a file is provided, we always generate a uuid for as filename
+        if let Ok(_) = field.filename() {
+            let path = self
+                .data
+                .upload_config
+                .upload_dir
                 .join(format!("{}", uuid::Uuid::new_v4()));
 
-            fs::create_dir_all(&parent_dir)
-                .with_context(|| "cannot create the parent directory")?;
-
-            let path_buf = parent_dir.join(&filename);
-            // to make it consistent between here and the processor
-            let path = path_buf.to_string_lossy().to_string();
             payload.path = path.clone();
             let mut file = File::create(&path).with_context(|| "cannot create the file")?;
             while let Ok(Some(bytes)) = field.try_next().await {

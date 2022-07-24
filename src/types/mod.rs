@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use bb8_redis::redis;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Debug)]
@@ -16,7 +16,7 @@ pub enum TransitMessage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UploadPayload {
-    pub path: String,
+    pub path: PathBuf,
     pub cmd: String,
 
     #[serde(default)]
@@ -112,7 +112,7 @@ impl Challengeable for UploadPayload {
 }
 
 impl UploadPayload {
-    pub fn new(path: String, cmd: String, source: u32, timestamp: u64, signature: String) -> Self {
+    pub fn new(path: PathBuf, cmd: String, source: u32, timestamp: u64, signature: String) -> Self {
         Self {
             path: path,
             cmd: cmd,
@@ -193,33 +193,6 @@ impl Message {
         verify(self, &identity, &self.signature)
     }
 
-    fn decode_upload_payload(&self) -> Result<UploadPayload> {
-        let data = base64::decode(&self.data).with_context(|| "cannot decode message data")?;
-        Ok(serde_json::from_slice(&data).with_context(|| "cannot decode upload payload")?)
-    }
-
-    pub fn get_upload_payload<S: Signer>(&self, signer: &S) -> Result<UploadPayload> {
-        if self.destination.len() > 1 {
-            return Err(anyhow!("cannot send upload to multiple destinations"));
-        }
-
-        let mut payload = self.decode_upload_payload()?;
-        if payload.cmd.trim().is_empty() {
-            return Err(anyhow!("cmd is empty"));
-        }
-
-        let path = Path::new(&payload.path);
-        if path.is_file() && path.exists() {
-            payload.timestamp = self.timestamp;
-            payload.source = self.source;
-            payload.sign(signer);
-
-            Ok(payload)
-        } else {
-            Err(anyhow!("path does not exist or is not a file"))
-        }
-    }
-
     /// stamp sets the correct timestamp on the message.
     /// - first validate the timestamp set by a client if in the future, it's reset to now
     /// - if the timestamp is (now) or in the past. the timestamp is updated also to now
@@ -266,6 +239,33 @@ impl Message {
         // to compute the ttl we need to do the following
         // - ttl = expiration - (now - msg.timestamp)
         Duration::from_secs(now.saturating_sub(self.timestamp))
+    }
+}
+
+impl TryFrom<&mut Message> for UploadPayload {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: &mut Message) -> Result<Self, Self::Error> {
+        let data = base64::decode(&msg.data).with_context(|| "cannot decode message data")?;
+        let mut payload: Self =
+            serde_json::from_slice(&data).with_context(|| "cannot decode upload payload")?;
+
+        if msg.destination.len() > 1 {
+            return Err(anyhow!("cannot send upload to multiple destinations"));
+        }
+
+        if payload.cmd.trim().is_empty() {
+            return Err(anyhow!("cmd is empty"));
+        }
+
+        if payload.path.is_file() && payload.path.exists() {
+            payload.timestamp = msg.timestamp;
+            payload.source = msg.source;
+
+            Ok(payload)
+        } else {
+            Err(anyhow!("path does not exist or is not a file"))
+        }
     }
 }
 

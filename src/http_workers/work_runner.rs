@@ -224,13 +224,16 @@ where
             // signing the message
             msg.sign(&self.identity);
 
-            if *queue == Queue::Upload {
-                // verify if it's uploadable and get the payload signed and stamped
-                // or fail as early as possible
-                let upload_payload = msg.get_upload_payload(&self.identity)?;
-                result = self.upload_once(&twin, &queue, msg, upload_payload).await;
-            } else {
-                result = self.send_once(&twin, &queue, msg).await;
+            match queue {
+                Queue::Upload => {
+                    // verify if it's uploadable and get the payload stamped
+                    // or fail as early as possible, then sign
+                    let mut upload_payload: UploadPayload = msg.try_into()?;
+                    upload_payload.sign(&self.identity);
+                    result = self.upload_once(&twin, &queue, msg, upload_payload).await;
+                }
+                Queue::Request => result = self.send_once(&twin, &queue, msg).await,
+                Queue::Reply => (),
             }
 
             if let Err(SendError::Error(_)) = &result {

@@ -15,6 +15,7 @@ use sp_core::crypto::Pair;
 use sp_core::{ed25519::Pair as EdPair, sr25519::Pair as SrPair};
 use std::collections::HashMap;
 use std::panic;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
 use tokio::time::{sleep, Duration};
@@ -188,7 +189,7 @@ async fn start_rmb<
 
     let upload_config = UploadConfig {
         enabled: false,
-        upload_dir: Path::new("/tmp").to_path_buf(),
+        upload_dir: PathBuf::from("/tmp"),
     };
 
     let api_handler = tokio::spawn(
