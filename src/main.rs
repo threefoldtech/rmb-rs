@@ -150,18 +150,16 @@ async fn app(args: &Args) -> Result<()> {
         None => env::temp_dir(),
     };
 
-    if args.uploads {
-        if !upload_dir.exists() || !upload_dir.is_dir() {
-            bail!(
-                "provided files path of '{:?}' does not exist or is not a directory",
-                upload_dir
-            );
-        }
+    if args.uploads && (!upload_dir.exists() || !upload_dir.is_dir()) {
+        bail!(
+            "provided files path of '{:?}' does not exist or is not a directory",
+            upload_dir
+        );
     }
 
     let upload_config = UploadConfig {
         enabled: args.uploads,
-        upload_dir: upload_dir,
+        upload_dir,
     };
 
     let identity = match args.key_type {

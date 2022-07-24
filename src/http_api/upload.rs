@@ -30,7 +30,7 @@ where
     D: TwinDB,
 {
     pub fn new(data: AppData<S, I, D>) -> Self {
-        Self { data: data }
+        Self { data }
     }
 
     fn get_header(&self, request: &Request<Body>, key: &str) -> String {
@@ -109,7 +109,7 @@ where
         field: &mut MultipartField<&'a mut Body, hyper::Error>,
     ) -> Result<()> {
         // if a file is provided, we always generate a uuid for as filename
-        if let Ok(_) = field.filename() {
+        if field.filename().is_ok() {
             let path = self
                 .data
                 .upload_config

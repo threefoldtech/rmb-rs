@@ -114,10 +114,10 @@ impl Challengeable for UploadPayload {
 impl UploadPayload {
     pub fn new(path: PathBuf, cmd: String, source: u32, timestamp: u64, signature: String) -> Self {
         Self {
-            path: path,
-            cmd: cmd,
-            timestamp: timestamp,
-            source: source,
+            path,
+            cmd,
+            timestamp,
+            source,
             signature: Some(signature),
         }
     }

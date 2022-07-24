@@ -47,7 +47,7 @@ where
                 storage,
                 identity,
                 twin_db,
-                upload_config: upload_config,
+                upload_config,
             },
         })
     }
