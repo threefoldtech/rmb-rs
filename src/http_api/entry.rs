@@ -328,9 +328,9 @@ async fn process_multipart_field<'a, S: Storage, I: Identity, D: TwinDB>(
 
         let path_buf = parent_dir.join(&filename);
         // to make it consistent between here and the processor
-        let path = path_buf.to_string_lossy();
-        payload.path = path.to_string();
-        let mut file = File::create(&payload.path).with_context(|| "cannot create the file")?;
+        let path = path_buf.to_string_lossy().to_string();
+        payload.path = path.clone();
+        let mut file = File::create(&path).with_context(|| "cannot create the file")?;
         while let Ok(Some(bytes)) = field.try_next().await {
             file.write_all(&bytes)
                 .with_context(|| "cannot write data to file")?;
