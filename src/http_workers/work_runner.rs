@@ -102,11 +102,19 @@ where
         twin: &Twin,
         uri_path: U,
         msg: &mut Message,
-        payload: UploadPayload,
+        mut payload: UploadPayload,
     ) -> Result<(), SendError> {
-        let mut mpart = MultipartRequest::default();
+        payload.sign(&self.identity);
 
+        let signature = match payload.signature {
+            Some(s) => s,
+            // this should not happen
+            None => return Err(SendError::Terminal("signature is empty".to_string())),
+        };
+
+        let mut mpart = MultipartRequest::default();
         mpart.add_file("upload", payload.path);
+
         let uri = uri_builder(uri_path, &twin.address);
         log::debug!("sending upload to '{}'", uri);
 
@@ -118,22 +126,20 @@ where
             .header("rmb-upload-cmd", payload.cmd)
             .header("rmb-source-id", payload.source)
             .header("rmb-timestamp", payload.timestamp)
-            .header(
-                "rmb-signature",
-                payload.signature.unwrap_or_else(|| "".to_string()),
-            )
+            .header("rmb-signature", signature)
             .body(Body::wrap_stream(mpart))
-            .map_err(|err| anyhow!("{:?}", err))?;
+            // if request construction failed, don't retry
+            .map_err(|err| SendError::Terminal(err.to_string()))?;
 
         let response = self
             .client
             .request(request)
             .await
-            .map_err(|err| anyhow!("{:?}", err))?;
+            .map_err(|err| SendError::Error(err.into()))?;
 
         let status = response.status();
         if status != http::StatusCode::ACCEPTED {
-            return Err(SendError::Terminal(format!(
+            return Err(SendError::Error(anyhow!(
                 "upload failed with status code of {}",
                 status
             )));
@@ -229,7 +235,6 @@ where
                     // verify if it's uploadable and get the payload stamped
                     // or fail as early as possible, then sign
                     let mut upload_payload: UploadPayload = msg.try_into()?;
-                    upload_payload.sign(&self.identity);
                     result = self.upload_once(&twin, &queue, msg, upload_payload).await;
                 }
                 Queue::Request => result = self.send_once(&twin, &queue, msg).await,
