@@ -145,7 +145,7 @@ in case of any build issues, things to try:
 Example of using sr25519 key on dev network
 
 ```sh
-rmb-rs --key-type sr25519 -s "wss://tfchain.dev.grid.tf" -m "<YOUR-MNEMONICS>"
+rmb-rs --key-type sr25519 -s "wss://tfchain.dev.grid.tf:443" -m "<YOUR-MNEMONICS>"
 ```
 
 **Debug logs** can be enabled by `-d` option.
