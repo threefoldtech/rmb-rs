@@ -233,7 +233,7 @@ where
             match queue {
                 &Queue::Upload => {
                     // verify if it's uploadable and get the payload stamped
-                    // or fail as early as possible, then sign
+                    // or fail as early as possible
                     let upload_payload: UploadPayload = msg.try_into()?;
                     result = self.upload_once(&twin, &queue, msg, upload_payload).await;
                 }
