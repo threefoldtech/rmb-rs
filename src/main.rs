@@ -152,7 +152,7 @@ async fn app(args: &Args) -> Result<()> {
 
     if args.uploads && (!upload_dir.exists() || !upload_dir.is_dir()) {
         bail!(
-            "provided files path of '{:?}' does not exist or is not a directory",
+            "provided upload directory of '{:?}' does not exist or is not a directory",
             upload_dir
         );
     }
