@@ -68,23 +68,6 @@ where
     }
 }
 
-impl HandlerError {
-    fn code(&self) -> StatusCode {
-        match self {
-            // the following ones are considered a bad request error
-            HandlerError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            HandlerError::InvalidDestination(_) => StatusCode::BAD_REQUEST,
-
-            // Unauthorized errors
-            HandlerError::UnAuthorized(_) => StatusCode::UNAUTHORIZED,
-            HandlerError::InvalidSource(_, _) => StatusCode::UNAUTHORIZED,
-
-            // Internal server error
-            HandlerError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
 async fn message<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
     data: &AppData<S, I, D>,

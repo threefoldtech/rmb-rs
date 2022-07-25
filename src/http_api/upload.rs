@@ -8,7 +8,7 @@ use futures::TryStreamExt;
 use hyper::http::{header, Request};
 use hyper::Body;
 use mpart_async::server::{MultipartField, MultipartStream};
-use std::fs::File;
+use std::fs::{remove_file, File};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -56,7 +56,7 @@ where
         Ok(payload)
     }
 
-    async fn send_message_to_processor(&self, payload: &UploadPayload) {
+    async fn send_message_to_processor(&self, payload: &UploadPayload, path: &PathBuf) {
         let mut msg = Message::default();
 
         let dst = vec![payload.source];
@@ -64,7 +64,7 @@ where
         msg.destination = dst;
         msg.command = payload.cmd.clone();
 
-        let path_str = payload.path.to_string_lossy();
+        let path_str = path.to_string_lossy();
         msg.data = base64::encode(&path_str.to_string());
         msg.stamp();
 
@@ -105,33 +105,35 @@ where
 
     async fn process_multipart_field(
         &self,
-        payload: &mut UploadPayload,
+        payload: &UploadPayload,
         field: &mut MultipartField<&'a mut Body, hyper::Error>,
     ) -> Result<()> {
-        // if a file is provided, we always generate a uuid for as filename
-        if field.filename().is_ok() {
-            let path = self
-                .data
-                .upload_config
-                .upload_dir
-                .join(format!("{}", uuid::Uuid::new_v4()));
+        // we always generate a uuid for as filename
+        let path = self
+            .data
+            .upload_config
+            .upload_dir
+            .join(format!("{}", uuid::Uuid::new_v4()));
 
-            payload.path = path.clone();
-            let mut file = File::create(&path).with_context(|| "cannot create the file")?;
-            while let Ok(Some(bytes)) = field.try_next().await {
-                file.write_all(&bytes)
-                    .with_context(|| "cannot write data to file")?;
-            }
-
-            self.send_message_to_processor(payload).await;
+        let mut file = File::create(&path).with_context(|| "cannot create the file")?;
+        while let Ok(Some(bytes)) = field.try_next().await {
+            file.write_all(&bytes)
+                .with_context(|| "cannot write data to file")
+                .or_else(|err| {
+                    log::debug!("cleaning up {:?}", &path);
+                    remove_file(&path).with_context(|| "cannot clean up written file")?;
+                    Err(err)
+                })?;
         }
+
+        self.send_message_to_processor(&payload, &path).await;
 
         Ok(())
     }
 
     pub async fn handle(&self, mut request: Request<Body>) -> Result<(), HandlerError> {
         // first verify this upload request
-        let mut payload = match self.verify_request(&request) {
+        let payload = match self.verify_request(&request) {
             Ok(p) => p,
             Err(err) => return Err(HandlerError::BadRequest(err)),
         };
@@ -142,7 +144,7 @@ where
         };
 
         while let Ok(Some(mut field)) = stream.try_next().await {
-            if let Err(err) = self.process_multipart_field(&mut payload, &mut field).await {
+            if let Err(err) = self.process_multipart_field(&payload, &mut field).await {
                 log::debug!("error processing multipart field: {}", err.to_string());
                 return Err(HandlerError::InternalError(err));
             }
