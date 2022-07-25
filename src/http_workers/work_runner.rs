@@ -6,7 +6,7 @@ use crate::{
     identity::Signer,
     storage::Storage,
     twin::{Twin, TwinDB},
-    types::{Message, TransitMessage, UploadPayload},
+    types::{Message, TransitMessage, UploadRequest},
 };
 
 use workers::Work;
@@ -102,18 +102,11 @@ where
         twin: &Twin,
         uri_path: U,
         msg: &mut Message,
-        mut payload: UploadPayload,
+        mut upload: UploadRequest,
     ) -> Result<(), SendError> {
-        payload.sign(&self.identity);
-
-        let signature = match payload.signature {
-            Some(s) => s,
-            // this should not happen
-            None => return Err(SendError::Terminal("signature is empty".to_string())),
-        };
-
+        let signature = upload.sign(&self.identity, msg.timestamp, msg.source);
         let mut mpart = MultipartRequest::default();
-        mpart.add_file("upload", payload.path);
+        mpart.add_file("upload", upload.path);
 
         let uri = uri_builder(uri_path, &twin.address);
         log::debug!("sending upload to '{}'", uri);
@@ -123,9 +116,9 @@ where
                 header::CONTENT_TYPE,
                 format!("multipart/form-data; boundary={}", mpart.get_boundary()),
             )
-            .header("rmb-upload-cmd", payload.cmd)
-            .header("rmb-source-id", payload.source)
-            .header("rmb-timestamp", payload.timestamp)
+            .header("rmb-upload-cmd", upload.cmd)
+            .header("rmb-source-id", msg.source)
+            .header("rmb-timestamp", msg.timestamp)
             .header("rmb-signature", signature)
             .body(Body::wrap_stream(mpart))
             // if request construction failed, don't retry
@@ -232,10 +225,9 @@ where
 
             match queue {
                 &Queue::Upload => {
-                    // verify if it's uploadable and get the payload stamped
-                    // or fail as early as possible
-                    let upload_payload: UploadPayload = msg.try_into()?;
-                    result = self.upload_once(&twin, &queue, msg, upload_payload).await;
+                    // verify if it's uploadable and get the upload request or fail as early as possible
+                    let request: UploadRequest = (&*msg).try_into()?;
+                    result = self.upload_once(&twin, &queue, msg, request).await;
                 }
                 &Queue::Request | &Queue::Reply => {
                     result = self.send_once(&twin, &queue, msg).await

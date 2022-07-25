@@ -15,20 +15,9 @@ pub enum TransitMessage {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UploadPayload {
+pub struct UploadRequest {
     pub path: PathBuf,
     pub cmd: String,
-
-    #[serde(default)]
-    #[serde(skip_deserializing)]
-    pub timestamp: u64,
-
-    #[serde(default)]
-    #[serde(skip_deserializing)]
-    pub source: u32,
-
-    #[serde(skip_deserializing)]
-    pub signature: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -100,34 +89,39 @@ pub fn verify<C: Challengeable, I: Identity>(
     Ok(())
 }
 
-impl Challengeable for UploadPayload {
+impl<T> Challengeable for Vec<T>
+where
+    T: std::fmt::Display,
+{
     fn challenge(&self) -> Result<md5::Digest> {
         let mut hash = md5::Context::new();
-        write!(hash, "{}", self.cmd)?;
-        write!(hash, "{}", self.source)?;
-        write!(hash, "{}", self.timestamp)?;
+        for v in self.iter() {
+            write!(hash, "{}", v)?;
+        }
 
         Ok(hash.compute())
     }
 }
 
-impl UploadPayload {
-    pub fn new(path: PathBuf, cmd: String, source: u32, timestamp: u64, signature: String) -> Self {
-        Self {
-            path,
-            cmd,
-            timestamp,
-            source,
-            signature: Some(signature),
-        }
+impl UploadRequest {
+    pub fn new(path: PathBuf, cmd: String) -> Self {
+        Self { path, cmd }
     }
 
-    pub fn sign<S: Signer>(&mut self, signer: &S) {
-        self.signature = Some(sign(self, signer));
+    pub fn sign<S: Signer>(&mut self, signer: &S, timestamp: u64, source: u32) -> String {
+        let fields = vec![timestamp.to_string(), source.to_string()];
+        sign(&fields, signer)
     }
 
-    pub fn verify<I: Identity>(&self, identity: &I) -> Result<()> {
-        verify(self, identity, &self.signature)
+    pub fn verify<I: Identity>(
+        &self,
+        identity: &I,
+        timestamp: u64,
+        source: u32,
+        signature: String,
+    ) -> Result<()> {
+        let fields = vec![timestamp.to_string(), source.to_string()];
+        verify(&fields, identity, &Some(signature))
     }
 }
 
@@ -242,29 +236,26 @@ impl Message {
     }
 }
 
-impl TryFrom<&mut Message> for UploadPayload {
+impl TryFrom<&Message> for UploadRequest {
     type Error = anyhow::Error;
 
-    fn try_from(msg: &mut Message) -> Result<Self, Self::Error> {
+    fn try_from(msg: &Message) -> Result<Self, Self::Error> {
         let data = base64::decode(&msg.data).with_context(|| "cannot decode message data")?;
-        let mut payload: Self =
-            serde_json::from_slice(&data).with_context(|| "cannot decode upload payload")?;
+        let request: Self =
+            serde_json::from_slice(&data).with_context(|| "cannot decode upload request")?;
 
         if msg.destination.len() > 1 {
-            return Err(anyhow!("cannot send upload to multiple destinations"));
+            bail!("cannot send upload to multiple destinations");
         }
 
-        if payload.cmd.trim().is_empty() {
-            return Err(anyhow!("cmd is empty"));
+        if request.cmd.trim().is_empty() {
+            bail!("cmd is empty");
         }
 
-        if payload.path.is_file() && payload.path.exists() {
-            payload.timestamp = msg.timestamp;
-            payload.source = msg.source;
-
-            Ok(payload)
+        if request.path.is_file() && request.path.exists() {
+            Ok(request)
         } else {
-            Err(anyhow!("path does not exist or is not a file"))
+            bail!("path does not exist or is not a file")
         }
     }
 }

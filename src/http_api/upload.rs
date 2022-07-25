@@ -1,7 +1,7 @@
 use super::data::AppData;
 use super::errors::HandlerError;
 use crate::twin::TwinDB;
-use crate::types::UploadPayload;
+use crate::types::UploadRequest;
 use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
@@ -40,29 +40,27 @@ where
         }
     }
 
-    fn verify_request(&self, request: &Request<Body>) -> Result<UploadPayload> {
+    fn verify_request(&self, request: &Request<Body>) -> Result<(UploadRequest, u32)> {
         let source = self.get_header(request, "rmb-source-id").parse::<u32>()?;
         let timestamp = self.get_header(request, "rmb-timestamp").parse::<u64>()?;
+        let signature = self.get_header(request, "rmb-signature");
 
-        let payload = UploadPayload::new(
+        let upload = UploadRequest::new(
             PathBuf::from(""),
             self.get_header(request, "rmb-upload-cmd"),
-            source,
-            timestamp,
-            self.get_header(request, "rmb-signature"),
         );
 
-        payload.verify(&self.data.identity)?;
-        Ok(payload)
+        upload.verify(&self.data.identity, timestamp, source, signature)?;
+        Ok((upload, source))
     }
 
-    async fn send_message_to_processor(&self, payload: &UploadPayload, path: &PathBuf) {
+    async fn send_message_to_processor(&self, upload: &UploadRequest, source: u32, path: &PathBuf) {
         let mut msg = Message::default();
 
-        let dst = vec![payload.source];
+        let dst = vec![source];
         msg.source = self.data.twin;
         msg.destination = dst;
-        msg.command = payload.cmd.clone();
+        msg.command = upload.cmd.clone();
 
         let path_str = path.to_string_lossy();
         msg.data = base64::encode(&path_str.to_string());
@@ -105,9 +103,8 @@ where
 
     async fn process_multipart_field(
         &self,
-        payload: &UploadPayload,
         field: &mut MultipartField<&'a mut Body, hyper::Error>,
-    ) -> Result<()> {
+    ) -> Result<PathBuf> {
         // we always generate a uuid for as filename
         let path = self
             .data
@@ -126,15 +123,13 @@ where
                 })?;
         }
 
-        self.send_message_to_processor(&payload, &path).await;
-
-        Ok(())
+        Ok(path)
     }
 
     pub async fn handle(&self, mut request: Request<Body>) -> Result<(), HandlerError> {
         // first verify this upload request
-        let payload = match self.verify_request(&request) {
-            Ok(p) => p,
+        let (upload, source) = match self.verify_request(&request) {
+            Ok(ret) => ret,
             Err(err) => return Err(HandlerError::BadRequest(err)),
         };
 
@@ -144,9 +139,12 @@ where
         };
 
         while let Ok(Some(mut field)) = stream.try_next().await {
-            if let Err(err) = self.process_multipart_field(&payload, &mut field).await {
-                log::debug!("error processing multipart field: {}", err.to_string());
-                return Err(HandlerError::InternalError(err));
+            match self.process_multipart_field(&mut field).await {
+                Ok(path) => self.send_message_to_processor(&upload, source, &path).await,
+                Err(err) => {
+                    log::debug!("error processing multipart field: {}", err.to_string());
+                    return Err(HandlerError::InternalError(err));
+                }
             }
         }
 
