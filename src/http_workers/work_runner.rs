@@ -231,14 +231,15 @@ where
             msg.sign(&self.identity);
 
             match queue {
-                Queue::Upload => {
+                &Queue::Upload => {
                     // verify if it's uploadable and get the payload stamped
                     // or fail as early as possible, then sign
                     let upload_payload: UploadPayload = msg.try_into()?;
                     result = self.upload_once(&twin, &queue, msg, upload_payload).await;
                 }
-                Queue::Request => result = self.send_once(&twin, &queue, msg).await,
-                Queue::Reply => (),
+                &Queue::Request | &Queue::Reply => {
+                    result = self.send_once(&twin, &queue, msg).await
+                }
             }
 
             if let Err(SendError::Error(_)) = &result {
