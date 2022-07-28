@@ -145,21 +145,20 @@ async fn app(args: &Args) -> Result<()> {
     };
 
     // uploads config
-    let upload_dir = match &args.upload_dir {
-        Some(path) => PathBuf::from(path),
-        None => env::temp_dir(),
-    };
-
-    if args.uploads && (!upload_dir.exists() || !upload_dir.is_dir()) {
-        bail!(
-            "provided upload directory of '{:?}' does not exist or is not a directory",
-            upload_dir
-        );
-    }
-
-    let upload_config = UploadConfig {
-        enabled: args.uploads,
-        upload_dir,
+    let upload_config = if args.uploads {
+        let dir = match &args.upload_dir {
+            Some(path) => path.clone(),
+            None => env::temp_dir(),
+        };
+        if !dir.is_dir() {
+            bail!(
+                "provided upload directory of '{:?}' does not exist or is not a directory",
+                dir
+            );
+        }
+        UploadConfig::Enabled(dir)
+    } else {
+        UploadConfig::Disabled
     };
 
     let identity = match args.key_type {

@@ -10,12 +10,25 @@ use hyper::Body;
 use mpart_async::server::{MultipartField, MultipartStream};
 use std::fs::{remove_file, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
-pub struct UploadConfig {
-    pub enabled: bool,
-    pub upload_dir: PathBuf,
+pub enum UploadConfig {
+    Enabled(PathBuf),
+    Disabled,
+}
+
+impl UploadConfig {
+    pub fn join<P: AsRef<Path>>(&self, p: P) -> Result<PathBuf> {
+        match self {
+            Self::Enabled(c) => Ok(c.join(p)),
+            Self::Disabled => bail!("upload is not enabled"),
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
 }
 
 #[derive(Clone)]
@@ -54,7 +67,7 @@ where
         Ok((upload, source))
     }
 
-    async fn send_message_to_processor(&self, upload: &UploadRequest, source: u32, path: &PathBuf) {
+    async fn send_message_to_processor(&self, upload: &UploadRequest, source: u32, path: &Path) {
         let mut msg = Message::default();
 
         let dst = vec![source];
@@ -109,8 +122,7 @@ where
         let path = self
             .data
             .upload_config
-            .upload_dir
-            .join(format!("{}", uuid::Uuid::new_v4()));
+            .join(uuid::Uuid::new_v4().to_string())?;
 
         let mut file = File::create(&path).with_context(|| "cannot create the file")?;
         while let Ok(Some(bytes)) = field.try_next().await {

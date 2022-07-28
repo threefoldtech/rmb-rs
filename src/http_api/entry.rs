@@ -214,7 +214,7 @@ pub async fn rmb_upload<S: Storage, I: Identity, D: TwinDB>(
     data: AppData<S, I, D>,
 ) -> HTTPResult<Response<Body>> {
     // only if uploads are enabled
-    if !data.upload_config.enabled {
+    if !data.upload_config.is_enabled() {
         return Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::empty());
@@ -251,7 +251,7 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
 #[cfg(test)]
 mod tests {
 
-    use std::{path::PathBuf, time::SystemTime};
+    use std::time::SystemTime;
 
     use crate::http_api::mock::{Identities, StorageMock, TwinDBMock};
 
@@ -271,10 +271,7 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
-            upload_config: UploadConfig {
-                enabled: true,
-                upload_dir: PathBuf::from("/tmp"),
-            },
+            upload_config: UploadConfig::Enabled("/tmp".into()),
         };
 
         let req = Request::builder()
@@ -313,10 +310,7 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
-            upload_config: UploadConfig {
-                enabled: true,
-                upload_dir: PathBuf::from("/tmp"),
-            },
+            upload_config: UploadConfig::Enabled("/tmp".into()),
         };
 
         let req = Request::builder()

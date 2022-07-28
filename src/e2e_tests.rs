@@ -187,10 +187,7 @@ async fn start_rmb<
 ) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
-    let upload_config = UploadConfig {
-        enabled: false,
-        upload_dir: PathBuf::from("/tmp"),
-    };
+    let upload_config = UploadConfig::Disabled;
 
     let api_handler = tokio::spawn(
         HttpApi::new(

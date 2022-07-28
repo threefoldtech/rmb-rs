@@ -89,7 +89,7 @@ pub fn verify<C: Challengeable, I: Identity>(
     Ok(())
 }
 
-impl<T> Challengeable for Vec<T>
+impl<T> Challengeable for &[T]
 where
     T: std::fmt::Display,
 {
@@ -110,7 +110,7 @@ impl UploadRequest {
 
     pub fn sign<S: Signer>(&mut self, signer: &S, timestamp: u64, source: u32) -> String {
         let fields = vec![timestamp.to_string(), source.to_string()];
-        sign(&fields, signer)
+        sign(&fields.as_slice(), signer)
     }
 
     pub fn verify<I: Identity>(
@@ -121,7 +121,7 @@ impl UploadRequest {
         signature: String,
     ) -> Result<()> {
         let fields = vec![timestamp.to_string(), source.to_string()];
-        verify(&fields, identity, &Some(signature))
+        verify(&fields.as_slice(), identity, &Some(signature))
     }
 }
 
