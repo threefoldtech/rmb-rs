@@ -1944,7 +1944,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmb-rs"
+name = "rmb"
 version = "0.1.0"
 dependencies = [
  "anyhow",

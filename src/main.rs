@@ -7,16 +7,16 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueHint};
 
-use rmb_rs::cache::RedisCache;
-use rmb_rs::http_api::{HttpApi, UploadConfig};
-use rmb_rs::http_workers::HttpWorker;
-use rmb_rs::identity;
-use rmb_rs::identity::Identity;
-use rmb_rs::processor;
-use rmb_rs::proxy::ProxyWorker;
-use rmb_rs::redis;
-use rmb_rs::storage::RedisStorage;
-use rmb_rs::twin::{SubstrateTwinDB, TwinDB};
+use rmb::cache::RedisCache;
+use rmb::http_api::{HttpApi, UploadConfig};
+use rmb::http_workers::HttpWorker;
+use rmb::identity;
+use rmb::identity::Identity;
+use rmb::processor;
+use rmb::proxy::ProxyWorker;
+use rmb::redis;
+use rmb::storage::RedisStorage;
+use rmb::twin::{SubstrateTwinDB, TwinDB};
 
 const GIT_VERSION: &str =
     git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
