@@ -1,38 +1,23 @@
-#[macro_use]
-extern crate anyhow;
-extern crate mime;
-
-mod cache;
-mod http_api;
-mod http_workers;
-mod identity;
-mod proxy;
-mod redis;
-mod storage;
-mod twin;
-mod types;
-
-#[cfg(test)]
-mod e2e_tests;
-
-use crate::http_api::UploadConfig;
-use crate::http_workers::HttpWorker;
-use anyhow::{Context, Result};
-use cache::RedisCache;
-use clap::{Parser, ValueHint};
-use http_api::HttpApi;
-use identity::Identity;
-use proxy::ProxyWorker;
 use std::env;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
-use storage::{RedisStorage, Storage};
-use twin::{SubstrateTwinDB, TwinDB};
 
-const MIN_RETRIES: usize = 1;
-const MAX_RETRIES: usize = 5;
+use anyhow::{bail, Context, Result};
+use clap::{Parser, ValueHint};
+
+use rmb_rs::cache::RedisCache;
+use rmb_rs::http_api::{HttpApi, UploadConfig};
+use rmb_rs::http_workers::HttpWorker;
+use rmb_rs::identity;
+use rmb_rs::identity::Identity;
+use rmb_rs::processor;
+use rmb_rs::proxy::ProxyWorker;
+use rmb_rs::redis;
+use rmb_rs::storage::RedisStorage;
+use rmb_rs::twin::{SubstrateTwinDB, TwinDB};
+
 const GIT_VERSION: &str =
     git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 
@@ -62,16 +47,6 @@ impl Display for KeyType {
 
         f.write_str(s)
     }
-}
-
-fn between<T: Ord>(v: T, min: T, max: T) -> T {
-    if v < min {
-        return min;
-    } else if v > max {
-        return max;
-    }
-
-    v
 }
 
 /// the reliable message bus
@@ -180,7 +155,7 @@ async fn app(args: &Args) -> Result<()> {
 
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        cache::RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
     .await
     .context("cannot create substrate twin db object")?;
@@ -248,36 +223,6 @@ async fn app(args: &Args) -> Result<()> {
 
     log::warn!("unreachable");
     unreachable!();
-}
-
-/// processor processes the local client queues, and fill up the message for processing
-/// before pushing it to the forward queue. where they gonna be picked up by the workers
-async fn processor<S: Storage>(id: u32, storage: S) {
-    use tokio::time::sleep;
-    let wait = Duration::from_secs(1);
-    loop {
-        let mut msg = match storage.local().await {
-            Ok(msg) => msg,
-            Err(err) => {
-                log::error!("failed to process local messages: {}", err);
-                sleep(wait).await;
-                continue;
-            }
-        };
-
-        msg.version = 1;
-        // set the source
-        msg.source = id;
-        // set the message id.
-        msg.id = uuid::Uuid::new_v4().to_string();
-        msg.retry = between(msg.retry, MIN_RETRIES, MAX_RETRIES);
-        msg.stamp();
-
-        // push message to forward.
-        if let Err(err) = storage.forward(&msg).await {
-            log::error!("failed to push message for forwarding: {}", err);
-        }
-    }
 }
 
 /// set_ca populate the SSL_CERT_DIR environment variable

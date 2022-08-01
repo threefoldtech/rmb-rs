@@ -1,24 +1,12 @@
 use super::upload::UploadConfig;
 
+use crate::identity::Identity;
+use crate::storage::Storage;
 use crate::twin::TwinDB;
-use crate::{identity::Identity, storage::Storage};
 
 /// - This is an example struct which holds the shared parameters between all handlers
 /// such as the database or cache
 /// - You can build your own AppData object or change this model
-///
-/// Initialization Example
-///
-/// ```
-/// let r = RedisStorage;
-/// let i = SubstrateIdentity;
-///
-/// let d = AppData {
-///     storage: &r,
-///     identity: &i,
-/// };
-///
-/// ```
 
 #[derive(Clone)]
 pub struct AppData<S, I, D>
