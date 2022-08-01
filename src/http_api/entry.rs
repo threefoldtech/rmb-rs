@@ -1,4 +1,6 @@
 use super::data::AppData;
+use super::errors::HandlerError;
+use super::upload::{UploadConfig, UploadHandler};
 use crate::twin::TwinDB;
 use crate::{identity::Identity, storage::Storage, types::Message};
 use anyhow::{Context, Result};
@@ -10,7 +12,6 @@ use hyper::{
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
-use thiserror::Error;
 
 const MAX_AGE: Duration = Duration::from_secs(60);
 
@@ -36,6 +37,7 @@ where
         storage: S,
         identity: I,
         twin_db: D,
+        upload_config: UploadConfig,
     ) -> Result<Self> {
         let addr: SocketAddr = listen.as_ref().parse().context("failed to parse address")?;
         Ok(HttpApi {
@@ -45,6 +47,7 @@ where
                 storage,
                 identity,
                 twin_db,
+                upload_config,
             },
         })
     }
@@ -64,40 +67,6 @@ where
         Ok(())
     }
 }
-#[derive(Error, Debug)]
-enum HandlerError {
-    #[error("bad request: {0:#}")]
-    BadRequest(anyhow::Error),
-
-    #[error("unauthorized: {0:#}")]
-    UnAuthorized(anyhow::Error),
-
-    #[error("invalid destination twin {0}")]
-    InvalidDestination(u32),
-
-    #[error("invalid source twin {0}: {1:#}")]
-    InvalidSource(u32, anyhow::Error),
-
-    #[error("internal server error: {0:#}")]
-    InternalError(#[from] anyhow::Error),
-}
-
-impl HandlerError {
-    fn code(&self) -> StatusCode {
-        match self {
-            // the following ones are considered a bad request error
-            HandlerError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            HandlerError::InvalidDestination(_) => StatusCode::BAD_REQUEST,
-
-            // Unauthorized errors
-            HandlerError::UnAuthorized(_) => StatusCode::UNAUTHORIZED,
-            HandlerError::InvalidSource(_, _) => StatusCode::UNAUTHORIZED,
-
-            // Internal server error
-            HandlerError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
 
 async fn message<S: Storage, I: Identity, D: TwinDB>(
     request: Request<Body>,
@@ -109,7 +78,7 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         .context("failed to read request body")
         .map_err(HandlerError::BadRequest)?;
 
-    let mut message: Message = serde_json::from_slice(&body)
+    let message: Message = serde_json::from_slice(&body)
         .context("failed to parse message")
         .map_err(HandlerError::BadRequest)?;
 
@@ -223,7 +192,40 @@ pub async fn rmb_reply<S: Storage, I: Identity, D: TwinDB>(
             .status(StatusCode::ACCEPTED)
             .body(Body::empty()),
         Err(err) => {
-            log::error!("failed to handel reply message: {}", err);
+            log::error!("failed to handle reply message: {}", err);
+            Response::builder()
+                .status(err.code())
+                .body(Body::from(err.to_string()))
+        }
+    }
+}
+
+async fn rmb_upload_handler<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> Result<(), HandlerError> {
+    let handler = UploadHandler::new(data);
+
+    handler.handle(request).await
+}
+
+pub async fn rmb_upload<S: Storage, I: Identity, D: TwinDB>(
+    request: Request<Body>,
+    data: AppData<S, I, D>,
+) -> HTTPResult<Response<Body>> {
+    // only if uploads are enabled
+    if !data.upload_config.is_enabled() {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::empty());
+    }
+
+    match rmb_upload_handler(request, data).await {
+        Ok(_) => Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Body::empty()),
+        Err(err) => {
+            log::error!("failed to handle upload: {}", err);
             Response::builder()
                 .status(err.code())
                 .body(Body::from(err.to_string()))
@@ -238,12 +240,14 @@ pub async fn routes<'a, S: Storage, I: Identity, D: TwinDB>(
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/zbus-remote") => rmb_remote(req, data).await,
         (&Method::POST, "/zbus-reply") => rmb_reply(req, data).await,
+        (&Method::POST, "/zbus-upload") => rmb_upload(req, data).await,
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
             .unwrap()),
     }
 }
+
 #[cfg(test)]
 mod tests {
 
@@ -267,6 +271,7 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
+            upload_config: UploadConfig::Enabled("/tmp".into()),
         };
 
         let req = Request::builder()
@@ -305,6 +310,7 @@ mod tests {
             storage,
             identity: Identities::get_recv_identity(),
             twin_db,
+            upload_config: UploadConfig::Enabled("/tmp".into()),
         };
 
         let req = Request::builder()

@@ -1,15 +1,16 @@
-use super::http_api::HttpApi;
-use super::http_workers::HttpWorker;
-use super::identity;
-use super::identity::{Identity, Signer};
-use super::processor;
-use super::proxy::ProxyWorker;
-use super::redis;
-use super::storage::{ProxyStorage, RedisStorage, Storage};
-use super::twin::{Twin, TwinDB};
-use super::types::Message;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bb8_redis::redis::AsyncCommands;
+use rmb::http_api::HttpApi;
+use rmb::http_api::UploadConfig;
+use rmb::http_workers::HttpWorker;
+use rmb::identity;
+use rmb::identity::{Identity, Signer};
+use rmb::processor;
+use rmb::proxy::ProxyWorker;
+use rmb::redis;
+use rmb::storage::{ProxyStorage, RedisStorage, Storage};
+use rmb::twin::{Twin, TwinDB};
+use rmb::types::Message;
 use sp_core::crypto::Pair;
 use sp_core::{ed25519::Pair as EdPair, sr25519::Pair as SrPair};
 use std::collections::HashMap;
@@ -185,8 +186,19 @@ async fn start_rmb<
 ) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
-    let api_handler =
-        tokio::spawn(HttpApi::new(id, address, storage.clone(), ident.clone(), db.clone())?.run());
+    let upload_config = UploadConfig::Disabled;
+
+    let api_handler = tokio::spawn(
+        HttpApi::new(
+            id,
+            address,
+            storage.clone(),
+            ident.clone(),
+            db.clone(),
+            upload_config,
+        )?
+        .run(),
+    );
 
     let proxy_handler =
         tokio::spawn(ProxyWorker::new(id, 10, storage.clone(), db.clone(), ident.clone()).run());

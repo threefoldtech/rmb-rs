@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use hyper::{client::HttpConnector, Body, Client, Method, Request};
+use hyper::{client::HttpConnector, header, Body, Client, Method, Request};
+use mpart_async::client::MultipartRequest;
 
 use crate::{
     identity::Signer,
     storage::Storage,
     twin::{Twin, TwinDB},
-    types::{Message, TransitMessage},
+    types::{Message, TransitMessage, UploadRequest},
 };
 
 use workers::Work;
@@ -16,6 +17,7 @@ use anyhow::{Context, Result};
 enum Queue {
     Request,
     Reply,
+    Upload,
 }
 
 impl std::convert::AsRef<str> for Queue {
@@ -23,6 +25,7 @@ impl std::convert::AsRef<str> for Queue {
         match self {
             Self::Request => "zbus-remote",
             Self::Reply => "zbus-reply",
+            Self::Upload => "zbus-upload",
         }
     }
 }
@@ -94,11 +97,57 @@ where
         }
     }
 
+    async fn upload_once<U: AsRef<str>>(
+        &self,
+        twin: &Twin,
+        uri_path: U,
+        msg: &mut Message,
+        mut upload: UploadRequest,
+    ) -> Result<(), SendError> {
+        let signature = upload.sign(&self.identity, msg.timestamp, msg.source);
+        let mut mpart = MultipartRequest::default();
+        mpart.add_file("upload", upload.path);
+
+        let uri = uri_builder(uri_path, &twin.address);
+        log::debug!("sending upload to '{}'", uri);
+
+        let request = Request::post(uri)
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={}", mpart.get_boundary()),
+            )
+            .header("rmb-upload-cmd", upload.cmd)
+            .header("rmb-source-id", msg.source)
+            .header("rmb-timestamp", msg.timestamp)
+            .header("rmb-signature", signature)
+            .body(Body::wrap_stream(mpart))
+            // if request construction failed, don't retry
+            .map_err(|err| SendError::Terminal(err.to_string()))?;
+
+        let response = self
+            .client
+            .request(request)
+            .await
+            .map_err(|err| SendError::Error(err.into()))?;
+
+        let status = response.status();
+        if status != http::StatusCode::ACCEPTED {
+            return Err(SendError::Error(anyhow!(
+                "upload failed with status code of {}",
+                status
+            )));
+        }
+
+        self.handle_upload_success(twin.id, msg).await;
+
+        Ok(())
+    }
+
     async fn send_once<U: AsRef<str>>(
         &self,
         twin: &Twin,
         uri_path: U,
-        msg: &Message,
+        msg: &mut Message,
     ) -> Result<(), SendError> {
         log::debug!("sending message");
         let req = Request::builder()
@@ -174,10 +223,21 @@ where
             // signing the message
             msg.sign(&self.identity);
 
-            result = self.send_once(&twin, &queue, msg).await;
+            match queue {
+                &Queue::Upload => {
+                    // verify if it's uploadable and get the upload request or fail as early as possible
+                    let request: UploadRequest = (&*msg).try_into()?;
+                    result = self.upload_once(&twin, &queue, msg, request).await;
+                }
+                &Queue::Request | &Queue::Reply => {
+                    result = self.send_once(&twin, &queue, msg).await
+                }
+            }
+
             if let Err(SendError::Error(_)) = &result {
                 continue;
             }
+
             break;
         }
 
@@ -200,6 +260,23 @@ where
             log::error!("failed to deliver failure response: {}", err);
         }
     }
+
+    async fn handle_upload_success(&self, twin: u32, msg: &mut Message) {
+        let dst = vec![msg.source];
+        msg.source = twin;
+        msg.destination = dst;
+        msg.error = None;
+        msg.data = base64::encode("success");
+
+        if let Err(err) = self
+            .storage
+            .reply(msg)
+            .await
+            .context("can not send a reply message")
+        {
+            log::error!("failed to deliver upload success response: {}", err);
+        }
+    }
 }
 
 #[async_trait]
@@ -218,6 +295,7 @@ where
         let (queue, mut msg) = match job {
             TransitMessage::Request(msg) => (Queue::Request, msg),
             TransitMessage::Reply(msg) => (Queue::Reply, msg),
+            TransitMessage::Upload(msg) => (Queue::Upload, msg),
         };
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
@@ -236,7 +314,7 @@ where
         );
 
         if let Err(err) = self.send(id, retry, &queue, &mut msg).await {
-            if queue == Queue::Request {
+            if queue == Queue::Request || queue == Queue::Upload {
                 self.handle_delivery_err(id, msg, err).await;
             }
         }

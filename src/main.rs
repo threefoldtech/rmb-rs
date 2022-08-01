@@ -1,34 +1,23 @@
-#[macro_use]
-extern crate anyhow;
-
-mod cache;
-mod http_api;
-mod http_workers;
-mod identity;
-mod proxy;
-mod redis;
-mod storage;
-mod twin;
-mod types;
-
-#[cfg(test)]
-mod e2e_tests;
-
-use crate::http_workers::HttpWorker;
-use anyhow::{Context, Result};
-use cache::RedisCache;
-use clap::Parser;
-use http_api::HttpApi;
-use identity::Identity;
-use proxy::ProxyWorker;
+use std::env;
 use std::fmt::{Debug, Display};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
-use storage::{RedisStorage, Storage};
-use twin::{SubstrateTwinDB, TwinDB};
 
-const MIN_RETRIES: usize = 1;
-const MAX_RETRIES: usize = 5;
+use anyhow::{bail, Context, Result};
+use clap::{Parser, ValueHint};
+
+use rmb::cache::RedisCache;
+use rmb::http_api::{HttpApi, UploadConfig};
+use rmb::http_workers::HttpWorker;
+use rmb::identity;
+use rmb::identity::Identity;
+use rmb::processor;
+use rmb::proxy::ProxyWorker;
+use rmb::redis;
+use rmb::storage::RedisStorage;
+use rmb::twin::{SubstrateTwinDB, TwinDB};
+
 const GIT_VERSION: &str =
     git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 
@@ -60,16 +49,6 @@ impl Display for KeyType {
     }
 }
 
-fn between<T: Ord>(v: T, min: T, max: T) -> T {
-    if v < min {
-        return min;
-    } else if v > max {
-        return max;
-    }
-
-    v
-}
-
 /// the reliable message bus
 #[derive(Parser, Debug)]
 #[clap(name ="rmb", author, version = GIT_VERSION, about, long_about = None)]
@@ -85,6 +64,14 @@ struct Args {
     /// seed as hex (must start with 0x)
     #[clap(long, conflicts_with = "mnemonics")]
     seed: Option<String>,
+
+    /// wither to accept uploads or not
+    #[clap(short, long)]
+    uploads: bool,
+
+    /// where to save uploaded files (default is environment temp directory)
+    #[clap(long, parse(from_os_str), value_hint = ValueHint::FilePath)]
+    upload_dir: Option<PathBuf>,
 
     /// redis address
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
@@ -132,6 +119,23 @@ async fn app(args: &Args) -> Result<()> {
         },
     };
 
+    // uploads config
+    let upload_config = if args.uploads {
+        let dir = match &args.upload_dir {
+            Some(path) => path.clone(),
+            None => env::temp_dir(),
+        };
+        if !dir.is_dir() {
+            bail!(
+                "provided upload directory of '{:?}' does not exist or is not a directory",
+                dir
+            );
+        }
+        UploadConfig::Enabled(dir)
+    } else {
+        UploadConfig::Disabled
+    };
+
     let identity = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret.as_str())
@@ -151,7 +155,7 @@ async fn app(args: &Args) -> Result<()> {
 
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        cache::RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
     .await
     .context("cannot create substrate twin db object")?;
@@ -179,6 +183,7 @@ async fn app(args: &Args) -> Result<()> {
             storage.clone(),
             identity.clone(),
             db.clone(),
+            upload_config,
         )?
         .run(),
     );
@@ -220,42 +225,11 @@ async fn app(args: &Args) -> Result<()> {
     unreachable!();
 }
 
-/// processor processes the local client queues, and fill up the message for processing
-/// before pushing it to the forward queue. where they gonna be picked up by the workers
-async fn processor<S: Storage>(id: u32, storage: S) {
-    use tokio::time::sleep;
-    let wait = Duration::from_secs(1);
-    loop {
-        let mut msg = match storage.local().await {
-            Ok(msg) => msg,
-            Err(err) => {
-                log::error!("failed to process local messages: {}", err);
-                sleep(wait).await;
-                continue;
-            }
-        };
-
-        msg.version = 1;
-        // set the source
-        msg.source = id;
-        // set the message id.
-        msg.id = uuid::Uuid::new_v4().to_string();
-        msg.retry = between(msg.retry, MIN_RETRIES, MAX_RETRIES);
-        msg.stamp();
-
-        // push message to forward.
-        if let Err(err) = storage.forward(&msg).await {
-            log::error!("failed to push message for forwarding: {}", err);
-        }
-    }
-}
-
 /// set_ca populate the SSL_CERT_DIR environment variable
 /// only if built against musl and none of the SSL variables
 /// are passed by the user.
 fn set_ca() {
     if std::cfg!(target_env = "musl") {
-        use std::env;
         let file = env::var_os("SSL_CERT_FILE");
         let dir = env::var_os("SSL_CERT_DIR");
         if file.is_some() || dir.is_some() {

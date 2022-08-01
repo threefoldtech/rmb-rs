@@ -131,6 +131,8 @@ where
         match job {
             TransitMessage::Request(msg) => self.request(msg).await,
             TransitMessage::Reply(msg) => self.reply(msg).await,
+            // cannot proxy uploads
+            TransitMessage::Upload(_) => (),
         }
     }
 }

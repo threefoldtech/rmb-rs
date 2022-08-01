@@ -4,12 +4,20 @@ use anyhow::{Context, Result};
 use bb8_redis::redis;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Debug)]
 pub enum TransitMessage {
     Request(Message),
     Reply(Message),
+    Upload(Message),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct UploadRequest {
+    pub path: PathBuf,
+    pub cmd: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -44,6 +52,79 @@ pub struct Message {
     pub signature: Option<String>,
 }
 
+pub trait Challengeable {
+    fn challenge(&self) -> Result<md5::Digest>;
+}
+
+// a generic sign for any challengeable
+pub fn sign<C: Challengeable, S: Signer>(c: &C, signer: &S) -> String {
+    let digest = c.challenge().unwrap();
+    let signature = signer.sign(&digest[..]);
+
+    hex::encode(signature)
+}
+
+// a generic verify for any challengeable
+pub fn verify<C: Challengeable, I: Identity>(
+    c: &C,
+    identity: &I,
+    signature: &Option<String>,
+) -> Result<()> {
+    let signature = match signature {
+        Some(ref sig) => sig,
+        None => bail!("message is not signed"),
+    };
+
+    let digest = c.challenge()?;
+    let signature = hex::decode(signature).context("failed to decode signature")?;
+
+    if signature.len() != SIGNATURE_LENGTH {
+        bail!("invalid signature length")
+    }
+
+    if !identity.verify(&signature, &digest[..]) {
+        bail!("signature verification failed")
+    }
+
+    Ok(())
+}
+
+impl<T> Challengeable for &[T]
+where
+    T: std::fmt::Display,
+{
+    fn challenge(&self) -> Result<md5::Digest> {
+        let mut hash = md5::Context::new();
+        for v in self.iter() {
+            write!(hash, "{}", v)?;
+        }
+
+        Ok(hash.compute())
+    }
+}
+
+impl UploadRequest {
+    pub fn new(path: PathBuf, cmd: String) -> Self {
+        Self { path, cmd }
+    }
+
+    pub fn sign<S: Signer>(&mut self, signer: &S, timestamp: u64, source: u32) -> String {
+        let fields = vec![timestamp.to_string(), source.to_string()];
+        sign(&fields.as_slice(), signer)
+    }
+
+    pub fn verify<I: Identity>(
+        &self,
+        identity: &I,
+        timestamp: u64,
+        source: u32,
+        signature: String,
+    ) -> Result<()> {
+        let fields = vec![timestamp.to_string(), source.to_string()];
+        verify(&fields.as_slice(), identity, &Some(signature))
+    }
+}
+
 impl Default for Message {
     fn default() -> Self {
         Self {
@@ -65,15 +146,7 @@ impl Default for Message {
     }
 }
 
-impl Message {
-    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
-        serde_json::to_vec(self)
-    }
-
-    pub fn from_json(json: &[u8]) -> serde_json::Result<Self> {
-        serde_json::from_slice(json)
-    }
-
+impl Challengeable for Message {
     fn challenge(&self) -> Result<md5::Digest> {
         let mut hash = md5::Context::new();
         write!(hash, "{}", self.version)?;
@@ -93,34 +166,25 @@ impl Message {
 
         Ok(hash.compute())
     }
+}
+
+impl Message {
+    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+
+    pub fn from_json(json: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(json)
+    }
 
     /// sign the message with given signer
     pub fn sign<S: Signer>(&mut self, signer: &S) {
-        // we do unwrap because this should never fail.
-        let digest = self.challenge().unwrap();
-        let signature = signer.sign(&digest[..]);
-
-        self.signature = Some(hex::encode(signature));
+        self.signature = Some(sign(self, signer));
     }
 
-    /// verify the message signatre
-    pub fn verify<I: Identity>(&mut self, identity: &I) -> Result<()> {
-        let signature = match self.signature {
-            Some(ref sig) => sig,
-            None => bail!("message is not signed"),
-        };
-        let digest = self.challenge().unwrap();
-        let signature = hex::decode(signature).context("failed to decode signature")?;
-
-        if signature.len() != SIGNATURE_LENGTH {
-            bail!("invalid signature length")
-        }
-
-        if !identity.verify(&signature, &digest[..]) {
-            bail!("signature verification failed")
-        }
-
-        Ok(())
+    /// verify the message signature
+    pub fn verify<I: Identity>(&self, identity: &I) -> Result<()> {
+        verify(self, identity, &self.signature)
     }
 
     /// stamp sets the correct timestamp on the message.
@@ -169,6 +233,30 @@ impl Message {
         // to compute the ttl we need to do the following
         // - ttl = expiration - (now - msg.timestamp)
         Duration::from_secs(now.saturating_sub(self.timestamp))
+    }
+}
+
+impl TryFrom<&Message> for UploadRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: &Message) -> Result<Self, Self::Error> {
+        let data = base64::decode(&msg.data).with_context(|| "cannot decode message data")?;
+        let request: Self =
+            serde_json::from_slice(&data).with_context(|| "cannot decode upload request")?;
+
+        if msg.destination.len() > 1 {
+            bail!("cannot send upload to multiple destinations");
+        }
+
+        if request.cmd.trim().is_empty() {
+            bail!("cmd is empty");
+        }
+
+        if request.path.is_file() && request.path.exists() {
+            Ok(request)
+        } else {
+            bail!("path does not exist or is not a file")
+        }
     }
 }
 
