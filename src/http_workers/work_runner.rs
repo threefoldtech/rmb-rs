@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use hyper::{client::HttpConnector, header, Body, Client, Method, Request};
+use hyper::{body, client::HttpConnector, header, Body, Client, Method, Request};
 use mpart_async::client::MultipartRequest;
 
 use crate::{
@@ -131,10 +131,21 @@ where
             .map_err(|err| SendError::Error(err.into()))?;
 
         let status = response.status();
-        if status != http::StatusCode::ACCEPTED {
+        if status == http::StatusCode::METHOD_NOT_ALLOWED {
+            return Err(SendError::Terminal(
+                "uploads are disabled on the remote rmb".to_string(),
+            ));
+        } else if status != http::StatusCode::ACCEPTED {
+            let body_bytes = body::to_bytes(response.into_body())
+                .await
+                .map_err(|err| SendError::Error(err.into()))?;
+            let content =
+                String::from_utf8(body_bytes.to_vec()).expect("response was not valid utf-8");
+
             return Err(SendError::Error(anyhow!(
-                "upload failed with status code of {}",
-                status
+                "upload failed with status code of {}: {}",
+                status,
+                content
             )));
         }
 
