@@ -14,11 +14,12 @@ use rmb::types::Message;
 use sp_core::crypto::Pair;
 use sp_core::{ed25519::Pair as EdPair, sr25519::Pair as SrPair};
 use std::collections::HashMap;
+use std::env;
 use std::panic;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
 use tokio::time::{sleep, Duration};
-
 #[derive(Default, Clone)]
 struct InMemoryDB {
     pub twins: HashMap<u32, Twin>,
@@ -84,7 +85,7 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
     Ok((responses_expected, return_queues))
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ExchangeResult {
     pub responses: Vec<Message>,
     pub error_count: usize,
@@ -125,15 +126,9 @@ async fn wait_for_responses(
     Ok(exchange_result)
 }
 
-async fn send_and_wait(
-    cmd: &str,
-    twin_dst: Vec<u32>,
-    msg_count: usize,
-    redis_port: usize,
-) -> ExchangeResult {
+async fn send_and_wait(redis_port: usize, msg_count: usize, msg: Message) -> ExchangeResult {
     // create a test message
     let redis_url = format!("redis://localhost:{}", redis_port);
-    let msg = new_message(cmd, 120, 3, "TestDataTestDataTestDataTestData", twin_dst);
     // duplicate the message
     let messages = std::iter::repeat_with(|| msg.clone())
         .take(msg_count)
@@ -150,6 +145,40 @@ async fn send_and_wait(
     .await
     .unwrap()
 }
+
+async fn send_and_wait_with_dummy_message(
+    cmd: &str,
+    twin_dst: Vec<u32>,
+    msg_count: usize,
+    redis_port: usize,
+) -> ExchangeResult {
+    // create a test message
+    let msg = new_message(cmd, 120, 3, "dummy test", twin_dst.clone());
+
+    send_and_wait(redis_port, msg_count, msg).await
+}
+
+// async fn handle_cmd_for_once(cmd: &str, redis_port: usize) -> Result<()> {
+//     let local_redis = format!("redis://localhost:{}", redis_port);
+//     let pool = redis::pool(local_redis)
+//         .await
+//         .context("unable to create redis connection")?;
+//     let mut conn = pool.get().await.context("unable to get redis connection")?;
+//     loop {
+//         let result: Option<(String, String)> = conn
+//             .blpop(format!("msgbus.{}", cmd), 0)
+//             .await
+//             .context("unable to get response")?;
+//         let mut response: Message =
+//             serde_json::from_str(&result.unwrap().1).context("unable to parse response")?;
+
+//         (response.destination, response.source) = (vec![response.source], response.destination[0]);
+//         let _ = conn
+//             .lpush(&response.reply, &response)
+//             .await
+//             .context("unable to push response")?;
+//     }
+// }
 
 async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
     let local_redis = format!("redis://localhost:{}", redis_port);
@@ -183,10 +212,14 @@ async fn start_rmb<
     ident: I,
     address: &str,
     id: u32,
+    uploads_dir: Option<PathBuf>,
 ) -> Result<()> {
     let processor_handler = tokio::spawn(processor(id, storage.clone()));
 
-    let upload_config = UploadConfig::Disabled;
+    let upload_config = match uploads_dir {
+        None => UploadConfig::Disabled,
+        Some(p) => UploadConfig::Enabled(p),
+    };
 
     let api_handler = tokio::spawn(
         HttpApi::new(
@@ -332,6 +365,12 @@ pub fn initialize_logger() {
     });
 }
 
+// TODO: a function to initialize N numbers of rmbs
+// it can also find free ports (instead of manually setting them)
+// async fn initialize_rmbs(key_type: KeyType, uploads_dir: Option<PathBuf>) {
+// ...
+// }
+
 #[tokio::test]
 async fn test_message_exchange_with_edpair() {
     initialize_logger();
@@ -367,19 +406,22 @@ async fn test_message_exchange_with_edpair() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id, None).await });
     // mimic a process that handle a command `testme` from a remote node
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test simple message exchange
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 200, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1000, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
 }
@@ -419,19 +461,22 @@ async fn test_message_exchange_with_srpair() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id, None).await });
     // mimic a process that handle a command `testme` from a remote node
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test simple message exchange
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 200, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 200, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1000, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1000, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
 }
@@ -491,22 +536,26 @@ async fn test_multi_dest_message_exchange() {
         .unwrap();
 
     // start three instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
-    tokio::spawn(async move { start_rmb(db3, storage3, t3, &twin3.address, twin3.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id, None).await });
+    tokio::spawn(async move { start_rmb(db3, storage3, t3, &twin3.address, twin3.id, None).await });
     // mimic a process that handle a command `testme` from two remote nodes
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote1_redis_port).await.unwrap() });
     tokio::spawn(async move { handle_cmd(cmd, remote2_redis_port).await.unwrap() });
     // test simple message exchange
-    let exchange_result = send_and_wait(cmd, vec![twin2.id, twin3.id], 1, local_redis_port).await;
-    assert_eq!(exchange_result.error_count, 0);
-    assert_eq!(exchange_result.lost_count, 0);
-    let exchange_result = send_and_wait(cmd, vec![twin2.id, twin3.id], 200, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id, twin3.id], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
     let exchange_result =
-        send_and_wait(cmd, vec![twin2.id, twin3.id], 1000, local_redis_port).await;
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id, twin3.id], 200, local_redis_port)
+            .await;
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id, twin3.id], 1000, local_redis_port)
+            .await;
     assert_eq!(exchange_result.error_count, 0);
     assert_eq!(exchange_result.lost_count, 0);
 }
@@ -536,10 +585,11 @@ async fn test_twin_not_found() {
     let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
 
     // start three instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
 
     // test getting twin not found as response error
-    let exchange_result = send_and_wait("testme", vec![2], 1, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message("testme", vec![2], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 1);
     assert_eq!(exchange_result.lost_count, 0);
     assert!(exchange_result.responses[0]
@@ -585,13 +635,14 @@ async fn test_invalid_dest() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB with id 1, and id 3
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, 3).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, 3, None).await });
     // mimic a process that handle a command `testme` from a remote nodes
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test getting bad request as response error
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 1);
     assert_eq!(exchange_result.lost_count, 0);
     assert!(exchange_result.responses[0]
@@ -638,13 +689,14 @@ async fn test_unauthorized() {
     let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
 
     // start two instances of RMB
-    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id).await });
-    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id).await });
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id, None).await });
     // mimic a process that handle a command `testme` from a remote nodes
     let cmd = "testme";
     tokio::spawn(async move { handle_cmd(cmd, remote_redis_port).await.unwrap() });
     // test getting Unauthorized as response error
-    let exchange_result = send_and_wait(cmd, vec![twin2.id], 1, local_redis_port).await;
+    let exchange_result =
+        send_and_wait_with_dummy_message(cmd, vec![twin2.id], 1, local_redis_port).await;
     assert_eq!(exchange_result.error_count, 1);
     assert_eq!(exchange_result.lost_count, 0);
     assert!(exchange_result.responses[0]
@@ -652,4 +704,152 @@ async fn test_unauthorized() {
         .as_ref()
         .unwrap()
         .contains("Unauthorized"));
+}
+
+#[tokio::test]
+async fn test_disabled_file_uploads() {
+    initialize_logger();
+    let local_redis_port = 6395;
+    let remote_redis_port = 6396;
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
+
+    // create dummy entities for testing
+    let twin1 = Twin {
+        version: 1,
+        id: 1,
+        account: t1.account(),
+        address: "127.0.0.1:5915".to_string(),
+        entities: vec![],
+    };
+    let twin2 = Twin {
+        version: 1,
+        id: 2,
+        account: t2.account(),
+        address: "127.0.0.1:5916".to_string(),
+        entities: vec![],
+    };
+
+    // creating mock db with dummy entities
+    let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
+
+    // start redis servers
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
+    redis_manager.init().await;
+    // create redis storage
+    let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
+    let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
+
+    // start two instances of RMB
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    tokio::spawn(async move { start_rmb(db2, storage2, t2, &twin2.address, twin2.id, None).await });
+
+    // sleep(Duration::from_secs(5)).await;
+
+    // test getting "405 Method Not Allowed" when starting a remote rmb with uploads disabled
+    let data = r#"
+        {
+            "path": "Cargo.toml",
+            "cmd": "the.remote.upload.handler"
+        }
+    "#;
+
+    let msg = new_message(
+        "msgbus.system.file.upload",
+        1000,
+        3,
+        base64::encode(data).as_str(),
+        vec![twin2.id],
+    );
+    let exchange_result = send_and_wait(local_redis_port, 1, msg).await;
+
+    log::error!("{:?}", exchange_result);
+
+    assert_eq!(exchange_result.error_count, 1);
+    assert_eq!(exchange_result.lost_count, 0);
+
+    assert!(exchange_result.responses[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("uploads are disabled"));
+}
+
+#[tokio::test]
+async fn test_file_upload() {
+    initialize_logger();
+    let local_redis_port = 6397;
+    let remote_redis_port = 6398;
+    let t1 = create_test_signer(KeyType::SrPair);
+    let t2 = create_test_signer(KeyType::SrPair);
+
+    // create dummy entities for testing
+    let twin1 = Twin {
+        version: 1,
+        id: 1,
+        account: t1.account(),
+        address: "127.0.0.1:6010".to_string(),
+        entities: vec![],
+    };
+    let twin2 = Twin {
+        version: 1,
+        id: 2,
+        account: t2.account(),
+        address: "127.0.0.1:6011".to_string(),
+        entities: vec![],
+    };
+
+    // creating mock db with dummy entities
+    let db1 = create_mock_db(vec![&twin1, &twin2]).unwrap();
+    let db2 = db1.clone();
+
+    // start redis servers
+    let redis_manager = RedisManager::new(vec![local_redis_port, remote_redis_port]);
+    redis_manager.init().await;
+    // create redis storage
+    let storage1 = create_local_redis_storage(local_redis_port).await.unwrap();
+    let storage2 = create_local_redis_storage(remote_redis_port).await.unwrap();
+
+    // start two instances of RMB
+    tokio::spawn(async move { start_rmb(db1, storage1, t1, &twin1.address, twin1.id, None).await });
+    // second rmb should have uploads enabled
+    let uploads_dir = env::temp_dir();
+    tokio::spawn(async move {
+        start_rmb(
+            db2,
+            storage2,
+            t2,
+            &twin2.address,
+            twin2.id,
+            Some(uploads_dir),
+        )
+        .await
+    });
+
+    let data = r#"
+        {
+            "path": "Cargo.toml",
+            "cmd": "the.remote.upload.handler"
+        }
+    "#;
+
+    let msg = new_message(
+        "msgbus.system.file.upload",
+        1000,
+        3,
+        base64::encode(data).as_str(),
+        vec![twin2.id],
+    );
+    let exchange_result = send_and_wait(local_redis_port, 1, msg).await;
+
+    log::error!("{:?}", exchange_result);
+
+    assert_eq!(exchange_result.error_count, 0);
+    assert_eq!(exchange_result.lost_count, 0);
+
+    let result =
+        String::from_utf8(base64::decode(&exchange_result.responses[0].data).unwrap()).unwrap();
+
+    assert!(result.contains("success"));
 }
