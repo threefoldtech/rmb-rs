@@ -53,7 +53,7 @@ where
         }
     }
 
-    fn verify_request(&self, request: &Request<Body>) -> Result<(UploadRequest, u32)> {
+    async fn verify_request(&self, request: &Request<Body>) -> Result<(UploadRequest, u32)> {
         let source = self.get_header(request, "rmb-source-id").parse::<u32>()?;
         let timestamp = self.get_header(request, "rmb-timestamp").parse::<u64>()?;
         let signature = self.get_header(request, "rmb-signature");
@@ -63,7 +63,20 @@ where
             self.get_header(request, "rmb-upload-cmd"),
         );
 
-        upload.verify(&self.data.identity, timestamp, source, signature)?;
+        // getting sender twin
+        let sender_twin = self
+            .data
+            .twin_db
+            .get_twin(source)
+            .await
+            .context("failed to get source twin")?;
+
+        let sender_twin = match sender_twin {
+            Some(twin) => twin,
+            None => bail!("source twin not found"),
+        };
+
+        upload.verify(&sender_twin.account, timestamp, source, signature)?;
         Ok((upload, source))
     }
 
@@ -140,7 +153,7 @@ where
 
     pub async fn handle(&self, mut request: Request<Body>) -> Result<(), HandlerError> {
         // first verify this upload request
-        let (upload, source) = match self.verify_request(&request) {
+        let (upload, source) = match self.verify_request(&request).await {
             Ok(ret) => ret,
             Err(err) => return Err(HandlerError::BadRequest(err)),
         };
