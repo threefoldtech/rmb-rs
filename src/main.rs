@@ -107,6 +107,7 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
+        .with_module_level("mpart_async", log::LevelFilter::Off)
         .init()?;
 
     let secret = match args.mnemonics {
