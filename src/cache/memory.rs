@@ -11,6 +11,12 @@ pub struct MemCache<V> {
     mem: Arc<RwLock<HashMap<String, V>>>,
 }
 
+impl<V> Default for MemCache<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<V> MemCache<V> {
     #[allow(unused)]
     pub fn new() -> Self {
