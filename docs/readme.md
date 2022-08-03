@@ -197,3 +197,32 @@ This mean that this envelope message will end up on the `msgbus.system.proxy` qu
 - another routing (or same) is pulling from `msgbus.system.proxied`.
 - this will then get the envelope from redis and create a return message (setting correct src/dst) and push again the `envelop.$ret` (this was set by the normal rmb operation)
 - response will arrive at the 3rd party app normally
+
+# File uploads
+## Local side
+File uploads are done via http, if there's an upload request, the file specified in the message payload will be uploaded directly with more information in some custom headers.
+
+An upload is a normal message with the command of `msgbus.system.file.upload`, with the data containing an upload request as json with `path` and `cmd` (which is the command that will handle this uploaded files on the remote side).
+
+
+```json
+{
+    "path": "/any/local/file/path",
+    "cmd": "msgbus.remote.upload.handler"
+}
+```
+
+Once the local rmb receives an upload command, workers will try to do an HTTP multipart upload to the remote rmb, with all other information included in custom headers
+
+* `rmb-upload-cmd`: This is the cmd part of the request above, this will be notified once upload is complete.
+* `rmb-source-id`: the original message source twin id.
+* `rmb-timestamp`: the original message timestamp
+* `rmb-signature`: the signature of the combined headers.
+
+A response message will returned to the caller on success or failure.
+
+## Remote side
+
+Any rmb can accept uploads (using `-u`), and once it receives an upload, it verifies the request, then saves it to the configured uploads directory (using `--uploads-dir`, which defaults to environment `tmp`), then rmb will notify the handler of this upload by sending a message with `data` as the file path.
+
+If uploads are disabled, `405 Method Not Allowed` will be returned instead.
