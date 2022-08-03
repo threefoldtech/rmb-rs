@@ -16,6 +16,7 @@ use sp_core::{ed25519::Pair as EdPair, sr25519::Pair as SrPair};
 use std::collections::HashMap;
 use std::env;
 use std::panic;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
@@ -158,27 +159,21 @@ async fn send_and_wait_with_dummy_message(
     send_and_wait(redis_port, msg_count, msg).await
 }
 
-// async fn handle_cmd_for_once(cmd: &str, redis_port: usize) -> Result<()> {
-//     let local_redis = format!("redis://localhost:{}", redis_port);
-//     let pool = redis::pool(local_redis)
-//         .await
-//         .context("unable to create redis connection")?;
-//     let mut conn = pool.get().await.context("unable to get redis connection")?;
-//     loop {
-//         let result: Option<(String, String)> = conn
-//             .blpop(format!("msgbus.{}", cmd), 0)
-//             .await
-//             .context("unable to get response")?;
-//         let mut response: Message =
-//             serde_json::from_str(&result.unwrap().1).context("unable to parse response")?;
+// handles the cmd and return the response message for once
+async fn handle_cmd_once(cmd: &str, redis_port: usize) -> Result<Message> {
+    let local_redis = format!("redis://localhost:{}", redis_port);
+    let pool = redis::pool(local_redis)
+        .await
+        .context("unable to create redis connection")?;
 
-//         (response.destination, response.source) = (vec![response.source], response.destination[0]);
-//         let _ = conn
-//             .lpush(&response.reply, &response)
-//             .await
-//             .context("unable to push response")?;
-//     }
-// }
+    let mut conn = pool.get().await.context("unable to get redis connection")?;
+    let (_, message): (String, Message) = conn
+        .blpop(format!("msgbus.{}", cmd), 0)
+        .await
+        .context("unable to get response")?;
+
+    Ok(message)
+}
 
 async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
     let local_redis = format!("redis://localhost:{}", redis_port);
@@ -830,7 +825,7 @@ async fn test_file_upload() {
     let data = r#"
         {
             "path": "Cargo.toml",
-            "cmd": "the.remote.upload.handler"
+            "cmd": "msgbus.remote.upload.handler"
         }
     "#;
 
@@ -852,4 +847,11 @@ async fn test_file_upload() {
         String::from_utf8(base64::decode(&exchange_result.responses[0].data).unwrap()).unwrap();
 
     assert!(result.contains("success"));
+
+    let success_message = handle_cmd_once("msgbus.remote.upload.handler", remote_redis_port)
+        .await
+        .unwrap();
+    let path = String::from_utf8(base64::decode(success_message.data).unwrap()).unwrap();
+
+    assert!(Path::new(&path).exists())
 }
