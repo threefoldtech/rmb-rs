@@ -4,13 +4,13 @@ use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
 use sp_core::crypto::AccountId32;
+use std::sync::Arc;
 use subxt::{
     storage::StorageEntry, ClientBuilder, DefaultConfig, StorageEntryKey, StorageHasher,
     StorageMapKey,
 };
+use tokio::sync::{Mutex, RwLock};
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use workers::{Work, WorkerPool};
 
 const MAX_INFLIGHT: usize = 10;
@@ -64,12 +64,50 @@ impl StorageEntry for TwinAccountID {
 }
 
 type Client = subxt::Client<DefaultConfig>;
+
+#[derive(Debug, Clone)]
+struct ReconnectingClient {
+    client: Arc<RwLock<Client>>,
+    url: String,
+}
+
+impl ReconnectingClient {
+    async fn get_new(url: &str) -> Result<Client> {
+        Ok(ClientBuilder::new().set_url(url).build().await?)
+    }
+
+    pub async fn new<S: Into<String>>(url: S) -> Result<Self> {
+        let url = url.into();
+
+        let client = Self::get_new(&url).await?;
+        Ok(Self {
+            client: Arc::new(RwLock::new(client)),
+            url,
+        })
+    }
+
+    async fn is_connected(&self) -> bool {
+        self.client.read().await.rpc().client.is_connected()
+    }
+
+    pub async fn get(&self) -> Result<Client> {
+        if !self.is_connected().await {
+            log::debug!("client is disconnected, rebuilding a new one");
+
+            let mut client = self.client.write().await;
+            *client = Self::get_new(&self.url).await?;
+        }
+
+        Ok(self.client.read().await.clone())
+    }
+}
+
 #[derive(Clone)]
 struct TwinGetter<C>
 where
     C: Cache<Twin>,
 {
-    client: Client,
+    client: ReconnectingClient,
     cache: C,
 }
 
@@ -94,11 +132,8 @@ where
             return Ok(Some(twin));
         }
 
-        Ok(self
-            .client
-            .storage()
-            .fetch(&TwinID::new(twin_id), None)
-            .await?)
+        let client = self.client.get().await?;
+        Ok(client.storage().fetch(&TwinID::new(twin_id), None).await?)
     }
 }
 
@@ -108,7 +143,7 @@ where
     C: Cache<Twin>,
 {
     pool: Arc<Mutex<WorkerPool<TwinGetter<C>>>>,
-    client: Client,
+    client: ReconnectingClient,
     cache: C,
 }
 
@@ -117,7 +152,7 @@ where
     C: Cache<Twin> + Clone,
 {
     pub async fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
-        let client = ClientBuilder::new().set_url(url).build().await?;
+        let client = ReconnectingClient::new(url).await?;
         let work = TwinGetter {
             client: client.clone(),
             cache: cache.clone(),
@@ -155,8 +190,8 @@ where
     }
 
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        Ok(self
-            .client
+        let client = self.client.get().await?;
+        Ok(client
             .storage()
             .fetch(&TwinAccountID::new(account_id), None)
             .await?)
