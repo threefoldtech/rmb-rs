@@ -9,7 +9,7 @@ use subxt::{
     storage::StorageEntry, ClientBuilder, DefaultConfig, StorageEntryKey, StorageHasher,
     StorageMapKey,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use workers::{Work, WorkerPool};
 
@@ -67,7 +67,7 @@ type Client = subxt::Client<DefaultConfig>;
 
 #[derive(Debug, Clone)]
 struct ReconnectingClient {
-    client: Arc<RwLock<Client>>,
+    client: Arc<Mutex<Client>>,
     url: String,
 }
 
@@ -81,24 +81,20 @@ impl ReconnectingClient {
 
         let client = Self::get_new(&url).await?;
         Ok(Self {
-            client: Arc::new(RwLock::new(client)),
+            client: Arc::new(Mutex::new(client)),
             url,
         })
     }
 
-    async fn is_connected(&self) -> bool {
-        self.client.read().await.rpc().client.is_connected()
-    }
-
     pub async fn get(&self) -> Result<Client> {
-        if !self.is_connected().await {
-            log::debug!("client is disconnected, rebuilding a new one");
+        let mut client = self.client.lock().await;
 
-            let mut client = self.client.write().await;
+        if !client.rpc().client.is_connected() {
+            log::debug!("client is disconnected, rebuilding a new one");
             *client = Self::get_new(&self.url).await?;
         }
 
-        Ok(self.client.read().await.clone())
+        Ok(client.clone())
     }
 }
 
