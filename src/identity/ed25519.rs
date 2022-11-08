@@ -1,10 +1,10 @@
-use super::{Identity, Signer, SIGNATURE_LENGTH};
+use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
+use anyhow::Result;
 use sp_core::{
     crypto::AccountId32,
     ed25519::{Pair as EdPair, Public},
     Pair,
 };
-
 use std::convert::From;
 
 pub const PREFIX: u8 = 0x65; // ascii e for ed
@@ -13,7 +13,7 @@ pub const PREFIX: u8 = 0x65; // ascii e for ed
 pub struct Ed25519Identity(Public);
 
 impl Identity for Ed25519Identity {
-    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> Result<()> {
         verify(&self.0, sig, message)
     }
 
@@ -46,7 +46,7 @@ impl Signer for Ed25519Signer {
 }
 
 impl Identity for Ed25519Signer {
-    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> Result<()> {
         verify(&self.pair.public(), sig, message)
     }
 
@@ -65,11 +65,20 @@ impl TryFrom<&str> for Ed25519Signer {
     }
 }
 
-fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> bool {
+fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> Result<()> {
+    validate_signature_len(&sig)?;
+
     let sig = sig.as_ref();
-    assert_eq!(sig.len(), SIGNATURE_LENGTH, "invalid signature length");
-    assert_eq!(sig[0], PREFIX, "invalid signature type");
-    EdPair::verify_weak(&sig[1..], message, pk)
+
+    if sig[0] != PREFIX {
+        bail!("invalid signature type (expected ed25519)");
+    }
+
+    if !EdPair::verify_weak(&sig[1..], message, pk) {
+        bail!("ed25519 signature verification failed")
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

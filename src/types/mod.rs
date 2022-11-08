@@ -1,5 +1,5 @@
 //use std::io::Write;
-use crate::identity::{Identity, Signer, SIGNATURE_LENGTH};
+use crate::identity::{Identity, Signer};
 use anyhow::{Context, Result};
 use bb8_redis::redis;
 use serde::{Deserialize, Serialize};
@@ -78,15 +78,7 @@ pub fn verify<C: Challengeable, I: Identity>(
     let digest = c.challenge()?;
     let signature = hex::decode(signature).context("failed to decode signature")?;
 
-    if signature.len() != SIGNATURE_LENGTH {
-        bail!("invalid signature length")
-    }
-
-    if !identity.verify(&signature, &digest[..]) {
-        bail!("signature verification failed")
-    }
-
-    Ok(())
+    identity.verify(&signature, &digest[..])
 }
 
 impl<T> Challengeable for &[T]
