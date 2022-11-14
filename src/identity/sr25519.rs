@@ -1,4 +1,5 @@
-use super::{Identity, Signer, SIGNATURE_LENGTH};
+use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
+use anyhow::Result;
 use sp_core::{
     crypto::AccountId32,
     sr25519::{Pair as SrPair, Public},
@@ -13,7 +14,7 @@ pub const PREFIX: u8 = 0x73; // ascii s for sr
 pub struct Sr25519Identity(Public);
 
 impl Identity for Sr25519Identity {
-    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> Result<()> {
         verify(&self.0, sig, message)
     }
 
@@ -46,7 +47,7 @@ impl Signer for Sr25519Signer {
 }
 
 impl Identity for Sr25519Signer {
-    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> bool {
+    fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(&self, sig: P, message: M) -> Result<()> {
         verify(&self.pair.public(), sig, message)
     }
 
@@ -66,11 +67,20 @@ impl TryFrom<&str> for Sr25519Signer {
     }
 }
 
-fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> bool {
+fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> Result<()> {
+    validate_signature_len(&sig)?;
+
     let sig = sig.as_ref();
-    assert_eq!(sig.len(), SIGNATURE_LENGTH, "invalid signature length");
-    assert_eq!(sig[0], PREFIX, "invalid signature type");
-    SrPair::verify_weak(&sig[1..], message, pk)
+
+    if sig[0] != PREFIX {
+        bail!("invalid signature type (expected sr25519)");
+    }
+
+    if !SrPair::verify_weak(&sig[1..], message, pk) {
+        bail!("sr25519 signature verification failed")
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

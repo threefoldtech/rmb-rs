@@ -310,20 +310,21 @@ where
         };
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
-        let retry = Self::retries(msg.retry);
+
         assert_eq!(
             msg.destination.len(),
             1,
             "expecting only one destination in worker"
         );
-        let id = msg.destination[0];
 
+        let id = msg.destination[0];
         log::debug!(
             "forwarding message to destination '{}' '{}'",
             id,
             queue.as_ref()
         );
 
+        let retry = Self::retries(msg.retry);
         if let Err(err) = self.send(id, retry, &queue, &mut msg).await {
             if queue == Queue::Request || queue == Queue::Upload {
                 self.handle_delivery_err(id, msg, err).await;
