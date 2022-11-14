@@ -311,17 +311,13 @@ where
 
         log::debug!("received a message for forwarding '{}'", queue.as_ref());
 
-        if msg.destination.len() != 1 {
-            log::error!(
-                "expecting only one destination in worker, found: {:?}",
-                msg.destination
-            );
-
-            return;
-        }
+        assert_eq!(
+            msg.destination.len(),
+            1,
+            "expecting only one destination in worker"
+        );
 
         let id = msg.destination[0];
-
         log::debug!(
             "forwarding message to destination '{}' '{}'",
             id,
