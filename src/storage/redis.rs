@@ -355,12 +355,12 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        let storage = RedisStorage::builder(pool)
+        
+
+        RedisStorage::builder(pool)
             .prefix(PREFIX)
             .max_commands(500)
-            .build();
-
-        storage
+            .build()
     }
 
     async fn push_msg_to_local(id: &str, storage: &RedisStorage) -> Result<()> {

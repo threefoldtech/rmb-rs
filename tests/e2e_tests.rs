@@ -35,7 +35,7 @@ impl InMemoryDB {
 #[async_trait::async_trait]
 impl TwinDB for InMemoryDB {
     async fn get_twin(&self, twin_id: u32) -> anyhow::Result<Option<Twin>> {
-        Ok(self.twins.get(&twin_id).map(|t| t.clone()))
+        Ok(self.twins.get(&twin_id).cloned())
     }
 
     async fn get_twin_with_account(
@@ -60,10 +60,10 @@ fn new_message(
         .as_secs();
     Message {
         command: String::from(command),
-        expiration: expiration,
-        retry: retry,
+        expiration,
+        retry,
         data: data.to_string(),
-        destination: destination,
+        destination,
         reply: ret_queue,
         timestamp: epoch,
         ..Message::default()
@@ -79,7 +79,7 @@ async fn send_all(messages: Vec<Message>, local_redis: &str) -> Result<(usize, V
     let mut responses_expected = 0;
     let mut return_queues = Vec::new();
     for msg in messages {
-        let _ = conn.lpush(&queue, &msg).await?;
+        conn.lpush(&queue, &msg).await?;
         responses_expected += msg.destination.len();
         return_queues.push(msg.reply);
     }
@@ -190,7 +190,7 @@ async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
             serde_json::from_str(&result.unwrap().1).context("unable to parse response")?;
 
         (response.destination, response.source) = (vec![response.source], response.destination[0]);
-        let _ = conn
+        conn
             .lpush(&response.reply, &response)
             .await
             .context("unable to push response")?;
@@ -327,7 +327,7 @@ struct RedisManager {
 
 impl RedisManager {
     fn new(ports: Vec<usize>) -> Self {
-        Self { ports: ports }
+        Self { ports }
     }
 
     async fn init(&self) {

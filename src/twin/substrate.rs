@@ -99,7 +99,7 @@ impl ReconnectingClient {
         // here we inspect the request error
         // if it needs a restart, we just retry to get a new client
         let err = result.err().unwrap();
-        return match err {
+        match err {
             GenericError::Rpc(err) => match err {
                 RequestError::RestartNeeded(_) => {
                     log::debug!("restart needed, building a new client...");
@@ -114,7 +114,7 @@ impl ReconnectingClient {
                 _ => Err(err.into()),
             },
             _ => Err(err.into()),
-        };
+        }
     }
 }
 
