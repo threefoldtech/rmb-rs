@@ -190,8 +190,7 @@ async fn handle_cmd(cmd: &str, redis_port: usize) -> Result<()> {
             serde_json::from_str(&result.unwrap().1).context("unable to parse response")?;
 
         (response.destination, response.source) = (vec![response.source], response.destination[0]);
-        conn
-            .lpush(&response.reply, &response)
+        conn.lpush(&response.reply, &response)
             .await
             .context("unable to push response")?;
     }

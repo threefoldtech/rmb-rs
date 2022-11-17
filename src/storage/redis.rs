@@ -355,7 +355,6 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        
 
         RedisStorage::builder(pool)
             .prefix(PREFIX)

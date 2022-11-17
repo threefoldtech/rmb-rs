@@ -104,7 +104,6 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        
 
         RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
     }
