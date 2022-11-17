@@ -1957,6 +1957,7 @@ dependencies = [
  "hex",
  "http",
  "hyper",
+ "jsonrpsee-core",
  "log",
  "md5",
  "mime",
