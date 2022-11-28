@@ -12,6 +12,9 @@ pub enum HandlerError {
     #[error("invalid destination twin {0}")]
     InvalidDestination(u32),
 
+    #[error("invalid destination missing")]
+    MissingDestination,
+
     #[error("invalid source twin {0}: {1:#}")]
     InvalidSource(u32, anyhow::Error),
 
@@ -25,6 +28,7 @@ impl HandlerError {
             // the following ones are considered a bad request error
             HandlerError::BadRequest(_) => StatusCode::BAD_REQUEST,
             HandlerError::InvalidDestination(_) => StatusCode::BAD_REQUEST,
+            HandlerError::MissingDestination => StatusCode::BAD_REQUEST,
 
             // Unauthorized errors
             HandlerError::UnAuthorized(_) => StatusCode::UNAUTHORIZED,

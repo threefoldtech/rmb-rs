@@ -88,8 +88,11 @@ async fn message<S: Storage, I: Identity, D: TwinDB>(
         return Err(HandlerError::BadRequest(anyhow!("message is too old")));
     }
 
+    if message.destination.is_empty() {
+        return Err(HandlerError::MissingDestination);
+    }
     // check the dst of the message is correct
-    if message.destination.is_empty() || message.destination[0] != data.twin as u32 {
+    if message.destination[0] != data.twin as u32 {
         return Err(HandlerError::InvalidDestination(message.destination[0]));
     }
 
