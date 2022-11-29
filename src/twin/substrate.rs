@@ -92,29 +92,21 @@ impl ReconnectingClient {
         let mut client = self.client.lock().await;
         let result = client.storage().fetch(entry, None).await;
 
-        if let Ok(value) = result {
-            return Ok(value);
+        let err = match result {
+            Ok(value) => return Ok(value),
+            Err(err) => err,
+        };
+
+        if let GenericError::Rpc(RequestError::RestartNeeded(_)) = err {
+            *client = Self::get_new(&self.url).await?;
+            return client
+                .storage()
+                .fetch(entry, None)
+                .await
+                .map_err(|err| anyhow!(err));
         }
 
-        // here we inspect the request error
-        // if it needs a restart, we just retry to get a new client
-        let err = result.err().unwrap();
-        match err {
-            GenericError::Rpc(err) => match err {
-                RequestError::RestartNeeded(_) => {
-                    log::debug!("restart needed, building a new client...");
-
-                    *client = Self::get_new(&self.url).await?;
-                    client
-                        .storage()
-                        .fetch(entry, None)
-                        .await
-                        .map_err(|err| anyhow!(err))
-                }
-                _ => Err(err.into()),
-            },
-            _ => Err(err.into()),
-        }
+        Err(err.into())
     }
 }
 
