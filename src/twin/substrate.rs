@@ -3,8 +3,10 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
+use jsonrpsee_core::Error as RequestError;
 use sp_core::crypto::AccountId32;
 use std::sync::Arc;
+use subxt::GenericError;
 use subxt::{
     storage::StorageEntry, ClientBuilder, DefaultConfig, StorageEntryKey, StorageHasher,
     StorageMapKey,
@@ -86,15 +88,25 @@ impl ReconnectingClient {
         })
     }
 
-    pub async fn get(&self) -> Result<Client> {
+    pub async fn fetch<E: StorageEntry>(&self, entry: &E) -> Result<Option<E::Value>> {
         let mut client = self.client.lock().await;
+        let result = client.storage().fetch(entry, None).await;
 
-        if !client.rpc().client.is_connected() {
-            log::debug!("client is disconnected, rebuilding a new one");
+        let err = match result {
+            Ok(value) => return Ok(value),
+            Err(err) => err,
+        };
+
+        if let GenericError::Rpc(RequestError::RestartNeeded(_)) = err {
             *client = Self::get_new(&self.url).await?;
+            return client
+                .storage()
+                .fetch(entry, None)
+                .await
+                .map_err(|err| anyhow!(err));
         }
 
-        Ok(client.clone())
+        Err(err.into())
     }
 }
 
@@ -128,8 +140,7 @@ where
             return Ok(Some(twin));
         }
 
-        let client = self.client.get().await?;
-        Ok(client.storage().fetch(&TwinID::new(twin_id), None).await?)
+        Ok(self.client.fetch(&TwinID::new(twin_id)).await?)
     }
 }
 
@@ -186,11 +197,7 @@ where
     }
 
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        let client = self.client.get().await?;
-        Ok(client
-            .storage()
-            .fetch(&TwinAccountID::new(account_id), None)
-            .await?)
+        Ok(self.client.fetch(&TwinAccountID::new(account_id)).await?)
     }
 }
 

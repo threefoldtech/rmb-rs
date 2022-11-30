@@ -355,12 +355,11 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        let storage = RedisStorage::builder(pool)
+
+        RedisStorage::builder(pool)
             .prefix(PREFIX)
             .max_commands(500)
-            .build();
-
-        storage
+            .build()
     }
 
     async fn push_msg_to_local(id: &str, storage: &RedisStorage) -> Result<()> {
@@ -373,19 +372,15 @@ mod tests {
             id: String::from(id),
             command: String::from("test.get"),
             expiration: 300,
-            data: String::from(""),
-            tag: None,
             source: 1,
             destination: vec![4],
             reply: String::from("de31075e-9af4-4933-b107-c36887d0c0f0"),
             retry: 2,
-            schema: String::from(""),
             timestamp: SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            error: None,
-            signature: None,
+            ..Message::default()
         };
 
         conn.lpush(&queue, &msg).await?;

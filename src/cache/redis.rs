@@ -104,9 +104,8 @@ mod tests {
             .await
             .context("unable to build pool or redis connection manager")
             .unwrap();
-        let cache = RedisCache::new(pool, PREFIX, Duration::from_secs(TTL));
 
-        cache
+        RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
     }
 
     #[tokio::test]

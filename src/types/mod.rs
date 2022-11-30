@@ -50,6 +50,10 @@ pub struct Message {
     pub error: Option<String>,
     #[serde(rename = "sig")]
     pub signature: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    #[serde(rename = "pxy")]
+    pub proxy: bool,
 }
 
 pub trait Challengeable {
@@ -134,6 +138,7 @@ impl Default for Message {
             timestamp: Default::default(),
             error: None,
             signature: Default::default(),
+            proxy: Default::default(),
         }
     }
 }
@@ -151,10 +156,10 @@ impl Challengeable for Message {
         }
         write!(hash, "{}", self.reply)?;
         write!(hash, "{}", self.timestamp)?;
+
         // this is for backward compatibility
-        // this replaces the `proxy` flag which is
-        // no obsolete
-        write!(hash, "false")?;
+        // proxy flag is now obsolete
+        write!(hash, "{}", self.proxy)?;
 
         Ok(hash.compute())
     }

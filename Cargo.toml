@@ -32,6 +32,7 @@ thiserror = "1.0.31"
 tokio = {version = "1", features = ["full"]}
 tokio-retry = "0.3"
 uuid = {version = "1.1.0", features = ["v4"]}
+jsonrpsee-core = "0.14.0"
 subxt = "0.22"
 mime = "0.3"
 mpart-async = "0.6.0"
