@@ -1,60 +1,75 @@
 @startuml RMB
 
-participant "Local Process" as lp
-database "Local Redis" as lr
-participant "local Rmb" as lrmb
+participant "Local Process" as lps
+database "Local Redis" as lredis
+participant "Rmb Peer" as lpeer
 
-participant "Remote Rmb" as rrmb
-database "Remote Redis" as rr
-participant "Remote Process" as rp
+participant "Rmb rely" as rely
+participant "Rmb rely" as rely2
 
-lp -> lr: PUSH message on \n(msgbus.system.local)
-lr -> lrmb : POP message from \n(msgbus.system.local)
+participant "Rmb Peer" as rpeer
+database "Remote Redis" as rredis
+participant "Remote Process" as rps
+
+lpeer --> rely: establish websocket connection
+rpeer --> rely2: establish websocket connection
+...
+lps -> lredis: PUSH message on \n(msgbus.system.local)
+lredis -> lpeer : POP message from \n(msgbus.system.local)
 
 alt $dst == local
-lrmb -> lr: PUSH msg to (msgbus.$cmd)
+lpeer -> lredis: PUSH msg to (msgbus.$cmd)
 else $dst != local
-lrmb -> lr: SET backlog.$id AND ttl to $exp
-lrmb -> lr: for each $dst PUSH $id:$dst to \n(msgbus.system.forward)
+lpeer -> lredis: SET backlog.$id AND ttl to $exp
+lpeer -> lredis: for each $dst PUSH $id:$dst to \n(msgbus.system.forward)
 end
 ...
-lr -> lrmb: POP $id from \n(msgbus.system.forward)
-lrmb -> rrmb: POST message to /rmb-remote
-note left
- this will allow the module that sends requests
- to run multiple workers each worker can then retry
- multiple time before it succeed or fail
-end note
-alt $dst != local
-rrmb -> lrmb: invalid destination error\n(code 400 Bad Request)
+lredis -> lpeer: POP $id from \n(msgbus.system.forward)
+lpeer -> rely: message pushed over the websocket to the rely
+
+alt $dst twin managed by same rely
+rely -> rely: message is pushed directly to \nreceiver message queue
 else
-rrmb -> rr: PUSH to msgbus.$cmd
-note right
-$ret is set to msgbus.system.reply
-before pushing to the msgbus.$cmd queue
-end note
+rely --> rely2: message forwarded to destination \nrely over HTTP(s)
+end
+
+alt $dst is not managed by this rely
+rely2 -> rely: invalid destination error\n(code 400 Bad Request)
+else
+rely2 -> rely2: message is pushed directly to \nreceiver message queue
 end
 ...
-rr -> rp: POP from (msgbus.$cmd) queue
-rp -> rp: Process and handle message
-rp -> rr: PUSH to $ret
+rely2 -> rpeer: message is sent over the \nestablished web socket connection
+rpeer -> rredis: push message to (msgbus.$cmd) queue
+
+rredis -> rps: POP from (msgbus.$cmd) queue
+rps -> rps: Process and handle message
+rps -> rredis: PUSH to $ret
 note right
 $ret is already set to msgbus.system.reply
 by http handler.
 It also set $now and swap $dst and $src
 end note
 ...
-rr -> rrmb: POP message from \n(msgbus.system.reply)
-rrmb -> lrmb: POST message to /rmb-reply
+rredis -> rpeer: POP message from \n(msgbus.system.reply)
+rpeer -> rely2: Push message over already \nestablished ws connection
 note left
-if recieved message $dst does not
-match local id, message is dropped.
+Once received it's up to the rely to forward
+the response back to the destination rely
+as above.
 end note
-lrmb -> lr: GET message backlog.$id
+...
+rely -> lpeer: receive messages over established connection
+note left
+rmb peer can tell the difference between a request
+message or a response message hence pushed to proper queue
+it can tell that from the protocol message types
+end note
+lpeer -> lredis: GET message backlog.$id
 alt does not exist
-lrmb -> lrmb: drop message it probably timedout
+lpeer -> lpeer: drop message it probably timedout
 else
-lrmb -> lr: PUSH response to $ret from the backlog
+lpeer -> lredis: PUSH response to $ret from the backlog
 end
-lr -> lp: POP response from $ret
+lredis -> lps: POP response from $ret
 @enduml

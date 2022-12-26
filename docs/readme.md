@@ -25,9 +25,11 @@ The process can be summarized as follows:
 - The client then just wait on response on the `ret` queue.
 
 ### RMB (local)
-Note that Local and Remote RMB are just one service. a single instance of RMB can run on any node and handle both local, remote, forwarding traffic. This list here only shows the operation when RMB receive a request from local client.
+is called `rmb-peer` which is RMB running in peer mode. A peer is a terminal where processes on this local node can use to communicate to other peers. `rmb-peer` require to be given a public url of `rmb-rely`. `rmb-rely` are discussed later but they are the backbone of the rmb network.
 
-
+- On start, `rmb` makes sure the associated twin information on the chain has his correct information, this include:
+ - `rely` server url normally in `ws://<server>/peer` format (or `wss`)
+ - `public-key` the public key of the twin used for encryption. usually a curve25519 key (to be researched)
 - RMB waits on messages coming over the `msgbus.system.local` queue. One a message arrives a message processing happens as follows:
   - verify message body is valid
   - verify dst twins are valid, for each twin in the list the identity and the IP of the dst twin is retrieved and cached if not already in cache.
@@ -37,192 +39,81 @@ Note that Local and Remote RMB are just one service. a single instance of RMB ca
   - for each $twin in $dst the string ($id:$twin) is pushed to `msgbus.system.forward`. This will allow messages to be sent (and retried) in parallel to multiple destinations.
 - The ids pushed to the `msgbus.system.forward` are handled in another routine of the system as follows:
   - The RMB maintain a set of workers, those workers are waiting for jobs pushed to them on a queue
-  - When an ID ($id:$twin) is received on `msgbus.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to a free worker
-  - The worker then can start (trying) to push this to remote RMB over the `/rmb-remote` url. The IP has already been resolved earlier from the cache (or re-retrieved if needed)
-  - The worker can try up to `$try` times before giving up and report an error for that `$dst` id.
-
-### RMB (remote)
-- On receiving a message on the `/rmb-remote` entrypoint. This entry-point will verify message body, and signature. A 202 Accepted is returned if all is okay, 400 BadRequest, or 401 Unauthorized if signature verifications fails.
-- If message $dst == $local, $ret is set to `msgbus.system.reply` and pushed to `msgbus.$cmd`
-
-### RMB (remote) again
-- Once a process handles messages on `msgbus.$cmd` and push response to `msgbus.system.reply`
-- Messages are poped from this queue, and signed before pushing to the http workers
-- The http workers can pick this message as well, but then now push the message to `/rmb-reply`. failure to do this is logged only, after all retries are exhausted (not retires are only done on connection errors, not HTTP errors)
+  - When an ID ($id:$twin) is received on `msgbus.system.forward` queue the message is retrieved from `backlog.$id` then **signed**, and pushed to my `rmb-rely`.
 
 ### RMB (local) again
 - If a message is received, if $dst != $local an http 403 Forbidden is returned.
-- Original message is GET from the backlog. If message does not exist anymore (timed-out) return 408 Request Timeout (?) may be not the best code we can change later
-- If message still available, an 202 Accepted is returned instead.
-- Response is pushed to $ret (from the original message from the backlog)
+- Original message is GET from the backlog. If message does not exist anymore, message is dropped since client is probably not expecting a response anymore.
+- If message still available, response is pushed to $ret (from the original message from the backlog)
 
+### RMB (rely)
+`rmb-rely` is rmb running in rely mode. Anyone can host a rely as long as it has a public IP (v4, v6 or both). The choice of the type of the IP is very important because
+it can cause segmentation of the rmb network. Imagine having 2 rmb-relys that one of them run ipv4 and other on ipv6, having 2 peers connected to each rely will fail to communicate because the rmb-relys can not communicate, hence federation will not be possible. Hence **IPv4** is preferred for now.
+
+- Once a peer connects to the rely, it needs to authenticate by means of digital signature to prove it's indeed that peer it claims it is. Can be done with a signed jwt that has peer signature. Once it's connected, messages received by that peer are forwarded directly to the connected peer. Also messages to be relied are accepted.
+- When a message is received from a peer, the destination peer (twin) information is then fetched, to inspect which `rely` it's connected to. this can be either same `rely` (self), or a `remote` rely, or not set!
+- If twin does not has a rely configured, an error is returned immediately that twin is not route-able.
+- If same rely message is pushed to the queue of the `peer` waiting for it receive those messages
+- If on remote rely, an http request is made to the remote peer on a special endpoint `http(s)://<server>/rely`.
+  - If federation failed to send (after certain amount of retries) error is returned to caller with proper error
+- On the remote `rely`
+  - Once a message is received on `/rely` endpoint, if the dst twin is not one of my peers (from twin info). message is discarded, an error is returned (choose proper http code)
+  - If twin is indeed one of my peers, message is queued for delivery.
 
 # Components
 This is a rough guide of the separate entities that can be developed in parallel. Of course this can be modified and tweaked during development to make sure it operates as intended.
 
 ## The message
+> NOTE: messages formats below are work on progress the final format can be a little bit different to be cleaner.
+
+### `app` to `rmb-peer`
+This is the message sent by a local application running next `rmb-peer` over the redis bus. Currently this message is `json` since not all languages support protobuf or binary formats. Since this never leaves the machine, it's okay to have a bulky format as long as it makes integration with apps easier.
+
 ```json
 {
-  "ver": 1,                                # version identifier (always 1 for now)
-  "uid": "uuid4",                          # unique id (filled by server)
+  "ver": 2,                                # version identifier (always 1 for now)
   "cmd": "wallet.stellar.balance.tft",     # command to call (aka function name)
   "exp": 3600,                             # expiration in seconds (relative to 'now')
-  "try": 4,                                # amount of retry if remote cannot be joined
+  "try": 4,                                # amount of retry if rely cannot be reached
   "dat": "R0E3...2WUwzTzdOQzNQUlkN=",      # data base64 encoded
-  "src": 1001,                             # source twin id (filled by server)
   "dst": [1002],                           # list of twin destination id (filled by client)
+  "ref": "id",                             # ref is an id selected by the app and should be returned as is.
+                                           # can be considered a sort of message ID.
   "ret": "5bf6bc...0c7-e87d799fbc73",      # return queue expected (please use uuid4)
-  "shm": "",                               # schema definition (not used now)
   "now": 1621944461,                       # sent timestamp (filled by client)
-  "err": ""                                # optional error (would be set by server)
+  "err": {
+    "code": 0,
+    "body": "data",
+  },                                       # err is an optional part of the message mainly used by replies
 }
 ```
-
-## Client
-to be defined
-
-## Identity
-Identity is the RMB twin identity. It's created with the private key of the twin (or mnemonics). It uses this identity to retrieve it's twin id from substrate.
-
-This must be built before any of other rmb operation proceed.
-
-```rust
-trait Identity {
-    // returns signed message
-    id() -> u64
-    sign(msg: Message) -> Message
-}
-```
-
-## Twin
-A Twin represents a remote twin, A remote twin is identified by it's ID and must hold it's public key as well. A twin can be retrieved from substrate with a given ID. then cached in a local cache (in memory)
-
-```rust
-trait Twin {
-    id() -> u64
-    verify(msg: &Message) -> Result<()>
-    address() -> String // we use string not IP because the twin address can be a dns name
-}
-```
-
-## Redis abstraction layer
-One component that need to be built is the Redis wrapper. This hides the calls to local redis and instead expose a concrete and statically typed trait to set, get, pop, and push data to separate "queues" as follows
-```rust
-
-enum QueuedMessage {
-    Forward(Message)
-    Reply(Message)
-}
-
-trait Storage {
-    // operation against backlog
-    // sets backlog.$uid and set ttl to $exp
-    set(msg: Message) -> Result<()>
-    // gets message with ID.
-    get(id: String) -> Result<Option<Message>>
-
-    // pushes the message to local process (msgbus.$cmd) queue
-    run(msg: Message) -> Result<()>
-
-    // pushes message to `msgbus.system.forward` queue
-    forward(msg: Message) -> Result<()>
-
-    // pushes message to `msg.$ret` queue
-    reply(msg: Message) -> Result<()>
-
-    // gets a message from local queue waits
-    // until a message is available
-    local() -> Result<Message>
-
-    // find a better name
-    // process will wait on both msgbus.system.forward AND msgbus.system.reply
-    // and return the first message available with the correct Queue type
-    process() -> Result<QueuedMessage>
-}
-```
-
-Not implementation for storage should be implement connection pooling, also a Storage object can be passed around and cloned to be used by other parts of the system in async/io fashion
-
-## HTTP Server
-this server implements only 2 end-points as explained above
-- `/rmb-remote`
-- `/rmb-reply`
-
-The server holds an instance to Storage. If you followed the diagram the endpoints will need to be able to:
-- Has instance of Identity
-- Able to retrieve a twin object. A twin implementation can support a get twin operation which will either access the cache or retrieve the twin from the chain and cache it.
-- Use storage object either to do `run`, `forward`, or `reply` as per the sequence diagram
-
-## Dispatcher no.1 (local dispatcher)
-This one is simple, it calls Storage.local() and then decide what to do with the message based on the sequence diagram
-
-## Dispatcher no.2 (http workers)
-This is a little bit complex. It needs to do the following:
-- Wait until an http worker is free (the worker should ask for a new job)
-- call Storage.process() and block until a message is available.
-- When a message is available, the message is signed with twin identity
-- Message is sent to the worker, along side the twin object
-- worker can then try to call either `/rmb-remote` or `/rmb-reply` based on the Queue type.
-- if **FORWARD** the worker can report the caller immediately with an error if message was not able to deliver (calling Storage.reply() with right error filled in)
-
-# Proxying
-Proxying the support for one rmb instance (twin) to forward a message on behalf of another twin. This can be useful if the first rmb (the sender) can't run it's own instance of rmb, hence it can ask a nearby twin (over other means of communication that is not part of this specs) to send a message to another twin (receiver) over rmb protocol. But the receiver then need to send the answer back to the proxy, which will then deliver the reply to the caller.
-
-There are 3 parties in this scenario:
-- **sender**: A twin that is not running it's own instance of rmb, but has a configured twin object on the chain, hence it's public key is valid.
-- **proxy**: the twin with rmb instance, that will work as a bridge
-- **receiver**: Another twin with it's own rmb instance and can be reached over the rmb protocol.
-
-An instance of RMB only accepts messages from local processes (over redis). As explained above the /rmb-remote, and /rmb-reply are only intended for RMB to RMB communication. Hence to support proxying a 3rd party process must run local to the proxy rmb, this process will implement the public communication protocol to receive proxy requests from sender twins. This of course outside the scope of this document.
-
-> For example, an http app can run next to rmb that accepts request to proxy messages. for example the grid proxy. This process can implement validation on this message normally to save processing time. For example validate the signature, timestamps, etc...
-
-Once the 3rd party app receives a message, it can communicate with it's local rmb normally like any other local process. It can use available rmb client implementation.
-
-- **payload**: is the message that is intended for delivery to the receiver rmb
-- **envelope**: is the message that is initiated from proxy to receiver.
-
-The point is the 3rd party app, once it receives a `payload` message and once it's done with the validation, it will simply crete a new `envelope` message that wraps the payload. This message will have the fixed cmd `system.proxy`. Message is then sent normally to `receiver` rmb.
-
-`envelope` message goes through the same processing as a normal message (validation) note that the twin id on the envelope message is the `proxy` twin.
-
-This mean that this envelope message will end up on the `msgbus.system.proxy` queue (if all validation is fine). A special routine handler on this queue will does the following:
-
-- it will extract the `payload` message from the `data` field of the `envelope`
-- it will do payload validation (against the sender twin id), and timestamps validation, etc...
-- the message `$ret` is set to `msgbus.system.proxied`
-- the envelope message is parked in redis (using a special) `proxied.$id` key. TTL is applied
-- the message is sent to `msgbus.$cmd`
-- once the msg is processed by the local process. the message is then pushed on the correct `msgbus.system.proxied`
-- another routing (or same) is pulling from `msgbus.system.proxied`.
-- this will then get the envelope from redis and create a return message (setting correct src/dst) and push again the `envelop.$ret` (this was set by the normal rmb operation)
-- response will arrive at the 3rd party app normally
-
-# File uploads
-## Local side
-File uploads are done via http, if there's an upload request, the file specified in the message payload will be uploaded directly with more information in some custom headers.
-
-An upload is a normal message with the command of `msgbus.system.file.upload`, with the data containing an upload request as json with `path` and `cmd` (which is the command that will handle this uploaded files on the remote side).
-
-
+### `rmb-peer` to `rmb-rely`
+This will use `protobuf` to improve the message size but this now a description of basic fields of the message. but will look different in the protobuf schema.
+The message here is sent for each dst twin. Because encryption done here using the twin public key. Hence is needed for each
 ```json
 {
-    "path": "/any/local/file/path",
-    "cmd": "msgbus.remote.upload.handler"
+  "uid": "uuid4",                          # unique id (filled by rmb-peer)
+  "cmd": "wallet.stellar.balance.tft",     # command to call (aka function name)
+  "exp": 3600,                             # expiration in seconds (relative to 'now')
+  "try": 4,                                # amount of retry if rely cannot be reached
+  "dat": "<binary>",                       # encrypted(plain-bytes)
+  "src": 1001,                             # source twin id (filled by server)
+  "dst": 1002,                             # destination twin id (filled by client)
+                                           # this is now for a single twin.
+  "ret": "5bf6bc...0c7-e87d799fbc73",      # return queue expected (please use uuid4)
+  "sig": "<binary>",                       # signature of sender peer
+  "now": 1621944461,                       # sent timestamp (filled by client)
 }
 ```
 
-Once the local rmb receives an upload command, workers will try to do an HTTP multipart upload to the remote rmb, with all other information included in custom headers
+### `rmb-rely` to `rmb-rely`
+rely will forward the message as is to other rely if needed.
 
-* `rmb-upload-cmd`: This is the cmd part of the request above, this will be notified once upload is complete.
-* `rmb-source-id`: the original message source twin id.
-* `rmb-timestamp`: the original message timestamp
-* `rmb-signature`: the signature of the combined headers.
+### `rmb-rely` to `rmb-peer`
+rely will forward the message as is to peer.
 
-A response message will returned to the caller on success or failure.
+### `rmb-peer` to `app`
+the message is expanded back to the proper json format, and pushed to the app.
 
-## Remote side
-
-Any rmb can accept uploads (using `-u`), and once it receives an upload, it verifies the request, then saves it to the configured uploads directory (using `--uploads-dir`, which defaults to environment `tmp`), then rmb will notify the handler of this upload by sending a message with `data` as the file path.
-
-If uploads are disabled, `405 Method Not Allowed` will be returned instead.
+# File uploads
+TBD
