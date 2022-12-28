@@ -1,6 +1,8 @@
 mod ed25519;
 mod sr25519;
 
+use std::{fmt::Display, str::FromStr};
+
 pub use ed25519::{Ed25519Identity, Ed25519Signer, PREFIX as ED_PREFIX};
 pub use sr25519::{Sr25519Identity, Sr25519Signer, PREFIX as SR_PREFIX};
 
@@ -91,5 +93,33 @@ impl Signer for Signers {
             Signers::Ed25519(ref sk) => sk.sign(message),
             Signers::Sr25519(ref sk) => sk.sign(message),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum KeyType {
+    Ed25519,
+    Sr25519,
+}
+
+impl FromStr for KeyType {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ed25519" => Ok(KeyType::Ed25519),
+            "sr25519" => Ok(KeyType::Sr25519),
+            _ => Err("invalid key type"),
+        }
+    }
+}
+
+impl Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            KeyType::Ed25519 => "ed25519",
+            KeyType::Sr25519 => "sr25519",
+        };
+
+        f.write_str(s)
     }
 }

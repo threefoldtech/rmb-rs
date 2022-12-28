@@ -7,11 +7,15 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/protos/types.rs"));
+}
+
 #[derive(Clone, Debug)]
 pub enum TransitMessage {
-    Request(Message),
-    Reply(Message),
-    Upload(Message),
+    Request(JsonRequest),
+    Reply(JsonResponse),
+    //Upload(Message),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -57,13 +61,15 @@ pub struct Message {
 }
 
 pub trait Challengeable {
-    fn challenge(&self) -> Result<md5::Digest>;
+    fn challenge<W: Write>(&self, w: &mut W) -> Result<()>;
 }
 
 // a generic sign for any challengeable
 pub fn sign<C: Challengeable, S: Signer>(c: &C, signer: &S) -> String {
-    let digest = c.challenge().unwrap();
-    let signature = signer.sign(&digest[..]);
+    let mut hash = md5::Context::new();
+    c.challenge(&mut hash).unwrap();
+    let hash = hash.compute();
+    let signature = signer.sign(&hash[..]);
 
     hex::encode(signature)
 }
@@ -79,7 +85,9 @@ pub fn verify<C: Challengeable, I: Identity>(
         None => bail!("message is not signed"),
     };
 
-    let digest = c.challenge()?;
+    let mut hash = md5::Context::new();
+
+    let digest = hash.compute();
     let signature = hex::decode(signature).context("failed to decode signature")?;
 
     identity.verify(&signature, &digest[..])
@@ -89,13 +97,12 @@ impl<T> Challengeable for &[T]
 where
     T: std::fmt::Display,
 {
-    fn challenge(&self) -> Result<md5::Digest> {
-        let mut hash = md5::Context::new();
+    fn challenge<W: Write>(&self, w: &mut W) -> Result<()> {
         for v in self.iter() {
-            write!(hash, "{}", v)?;
+            write!(w, "{}", v)?;
         }
 
-        Ok(hash.compute())
+        Ok(())
     }
 }
 
@@ -144,8 +151,7 @@ impl Default for Message {
 }
 
 impl Challengeable for Message {
-    fn challenge(&self) -> Result<md5::Digest> {
-        let mut hash = md5::Context::new();
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.version)?;
         write!(hash, "{}", self.id)?;
         write!(hash, "{}", self.command)?;
@@ -161,7 +167,7 @@ impl Challengeable for Message {
         // proxy flag is now obsolete
         write!(hash, "{}", self.proxy)?;
 
-        Ok(hash.compute())
+        Ok(())
     }
 }
 
@@ -333,6 +339,168 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonRequest {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(rename = "cmd")]
+    pub command: String,
+    #[serde(rename = "exp")]
+    pub expiration: u32,
+    #[serde(rename = "try")]
+    pub retry: u32,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "tag")]
+    pub tags: Option<String>,
+    #[serde(rename = "dst")]
+    pub destinations: Vec<u32>,
+    #[serde(rename = "ret")]
+    pub reply: String,
+    #[serde(rename = "shm")]
+    pub schema: String,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+}
+
+impl JsonRequest {
+    pub fn into_envelope(self, source: u32) -> Result<proto::Envelope> {
+        let mut request = proto::Request::new();
+
+        request.command = self.command;
+        request.data = base64::decode(self.data)?;
+        request.reply_to = self.reply;
+        request.expiration = self.expiration;
+
+        let mut env = proto::Envelope::new();
+
+        env.uid = uuid::Uuid::new_v4().to_string();
+        env.reference = self.reference;
+        env.tags = self.tags;
+        env.timestamp = self.timestamp;
+        env.source = source;
+        env.destinations = self.destinations;
+        env.signature = None;
+        env.set_request(request);
+
+        Ok(env)
+    }
+}
+
+impl Challengeable for proto::Request {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        write!(hash, "{}", self.command)?;
+        hash.write(&self.data)?;
+        write!(hash, "{}", self.expiration)?;
+
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonError {
+    pub code: u32,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonResponse {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "shm")]
+    pub schema: String,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+    #[serde(rename = "err")]
+    pub error: Option<JsonError>,
+}
+
+impl JsonResponse {
+    pub fn into_envelope(self, req: &proto::Envelope, source: u32) -> Result<proto::Envelope> {
+        if !req.has_request() {
+            bail!("envelop does not carry a request")
+        }
+        let request = req.request();
+
+        let mut response = proto::Response::new();
+        response.reply_to = request.reply_to;
+
+        match self.error {
+            None => {
+                let mut body = proto::Reply::new();
+                body.data = base64::decode(self.data)?;
+                response.set_reply(body);
+            }
+            Some(err) => {
+                let mut body = proto::Error::new();
+                body.code = err.code;
+                body.message = err.message;
+                response.set_error(body);
+            }
+        };
+
+        let mut env = proto::Envelope::new();
+
+        env.uid = req.uid;
+        env.reference = req.reference;
+        env.tags = req.tags;
+        env.timestamp = self.timestamp;
+        env.source = source;
+        env.destinations = vec![req.source];
+        env.signature = None;
+        env.set_response(response);
+
+        Ok(env)
+    }
+}
+
+impl Challengeable for proto::Response {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        let mut hash = md5::Context::new();
+        write!(hash, "{}", self.reply_to)?;
+        if self.has_error() {
+            let err = self.error();
+            write!(hash, "{}", err.code)?;
+            write!(hash, "{}", err.message)?;
+        } else {
+            let reply = self.reply();
+            hash.write(&reply.data)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Challengeable for proto::Envelope {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        write!(hash, "{}", self.uid)?;
+        write!(hash, "{}", self.reference)?;
+        if let Some(ref tags) = self.tags {
+            write!(hash, "{}", tags)?;
+        }
+
+        write!(hash, "{}", self.timestamp)?;
+        write!(hash, "{}", self.source)?;
+        for dst in self.destinations.iter() {
+            write!(hash, "{}", dst)?;
+        }
+
+        if let Some(ref message) = self.message {
+            match message {
+                proto::envelope::Message::Request(req) => req.challenge(hash),
+                proto::envelope::Message::Response(resp) => resp.challenge(hash),
+            };
+        }
+
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod test {
     #[test]

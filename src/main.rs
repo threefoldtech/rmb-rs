@@ -11,47 +11,16 @@ use rmb::cache::RedisCache;
 use rmb::http_api::{HttpApi, UploadConfig};
 use rmb::http_workers::HttpWorker;
 use rmb::identity;
-use rmb::identity::Identity;
-use rmb::processor;
+use rmb::identity::{Identity, KeyType};
+use rmb::peer::processor;
 use rmb::proxy::ProxyWorker;
 use rmb::redis;
 use rmb::storage::RedisStorage;
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 
-const GIT_VERSION: &str =
-    git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
-
-#[derive(Debug)]
-enum KeyType {
-    Ed25519,
-    Sr25519,
-}
-
-impl FromStr for KeyType {
-    type Err = &'static str;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "ed25519" => Ok(KeyType::Ed25519),
-            "sr25519" => Ok(KeyType::Sr25519),
-            _ => Err("invalid key type"),
-        }
-    }
-}
-
-impl Display for KeyType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            KeyType::Ed25519 => "ed25519",
-            KeyType::Sr25519 => "sr25519",
-        };
-
-        f.write_str(s)
-    }
-}
-
 /// the reliable message bus
 #[derive(Parser, Debug)]
-#[clap(name ="rmb", author, version = GIT_VERSION, about, long_about = None)]
+#[clap(name ="rmb", author, version = env!("GIT_VERSION"), about, long_about = None)]
 struct Args {
     /// key type
     #[clap(short, long, default_value_t = KeyType::Sr25519)]
