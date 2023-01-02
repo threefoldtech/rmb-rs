@@ -3,7 +3,7 @@ use std::{
     str::{from_utf8, FromStr},
 };
 
-use crate::types::{Envelope, EnvelopeExt, JsonRequest, JsonResponse};
+use crate::types::{Backlog, Envelope, EnvelopeExt, JsonRequest, JsonResponse};
 
 use super::Storage;
 use anyhow::{Context, Result};
@@ -52,17 +52,17 @@ impl<'a> Display for RunKey<'a> {
 }
 
 enum Queue {
-    Local,
+    Request,
     Forward,
-    Reply,
+    Response,
 }
 
 impl std::fmt::Display for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Queue::Local => write!(f, "msgbus.system.local"),
+            Queue::Request => write!(f, "msgbus.system.local"),
             Queue::Forward => write!(f, "msgbus.system.forward"),
-            Queue::Reply => write!(f, "msgbus.system.reply"),
+            Queue::Response => write!(f, "msgbus.system.reply"),
         }
     }
 }
@@ -121,23 +121,6 @@ impl RedisStorage {
         Ok(conn)
     }
 
-    async fn set(&self, env: &Envelope) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-
-        // add to backlog
-        let ttl = match env.ttl() {
-            Some(ttl) => ttl,
-            None => bail!("message has expired"),
-        };
-
-        let key = BacklogKey(&env.uid);
-        conn.set_ex(&key, env, ttl.as_secs() as usize)
-            .await
-            .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
-
-        Ok(())
-    }
-
     async fn get_from<K, O: FromRedisValue>(&self, key: K) -> Result<Option<O>>
     where
         K: ToRedisArgs + Send + Sync,
@@ -155,154 +138,79 @@ impl RedisStorage {
     }
 }
 
-struct ForwardedMessage {
-    pub id: String,
-    pub destination: u32,
-}
-
-impl FromStr for ForwardedMessage {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.rsplitn(2, '.').collect();
-        if parts.len() != 2 {
-            bail!("invalid message address string");
-        }
-
-        let out: u32 = parts[0]
-            .parse()
-            .with_context(|| format!("invalid destination twin format {}", parts[0]))?;
-
-        Ok(Self {
-            id: parts[1].into(),
-            destination: out,
-        })
-    }
-}
-
-impl std::fmt::Display for ForwardedMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.id, self.destination)
-    }
-}
-
-impl ForwardedMessage {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let pair = from_utf8(bytes)?;
-        pair.parse()
-    }
-}
-
-impl ToRedisArgs for ForwardedMessage {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + RedisWrite,
-    {
-        let pair = self.to_string();
-        out.write_arg(pair.as_bytes());
-    }
-}
-
-impl FromRedisValue for ForwardedMessage {
-    fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        if let Value::Data(data) = v {
-            ForwardedMessage::from_bytes(data).map_err(|e| {
-                RedisError::from((
-                    ErrorKind::TypeError,
-                    "cannot decode a forwarded message from from pair {}",
-                    e.to_string(),
-                ))
-            })
-        } else {
-            Err(RedisError::from((
-                ErrorKind::TypeError,
-                "expected a data type from redis",
-            )))
-        }
-    }
-}
-
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn get(&self, id: &str) -> Result<Option<Envelope>> {
-        self.get_from(BacklogKey(id)).await
+    async fn track(&self, env: &Envelope) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+
+        // add to backlog
+        let ttl = match env.ttl() {
+            Some(ttl) => ttl,
+            None => bail!("message has expired"),
+        };
+
+        let backlog: Backlog = env.try_into().context("failed to build message backlog")?;
+        let key = BacklogKey(&env.uid);
+        conn.set_ex(&key, backlog, ttl.as_secs() as usize)
+            .await
+            .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
+
+        Ok(())
+    }
+
+    async fn get(&self, uid: &str) -> Result<Option<Backlog>> {
+        self.get_from(BacklogKey(uid)).await
     }
 
     async fn run(&self, env: Envelope) -> Result<()> {
-        let request: JsonRequest = env.try_into().context("failed to extract context")?;
+        let mut request: JsonRequest = env.try_into().context("failed to extract context")?;
         let mut conn = self.get_connection().await?;
         // set reply queue
 
         let key = RunKey(&request.command);
-        request.reply = Queue::Reply.to_string();
+        request.reply = Queue::Response.to_string();
 
-        conn.lpush(&key, request).await?;
+        conn.lpush(&key, &request).await?;
         conn.ltrim(&key, 0, self.max_commands - 1).await?;
 
         Ok(())
     }
 
-    async fn forward(&self, msg: &Envelope) -> Result<()> {
+    async fn reply(&self, queue: &str, response: JsonResponse) -> Result<()> {
         let mut conn = self.get_connection().await?;
+        // set reply queue
 
-        self.set(msg).await?;
+        let key = RunKey(&queue);
 
-        // push to forward for every destination
-        let queue = Queue::Forward.to_string();
-        for destination in &msg.destinations {
-            let forwarded = ForwardedMessage {
-                id: msg.uid.clone(),
-                destination: *destination,
-            };
-            conn.lpush(&queue, &forwarded).await?
-        }
+        conn.lpush(&key, &response).await?;
+        conn.ltrim(&key, 0, self.max_commands - 1).await?;
 
         Ok(())
     }
 
-    async fn local(&self) -> Result<JsonRequest> {
+    async fn messages(&self) -> Result<Envelope> {
         let mut conn = self.get_connection().await?;
-        let ret: (Vec<u8>, JsonRequest) = conn.brpop(Queue::Local, 0).await?;
+        let req_queue = Queue::Request.to_string();
+        let resp_queue = Queue::Response.to_string();
+        let queues = (req_queue.as_str(), resp_queue.as_str());
 
-        Ok(ret.1)
-    }
+        let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
 
-    async fn queued(&self) -> Result<Envelope> {
-        let mut conn = self.get_connection().await?;
-        let forward_queue = Queue::Forward.to_string();
-        let reply_queue = Queue::Reply.to_string();
-        let queues = (forward_queue.as_str(), reply_queue.as_str());
+        let env: Envelope = if queue == req_queue {
+            JsonRequest::from_redis_value(&value)
+                .context("failed to load json request")?
+                .try_into()
+                .context("failed to build request envelope")?
+        } else {
+            // reply queue had the message itself
+            // decode it directly
+            JsonResponse::from_redis_value(&value)
+                .context("failed to load json response")?
+                .try_into()
+                .context("failed to build response envelope")?
+        };
 
-        loop {
-            let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
-
-            if queue == forward_queue {
-                let forward = match ForwardedMessage::from_redis_value(&value) {
-                    Ok(msg) => msg,
-                    Err(err) => {
-                        log::debug!("cannot get forwarded message: {}", err.to_string());
-                        continue;
-                    }
-                };
-
-                if let Some(mut env) = self.get(&forward.id).await? {
-                    env.destinations = vec![forward.destination];
-                    return Ok(env);
-                }
-            } else if queue == reply_queue {
-                // reply queue had the message itself
-                // decode it directly
-                let response = JsonResponse::from_redis_value(&value)?;
-                let env: Envelope = match response.try_into() {
-                    Ok(env) => env,
-                    Err(err) => {
-                        log::error!("failed to build envelope from response");
-                        continue;
-                    }
-                };
-                return Ok(env);
-            }
-        }
+        Ok(env)
     }
 }
 

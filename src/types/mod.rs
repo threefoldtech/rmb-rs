@@ -4,15 +4,14 @@ use anyhow::{Context, Result};
 use bb8_redis::redis;
 use protobuf::Message;
 use serde::{Deserialize, Serialize};
+use std::any;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/protos/types.rs"));
-}
+include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
-pub use proto::Envelope;
+pub use types::{Backlog, Envelope};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UploadRequest {
@@ -69,7 +68,7 @@ pub fn verify<C: Challengeable, I: Identity>(
     };
 
     let mut hash = md5::Context::new();
-
+    c.challenge(&mut hash)?;
     let digest = hash.compute();
 
     identity.verify(&signature, &digest[..])
@@ -168,6 +167,35 @@ impl redis::FromRedisValue for Envelope {
     }
 }
 
+impl redis::ToRedisArgs for Backlog {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let bytes = self.write_to_bytes().expect("failed to encode envelope");
+        out.write_arg(&bytes);
+    }
+}
+
+impl redis::FromRedisValue for Backlog {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            Self::parse_from_bytes(data).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "cannot decode a message from json {}",
+                    e.to_string(),
+                ))
+            })
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
+    }
+}
+
 /// based on the now, timestamp and expiration return new
 /// timestamp and expiration values so that
 /// - timestamp is always now
@@ -198,7 +226,6 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
         Some(d) => Some(Duration::from_secs(d)),
     }
 }
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonRequest {
     #[serde(rename = "ver")]
@@ -254,7 +281,7 @@ impl redis::FromRedisValue for JsonRequest {
 
 impl TryFrom<Envelope> for JsonRequest {
     type Error = anyhow::Error;
-    fn try_from(value: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
         let req = value.take_request();
 
         Ok(JsonRequest {
@@ -275,7 +302,7 @@ impl TryFrom<Envelope> for JsonRequest {
 impl TryFrom<JsonRequest> for Envelope {
     type Error = anyhow::Error;
     fn try_from(value: JsonRequest) -> Result<Self> {
-        let mut request = proto::Request::new();
+        let mut request = types::Request::new();
 
         request.command = value.command;
         request.data = base64::decode(value.data)?;
@@ -296,7 +323,26 @@ impl TryFrom<JsonRequest> for Envelope {
     }
 }
 
-impl Challengeable for proto::Request {
+impl TryFrom<&Envelope> for Backlog {
+    type Error = anyhow::Error;
+    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
+        // only valid for requests
+        if !value.has_request() {
+            anyhow::bail!("not a request envelope");
+        }
+        let req = value.request();
+        if req.reply_to == "" {
+            anyhow::bail!("no reply-to queue set");
+        }
+        let mut backlog = Backlog::new();
+        backlog.uid = value.uid.clone();
+        backlog.reference = value.reference.clone();
+        backlog.reply_to = req.reply_to.clone();
+
+        Ok(backlog)
+    }
+}
+impl Challengeable for types::Request {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.command)?;
         hash.write(&self.data)?;
@@ -322,8 +368,8 @@ pub struct JsonResponse {
     pub data: String,
     #[serde(rename = "dst")]
     pub destination: u32,
-    #[serde(rename = "shm")]
-    pub schema: String,
+    // #[serde(rename = "shm")]
+    // pub schema: String,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
@@ -359,20 +405,58 @@ impl redis::FromRedisValue for JsonResponse {
     }
 }
 
+impl TryFrom<Envelope> for JsonResponse {
+    type Error = anyhow::Error;
+    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+        use types::envelope::Message;
+        use types::response::Body;
+
+        let response = match env.message {
+            None => anyhow::bail!("invalid envelope has no message"),
+            Some(Message::Request(_)) => anyhow::bail!("invalid envelope has request message"),
+            Some(Message::Response(response)) => response,
+        };
+
+        let body = response.body.context("reply has no body")?;
+
+        let response = JsonResponse {
+            version: 1,
+            reference: String::default(),
+            data: if let Body::Reply(ref reply) = body {
+                base64::encode(&reply.data)
+            } else {
+                "".into()
+            },
+            destination: 0, // this should always be self
+            timestamp: env.timestamp,
+            error: if let Body::Error(err) = body {
+                Some(JsonError {
+                    code: err.code,
+                    message: err.message,
+                })
+            } else {
+                None
+            },
+        };
+
+        Ok(response)
+    }
+}
+
 impl TryFrom<JsonResponse> for Envelope {
     type Error = anyhow::Error;
 
     fn try_from(value: JsonResponse) -> Result<Self, Self::Error> {
-        let mut response = proto::Response::new();
+        let mut response = types::Response::new();
 
         match value.error {
             None => {
-                let mut body = proto::Reply::new();
+                let mut body = types::Reply::new();
                 body.data = base64::decode(value.data)?;
                 response.set_reply(body);
             }
             Some(err) => {
-                let mut body = proto::Error::new();
+                let mut body = types::Error::new();
                 body.code = err.code;
                 body.message = err.message;
                 response.set_error(body);
@@ -391,10 +475,8 @@ impl TryFrom<JsonResponse> for Envelope {
     }
 }
 
-impl Challengeable for proto::Response {
+impl Challengeable for types::Response {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
-        let mut hash = md5::Context::new();
-        write!(hash, "{}", self.reply_to)?;
         if self.has_error() {
             let err = self.error();
             write!(hash, "{}", err.code)?;
@@ -424,8 +506,8 @@ impl Challengeable for Envelope {
 
         if let Some(ref message) = self.message {
             match message {
-                proto::envelope::Message::Request(req) => req.challenge(hash),
-                proto::envelope::Message::Response(resp) => resp.challenge(hash),
+                types::envelope::Message::Request(req) => req.challenge(hash),
+                types::envelope::Message::Response(resp) => resp.challenge(hash),
             };
         }
 

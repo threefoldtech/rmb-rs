@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueHint};
+use clap::Parser;
 use rmb::cache::RedisCache;
 use rmb::identity::Identity;
+use rmb::identity::KeyType;
 use rmb::storage::RedisStorage;
 use rmb::twin::{SubstrateTwinDB, TwinDB};
-use rmb::{http_api::UploadConfig, identity::KeyType};
 use rmb::{identity, redis};
 
 /// A peer requires only which rely to connect to, and
@@ -42,7 +42,7 @@ struct Args {
     substrate: String,
 
     /// substrate address please make sure the url also include the port number
-    #[clap(short, long, default_value_t = String::from("wss://rely.grid.tf:443"))]
+    #[clap(long, default_value_t = String::from("wss://rely.grid.tf:443"))]
     rely: String,
 
     /// enable debugging logs
@@ -75,19 +75,19 @@ async fn app(args: &Args) -> Result<()> {
         },
     };
 
-    // uploads config
-    let _upload_config = match args.uploads {
-        None => UploadConfig::Disabled,
-        Some(ref dir) => {
-            if !dir.is_dir() {
-                bail!(
-                    "provided upload directory of '{:?}' does not exist or is not a directory",
-                    dir
-                );
-            }
-            UploadConfig::Enabled(dir.clone())
-        }
-    };
+    // // uploads config
+    // let _upload_config = match args.uploads {
+    //     None => UploadConfig::Disabled,
+    //     Some(ref dir) => {
+    //         if !dir.is_dir() {
+    //             bail!(
+    //                 "provided upload directory of '{:?}' does not exist or is not a directory",
+    //                 dir
+    //             );
+    //         }
+    //         UploadConfig::Enabled(dir.clone())
+    //     }
+    // };
 
     let identity = match args.key_type {
         KeyType::Ed25519 => {
@@ -125,8 +125,10 @@ async fn app(args: &Args) -> Result<()> {
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
 
+    let u = url::Url::parse("ws://localhost:8080/logs/peer").unwrap();
+    let peer = rmb::peer::Peer::new(u, id, storage, identity).await;
+    peer.start().await?;
     // spawn the processor
-    rmb::peer::processor(id, storage.clone()).await;
 
     Ok(())
 }

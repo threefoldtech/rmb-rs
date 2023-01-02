@@ -2,17 +2,22 @@ mod redis;
 
 pub use redis::*;
 
-use crate::types::{Envelope, JsonRequest};
+use crate::types::{Backlog, Envelope, JsonRequest, JsonResponse};
 use anyhow::Result;
 use async_trait::async_trait;
 
 // operation against backlog
 #[async_trait]
 pub trait Storage: Clone + Send + Sync + 'static {
+    // track stores some information about the envelope
+    // in a backlog used to track replies received related to this
+    // envelope. The envelope has to be a request envelope.
+    async fn track(&self, msg: &Envelope) -> Result<()>;
+
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
     // there is no message with that ID or the actual message.
-    async fn get(&self, id: &str) -> Result<Option<Envelope>>;
+    async fn get(&self, uid: &str) -> Result<Option<Backlog>>;
 
     // pushes the message to local process (msgbus.$cmd) queue.
     // this means the message will be now available to the application
@@ -29,22 +34,11 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // after that we need to trim the queue to specific length after push (so drop older messages)
     async fn run(&self, msg: Envelope) -> Result<()>;
 
-    // forward stores the message in backlog.$id, and for each twin id in the message
-    // destination, a new tuple of (id, dst) is pushed to the forward queue.
-    // it also need to set TTL on the `backlog.$id` queue. This will make sure
-    // message will be auto-dropped when it times out.
-    async fn forward(&self, msg: &Envelope) -> Result<()>;
+    // pushed a json response back to the caller according to his
+    // reply queue.
+    async fn reply(&self, queue: &str, response: JsonResponse) -> Result<()>;
 
-    /// pushes message to `msg.$ret` queue.
-    //async fn reply(&self, msg: &JsonResponse) -> Result<()>;
-
-    // gets a message from local queue waits
-    // until a message is available
-    async fn local(&self) -> Result<JsonRequest>;
-
-    // process will wait on both msgbus.system.forward AND msgbus.system.reply
-    // and return the first message available with the correct Queue type
-    // both messages from these queue need to be send to rely. hence once method
-    // is enough. Note that those envelopes has no source or signature set yet
-    async fn queued(&self) -> Result<Envelope>;
+    // messages waits on either "requests" or "replies" that are available to
+    // be send to remote twin.
+    async fn messages(&self) -> Result<Envelope>;
 }

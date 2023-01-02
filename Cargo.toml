@@ -7,9 +7,9 @@ version = "0.1.0"
 name = "rmb-peer"
 path = "src/bins/rmb-peer.rs"
 
-[[bin]]
-name = "rmb"
-path = "src/main.rs"
+# [[bin]]
+# name = "rmb"
+# path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.56"
@@ -39,6 +39,9 @@ jsonrpsee-core = "0.14.0"
 subxt = "0.22"
 mime = "0.3"
 mpart-async = "0.6.0"
+url = "2.3.1"
+tokio-tungstenite = "0.18.0"
+futures-util = "0.3.25"
 # for static build
 openssl = {version = "0.10", features = ["vendored"]}
 workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
