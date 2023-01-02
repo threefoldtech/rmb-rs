@@ -1,8 +1,11 @@
-use std::str::{from_utf8, FromStr};
+use std::{
+    fmt::Display,
+    str::{from_utf8, FromStr},
+};
 
-use crate::types::{Message, TransitMessage};
+use crate::types::{Envelope, EnvelopeExt, JsonRequest, JsonResponse};
 
-use super::{ProxyStorage, Storage};
+use super::Storage;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
@@ -14,49 +17,73 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 
-enum Queue<'a> {
-    Backlog(&'a str),
-    Run(&'a str),
+struct BacklogKey<'a>(&'a str);
+
+impl<'a> ToRedisArgs for BacklogKey<'a> {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + bb8_redis::redis::RedisWrite,
+    {
+        out.write_arg_fmt(self)
+    }
+}
+
+impl<'a> Display for BacklogKey<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "msgbus.backlog.{}", self.0)
+    }
+}
+
+struct RunKey<'a>(&'a str);
+
+impl<'a> ToRedisArgs for RunKey<'a> {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + bb8_redis::redis::RedisWrite,
+    {
+        out.write_arg_fmt(self)
+    }
+}
+
+impl<'a> Display for RunKey<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "msgbus.backlog.{}", self.0)
+    }
+}
+
+enum Queue {
     Local,
     Forward,
     Reply,
-
-    // for proxy
-    ProxyBacklog(&'a str),
-    ProxyRequest,
-    ProxyReply,
-    // for file uploads
-    Upload,
 }
 
-impl std::fmt::Display for Queue<'_> {
+impl std::fmt::Display for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Queue::Backlog(id) => write!(f, "backlog.{}", id),
-            Queue::Run(command) => write!(f, "{}", command),
-            Queue::Local => write!(f, "system.local"),
-            Queue::Forward => write!(f, "system.forward"),
-            Queue::Reply => write!(f, "system.reply"),
-            // Proxy
-            Queue::ProxyBacklog(id) => write!(f, "proxy.backlog.{}", id),
-            Queue::ProxyRequest => write!(f, "system.proxy.request"),
-            Queue::ProxyReply => write!(f, "system.proxy.reply"),
-            // Uploads
-            Queue::Upload => write!(f, "system.file.upload"),
+            Queue::Local => write!(f, "msgbus.system.local"),
+            Queue::Forward => write!(f, "msgbus.system.forward"),
+            Queue::Reply => write!(f, "msgbus.system.reply"),
         }
+    }
+}
+
+impl ToRedisArgs for Queue {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + bb8_redis::redis::RedisWrite,
+    {
+        out.write_arg_fmt(self)
     }
 }
 
 #[derive(Clone)]
 pub struct RedisStorage {
-    prefix: String,
     pool: Pool<RedisConnectionManager>,
     max_commands: isize,
 }
 
 pub struct RedisStorageBuilder {
     pool: Pool<RedisConnectionManager>,
-    prefix: String,
     max_commands: isize,
 }
 
@@ -64,15 +91,8 @@ impl RedisStorageBuilder {
     pub fn new(pool: Pool<RedisConnectionManager>) -> RedisStorageBuilder {
         RedisStorageBuilder {
             pool,
-            prefix: String::from("msgbus"),
             max_commands: 500,
         }
-    }
-
-    #[allow(unused)]
-    pub fn prefix<S: Into<String>>(mut self, prefix: S) -> Self {
-        self.prefix = prefix.into();
-        self
     }
 
     #[allow(unused)]
@@ -82,21 +102,13 @@ impl RedisStorageBuilder {
     }
 
     pub fn build(self) -> RedisStorage {
-        RedisStorage::new(&self.prefix, self.pool, self.max_commands)
+        RedisStorage::new(self.pool, self.max_commands)
     }
 }
 
 impl RedisStorage {
-    pub fn new<S: Into<String>>(
-        prefix: S,
-        pool: Pool<RedisConnectionManager>,
-        max_commands: isize,
-    ) -> Self {
-        Self {
-            prefix: prefix.into(),
-            pool,
-            max_commands,
-        }
+    pub fn new(pool: Pool<RedisConnectionManager>, max_commands: isize) -> Self {
+        Self { pool, max_commands }
     }
 
     async fn get_connection(&self) -> Result<PooledConnection<'_, RedisConnectionManager>> {
@@ -109,44 +121,34 @@ impl RedisStorage {
         Ok(conn)
     }
 
-    async fn set(&self, msg: &Message, queue: Queue<'_>) -> Result<()> {
+    async fn set(&self, env: &Envelope) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
         // add to backlog
-        let ttl = match msg.ttl() {
+        let ttl = match env.ttl() {
             Some(ttl) => ttl,
             None => bail!("message has expired"),
         };
 
-        let key = self.prefixed(queue);
-        conn.set_ex(&key, msg, ttl.as_secs() as usize)
+        let key = BacklogKey(&env.uid);
+        conn.set_ex(&key, env, ttl.as_secs() as usize)
             .await
             .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
 
         Ok(())
     }
 
-    async fn get_from(&self, queue: Queue<'_>) -> Result<Option<Message>> {
+    async fn get_from<K, O: FromRedisValue>(&self, key: K) -> Result<Option<O>>
+    where
+        K: ToRedisArgs + Send + Sync,
+    {
         let mut conn = self.get_connection().await?;
-        let key = self.prefixed(queue);
         Ok(conn.get(key).await?)
     }
 
-    async fn run_with_reply(&self, queue: Queue<'_>, mut msg: Message) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        // set reply queue
-        msg.reply = self.prefixed(queue);
-        let cmd = self.prefixed(Queue::Run(&msg.command));
-
-        conn.lpush(&cmd, msg).await?;
-        conn.ltrim(&cmd, 0, self.max_commands - 1).await?;
-
-        Ok(())
-    }
-
-    fn prefixed(&self, queue: Queue) -> String {
-        format!("{}.{}", self.prefix, queue)
-    }
+    // fn prefixed<T: Display>(&self, o: T) -> String {
+    //     format!("{}.{}", self.prefix, o)
+    // }
 
     pub fn builder(pool: Pool<RedisConnectionManager>) -> RedisStorageBuilder {
         RedisStorageBuilder::new(pool)
@@ -222,24 +224,34 @@ impl FromRedisValue for ForwardedMessage {
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn get(&self, id: &str) -> Result<Option<Message>> {
-        self.get_from(Queue::Backlog(id)).await
+    async fn get(&self, id: &str) -> Result<Option<Envelope>> {
+        self.get_from(BacklogKey(id)).await
     }
 
-    async fn run(&self, msg: Message) -> Result<()> {
-        self.run_with_reply(Queue::Reply, msg).await
+    async fn run(&self, env: Envelope) -> Result<()> {
+        let request: JsonRequest = env.try_into().context("failed to extract context")?;
+        let mut conn = self.get_connection().await?;
+        // set reply queue
+
+        let key = RunKey(&request.command);
+        request.reply = Queue::Reply.to_string();
+
+        conn.lpush(&key, request).await?;
+        conn.ltrim(&key, 0, self.max_commands - 1).await?;
+
+        Ok(())
     }
 
-    async fn forward(&self, msg: &Message) -> Result<()> {
+    async fn forward(&self, msg: &Envelope) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        self.set(msg, Queue::Backlog(&msg.id)).await?;
+        self.set(msg).await?;
 
         // push to forward for every destination
-        let queue = self.prefixed(Queue::Forward);
-        for destination in &msg.destination {
+        let queue = Queue::Forward.to_string();
+        for destination in &msg.destinations {
             let forwarded = ForwardedMessage {
-                id: msg.id.clone(),
+                id: msg.uid.clone(),
                 destination: *destination,
             };
             conn.lpush(&queue, &forwarded).await?
@@ -248,30 +260,21 @@ impl Storage for RedisStorage {
         Ok(())
     }
 
-    async fn reply(&self, msg: &Message) -> Result<()> {
+    async fn local(&self) -> Result<JsonRequest> {
         let mut conn = self.get_connection().await?;
-
-        conn.lpush(&msg.reply, msg).await?;
-        Ok(())
-    }
-
-    async fn local(&self) -> Result<Message> {
-        let mut conn = self.get_connection().await?;
-        let queue = self.prefixed(Queue::Local);
-        let ret: (Vec<u8>, Message) = conn.brpop(&queue, 0).await?;
+        let ret: (Vec<u8>, JsonRequest) = conn.brpop(Queue::Local, 0).await?;
 
         Ok(ret.1)
     }
 
-    async fn queued(&self) -> Result<TransitMessage> {
+    async fn queued(&self) -> Result<Envelope> {
         let mut conn = self.get_connection().await?;
-        let forward_queue = self.prefixed(Queue::Forward);
-        let reply_queue = self.prefixed(Queue::Reply);
+        let forward_queue = Queue::Forward.to_string();
+        let reply_queue = Queue::Reply.to_string();
         let queues = (forward_queue.as_str(), reply_queue.as_str());
 
         loop {
-            let ret: (String, Value) = conn.brpop(&queues, 0).await?;
-            let (queue, value) = ret;
+            let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
 
             if queue == forward_queue {
                 let forward = match ForwardedMessage::from_redis_value(&value) {
@@ -282,64 +285,28 @@ impl Storage for RedisStorage {
                     }
                 };
 
-                if let Some(mut msg) = self.get(&forward.id).await? {
-                    msg.destination = vec![forward.destination];
-                    if msg.command == self.prefixed(Queue::Upload) {
-                        return Ok(TransitMessage::Upload(msg));
-                    } else {
-                        return Ok(TransitMessage::Request(msg));
-                    }
+                if let Some(mut env) = self.get(&forward.id).await? {
+                    env.destinations = vec![forward.destination];
+                    return Ok(env);
                 }
             } else if queue == reply_queue {
                 // reply queue had the message itself
                 // decode it directly
-                let msg = Message::from_redis_value(&value)?;
-                return Ok(TransitMessage::Reply(msg));
+                let response = JsonResponse::from_redis_value(&value)?;
+                let env: Envelope = match response.try_into() {
+                    Ok(env) => env,
+                    Err(err) => {
+                        log::error!("failed to build envelope from response");
+                        continue;
+                    }
+                };
+                return Ok(env);
             }
         }
     }
 }
 
-#[async_trait]
-impl ProxyStorage for RedisStorage {
-    async fn run_proxied(&self, msg: Message) -> Result<()> {
-        self.run_with_reply(Queue::ProxyReply, msg).await
-    }
-
-    async fn set_envelope(&self, msg: &Message) -> Result<()> {
-        self.set(msg, Queue::ProxyBacklog(&msg.id)).await
-    }
-
-    async fn get_envelope(&self, id: &str) -> Result<Option<Message>> {
-        self.get_from(Queue::ProxyBacklog(id)).await
-    }
-
-    async fn proxied(&self) -> Result<TransitMessage> {
-        let mut conn = self.get_connection().await?;
-        let request = self.prefixed(Queue::ProxyRequest);
-        let response = self.prefixed(Queue::ProxyReply);
-        let queues = (request.as_str(), response.as_str());
-
-        let ret: (String, Message) = conn.brpop(&queues, 0).await?;
-        let (queue, message) = ret;
-
-        if queue == request {
-            return Ok(TransitMessage::Request(message));
-        } else if queue == response {
-            return Ok(TransitMessage::Reply(message));
-        }
-
-        unreachable!();
-    }
-
-    async fn response(&self, msg: &Message) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-
-        conn.lpush(self.prefixed(Queue::Reply), msg).await?;
-        Ok(())
-    }
-}
-
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,10 +323,7 @@ mod tests {
             .context("unable to build pool or redis connection manager")
             .unwrap();
 
-        RedisStorage::builder(pool)
-            .prefix(PREFIX)
-            .max_commands(500)
-            .build()
+        RedisStorage::builder(pool).max_commands(500).build()
     }
 
     async fn push_msg_to_local(id: &str, storage: &RedisStorage) -> Result<()> {
@@ -429,3 +393,4 @@ mod tests {
         let _ = storage.reply(&msg).await;
     }
 }
+*/

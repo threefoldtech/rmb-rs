@@ -7,8 +7,6 @@ message Request {
   bytes data = 2;
   // the reply queue used to receive the reply on
   string reply_to = 3;
-  // message TTL from the time of send
-  uint32 expiration = 4;
 }
 
 message Error {
@@ -40,15 +38,17 @@ message Envelope {
   optional string tags = 3;
   // timestamp of sending the envlope
   uint64 timestamp = 4;
+  // message TTL from the time of send
+  uint64 expiration = 5;
   // sender id
-  uint32 source = 5;
+  uint32 source = 6;
   // destination of the envlope
-  repeated uint32 destinations = 6;
+  repeated uint32 destinations = 7;
   // message inside the envlope
   oneof message {
-    Request request = 7;
-    Response response = 8;
+    Request request = 8;
+    Response response = 9;
   }
   // signature
-  optional bytes signature = 9;
+  optional bytes signature = 10;
 }

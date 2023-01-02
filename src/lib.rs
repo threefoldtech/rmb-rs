@@ -7,7 +7,6 @@ pub mod http_api;
 //pub mod http_workers;
 pub mod identity;
 pub mod peer;
-pub mod proxy;
 pub mod redis;
 pub mod storage;
 pub mod twin;

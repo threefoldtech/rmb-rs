@@ -2,7 +2,7 @@ mod redis;
 
 pub use redis::*;
 
-use crate::types::{Message, TransitMessage};
+use crate::types::{Envelope, JsonRequest};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -12,7 +12,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
     // there is no message with that ID or the actual message.
-    async fn get(&self, id: &str) -> Result<Option<Message>>;
+    async fn get(&self, id: &str) -> Result<Option<Envelope>>;
 
     // pushes the message to local process (msgbus.$cmd) queue.
     // this means the message will be now available to the application
@@ -27,44 +27,24 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // SUGGESTED FIX: instead of setting TTL on the $cmd queue we can limit the length
     // of the queue. So for example, we allow maximum of 500 message to be on this queue
     // after that we need to trim the queue to specific length after push (so drop older messages)
-    async fn run(&self, msg: Message) -> Result<()>;
+    async fn run(&self, msg: Envelope) -> Result<()>;
 
     // forward stores the message in backlog.$id, and for each twin id in the message
     // destination, a new tuple of (id, dst) is pushed to the forward queue.
     // it also need to set TTL on the `backlog.$id` queue. This will make sure
     // message will be auto-dropped when it times out.
-    async fn forward(&self, msg: &Message) -> Result<()>;
+    async fn forward(&self, msg: &Envelope) -> Result<()>;
 
     /// pushes message to `msg.$ret` queue.
-    async fn reply(&self, msg: &Message) -> Result<()>;
+    //async fn reply(&self, msg: &JsonResponse) -> Result<()>;
 
     // gets a message from local queue waits
     // until a message is available
-    async fn local(&self) -> Result<Message>;
+    async fn local(&self) -> Result<JsonRequest>;
 
     // process will wait on both msgbus.system.forward AND msgbus.system.reply
     // and return the first message available with the correct Queue type
-    async fn queued(&self) -> Result<TransitMessage>;
-}
-
-/// extends the storage trait with functionality
-/// for proxy submodule.
-#[async_trait]
-pub trait ProxyStorage: Storage {
-    /// run proxied runs the command but with an overriden reply queue
-    /// that is specific for the proxy module.
-    async fn run_proxied(&self, msg: Message) -> Result<()>;
-
-    /// get proxied envelope message
-    async fn get_envelope(&self, id: &str) -> Result<Option<Message>>;
-
-    // add proxied envelope in backlog
-    async fn set_envelope(&self, envelope: &Message) -> Result<()>;
-
-    /// proxy returns the next available message from
-    /// the proxy channels (request or reply)
-    async fn proxied(&self) -> Result<TransitMessage>;
-
-    /// send msg back to the reply queue of the storage.
-    async fn response(&self, msg: &Message) -> Result<()>;
+    // both messages from these queue need to be send to rely. hence once method
+    // is enough. Note that those envelopes has no source or signature set yet
+    async fn queued(&self) -> Result<Envelope>;
 }
