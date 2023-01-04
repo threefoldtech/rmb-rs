@@ -43,7 +43,7 @@ struct Args {
 
     /// substrate address please make sure the url also include the port number
     #[clap(long, default_value_t = String::from("wss://rely.grid.tf:443"))]
-    rely: String,
+    relay: String,
 
     /// enable debugging logs
     #[clap(short, long)]
@@ -126,7 +126,7 @@ async fn app(args: &Args) -> Result<()> {
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
 
-    let u = url::Url::parse("ws://localhost:8080/ws").unwrap();
+    let mut u = url::Url::parse(&args.relay)?;
     let peer = rmb::peer::Peer::new(u, id, storage, identity).await;
     peer.start().await?;
 

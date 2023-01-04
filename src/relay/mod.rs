@@ -5,10 +5,11 @@ use hyper_tungstenite::tungstenite::Message;
 use protobuf::Message as ProtoMessage;
 use tokio::net::ToSocketAddrs;
 
+use crate::token;
+use crate::types::Envelope;
 use anyhow::{Context, Result};
 use futures::{sink::SinkExt, stream::StreamExt};
 use hyper::server::conn::Http;
-use hyper::service::service_fn;
 use hyper::Body;
 use hyper::{Request, Response};
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
@@ -18,13 +19,8 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 mod switch;
-
-use switch::Switch;
 pub use switch::SwitchOptions;
-
-use crate::types::Envelope;
-
-use self::switch::Hook;
+use switch::{Hook, Switch};
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
 struct RelayHook {
@@ -97,14 +93,41 @@ impl Relay {
 async fn entry(
     switch: Arc<Switch<RelayHook>>,
     mut request: Request<Body>,
-) -> Result<Response<Body>> {
+) -> Result<Response<Body>, http::Error> {
     // Check if the request is a websocket upgrade request.
     if hyper_tungstenite::is_upgrade_request(&request) {
-        let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
+        let jwt = match request.uri().query() {
+            Some(token) => token,
+            None => {
+                log::debug!("missing jwt");
+                return Response::builder()
+                    .status(http::StatusCode::BAD_REQUEST)
+                    .body(Body::from("missing jwt token"));
+            }
+        };
+
+        let claims: token::Claims = match jwt.parse() {
+            Ok(claims) => claims,
+            Err(err) => {
+                log::debug!("failed to parse claims: {}", err);
+                return Response::builder()
+                    .status(http::StatusCode::BAD_REQUEST)
+                    .body(Body::from(err.to_string()));
+            }
+        };
+
+        let (response, websocket) = match hyper_tungstenite::upgrade(&mut request, None) {
+            Ok(v) => v,
+            Err(err) => {
+                return Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(err.to_string()))
+            }
+        };
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(switch, websocket).await {
+            if let Err(e) = serve_websocket(claims.id, switch, websocket).await {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -112,20 +135,25 @@ async fn entry(
         // Return the response so the spawned future can continue.
         Ok(response)
     } else {
-        // Handle regular HTTP requests here.
-        Ok(Response::new(Body::from("Hello HTTP!")))
+        // TODO add other end point
+        Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body(Body::empty())
     }
 }
 
 /// Handle a websocket connection.
-async fn serve_websocket(switch: Arc<Switch<RelayHook>>, websocket: HyperWebsocket) -> Result<()> {
+async fn serve_websocket(
+    id: u32,
+    switch: Arc<Switch<RelayHook>>,
+    websocket: HyperWebsocket,
+) -> Result<()> {
     let websocket = websocket.await?;
-    let id = 0;
-    let (mut writer, mut reader) = websocket.split();
+    let (writer, mut reader) = websocket.split();
 
     // handler is kept alive to keep the registration alive
     // once dropped (connection closed) registration stops
-    let handler = switch
+    let _handler = switch
         .register(id, RelayHook::new(id, Arc::clone(&switch), writer))
         .await?;
 
@@ -181,7 +209,7 @@ struct HttpService {
 
 impl Service<Request<Body>> for HttpService {
     type Response = Response<Body>;
-    type Error = anyhow::Error;
+    type Error = http::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>>;
 
     fn poll_ready(

@@ -9,5 +9,6 @@ pub mod identity;
 pub mod peer;
 pub mod redis;
 pub mod relay;
+pub mod token;
 pub mod twin;
 pub mod types;
