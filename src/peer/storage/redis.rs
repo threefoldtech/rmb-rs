@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    str::{from_utf8, FromStr},
-};
+use std::fmt::Display;
 
 use crate::types::{Backlog, Envelope, EnvelopeExt, JsonRequest, JsonResponse};
 
@@ -10,10 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
-    redis::{
-        AsyncCommands, ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs,
-        Value,
-    },
+    redis::{AsyncCommands, FromRedisValue, ToRedisArgs, Value},
     RedisConnectionManager,
 };
 
@@ -47,21 +41,28 @@ impl<'a> ToRedisArgs for RunKey<'a> {
 
 impl<'a> Display for RunKey<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "msgbus.backlog.{}", self.0)
+        write!(f, "msgbus.{}", self.0)
     }
 }
 
 enum Queue {
     Request,
-    Forward,
     Response,
+}
+
+impl AsRef<str> for Queue {
+    fn as_ref(&self) -> &str {
+        match self {
+            Queue::Request => "msgbus.system.local",
+            Queue::Response => "msgbus.system.reply",
+        }
+    }
 }
 
 impl std::fmt::Display for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Queue::Request => write!(f, "msgbus.system.local"),
-            Queue::Forward => write!(f, "msgbus.system.forward"),
             Queue::Response => write!(f, "msgbus.system.reply"),
         }
     }
@@ -162,14 +163,12 @@ impl Storage for RedisStorage {
         self.get_from(BacklogKey(uid)).await
     }
 
-    async fn run(&self, env: Envelope) -> Result<()> {
-        let mut request: JsonRequest = env.try_into().context("failed to extract context")?;
+    async fn run(&self, mut request: JsonRequest) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
-
-        let key = RunKey(&request.command);
         request.reply = Queue::Response.to_string();
 
+        let key = RunKey(&request.command);
         conn.lpush(&key, &request).await?;
         conn.ltrim(&key, 0, self.max_commands - 1).await?;
 
@@ -190,9 +189,9 @@ impl Storage for RedisStorage {
 
     async fn messages(&self) -> Result<Envelope> {
         let mut conn = self.get_connection().await?;
-        let req_queue = Queue::Request.to_string();
-        let resp_queue = Queue::Response.to_string();
-        let queues = (req_queue.as_str(), resp_queue.as_str());
+        let req_queue = Queue::Request.as_ref();
+        let resp_queue = Queue::Response.as_ref();
+        let queues = (req_queue, resp_queue);
 
         let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
 

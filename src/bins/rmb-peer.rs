@@ -6,7 +6,7 @@ use clap::Parser;
 use rmb::cache::RedisCache;
 use rmb::identity::Identity;
 use rmb::identity::KeyType;
-use rmb::storage::RedisStorage;
+use rmb::peer::storage::RedisStorage;
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
 
@@ -63,6 +63,7 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("ws", log::LevelFilter::Off)
         .with_module_level("substrate_api_client", log::LevelFilter::Off)
         .with_module_level("mpart_async", log::LevelFilter::Off)
+        .with_module_level("jsonrpsee_core", log::LevelFilter::Off)
         .init()?;
 
     let secret = match args.mnemonics {
@@ -125,10 +126,9 @@ async fn app(args: &Args) -> Result<()> {
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
 
-    let u = url::Url::parse("ws://localhost:8080/logs/peer").unwrap();
+    let u = url::Url::parse("ws://localhost:8080/ws").unwrap();
     let peer = rmb::peer::Peer::new(u, id, storage, identity).await;
     peer.start().await?;
-    // spawn the processor
 
     Ok(())
 }

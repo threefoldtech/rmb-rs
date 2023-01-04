@@ -7,9 +7,10 @@ version = "0.1.0"
 name = "rmb-peer"
 path = "src/bins/rmb-peer.rs"
 
-# [[bin]]
-# name = "rmb"
-# path = "src/main.rs"
+[[bin]]
+name = "rmb-relay"
+path = "src/bins/rmb-relay.rs"
+
 
 [dependencies]
 anyhow = "1.0.56"
@@ -20,7 +21,6 @@ clap = {version = "3.1", features = ["derive"]}
 futures = "0.3"
 hex = {version = "0.4", features = ["alloc"]}
 http = "0.2.7"
-hyper = {version = "0.14", features = ["full"]}
 log = "0.4"
 md5 = "0.7.0"
 nix = "0.24.1"
@@ -42,10 +42,16 @@ mpart-async = "0.6.0"
 url = "2.3.1"
 tokio-tungstenite = "0.18.0"
 futures-util = "0.3.25"
+
 # for static build
 openssl = {version = "0.10", features = ["vendored"]}
 workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
 protobuf = { version = "3.2.0", features = ["with-bytes"]}
+
+hyper = {version = "0.14", features = ["full"]}
+hyper-tungstenite = "0.9.0"
+lazy_static = "1.4.0"
+prometheus = {version = "0.13.3", features=["process"]}
 
 [build-dependencies]
 git-version = "0.3.5"

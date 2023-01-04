@@ -8,6 +8,6 @@ pub mod cache;
 pub mod identity;
 pub mod peer;
 pub mod redis;
-pub mod storage;
+pub mod relay;
 pub mod twin;
 pub mod types;
