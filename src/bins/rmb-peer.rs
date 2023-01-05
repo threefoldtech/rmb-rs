@@ -7,6 +7,7 @@ use rmb::cache::RedisCache;
 use rmb::identity::Identity;
 use rmb::identity::KeyType;
 use rmb::peer::storage::RedisStorage;
+use rmb::peer::Peer;
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
 
@@ -126,8 +127,8 @@ async fn app(args: &Args) -> Result<()> {
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
 
-    let mut u = url::Url::parse(&args.relay)?;
-    let peer = rmb::peer::Peer::new(u, id, storage, identity).await;
+    let u = url::Url::parse(&args.relay)?;
+    let peer = Peer::new(u, id, identity, storage, db).await;
     peer.start().await?;
 
     Ok(())

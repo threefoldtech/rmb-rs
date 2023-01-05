@@ -1,5 +1,6 @@
 use crate::identity::Signer;
-use crate::types::{Envelope, EnvelopeExt, JsonRequest, JsonResponse};
+use crate::twin::{Twin, TwinDB};
+use crate::types::{Envelope, EnvelopeExt};
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
 use std::time::Duration;
@@ -9,36 +10,43 @@ use url::Url;
 
 mod con;
 pub mod storage;
-use con::Connection;
+use con::{Connection, Writer};
+use storage::{JsonRequest, JsonResponse};
 
-pub struct Peer<S: Storage, G: Signer> {
+pub struct Peer<S, G, D>
+where
+    S: Storage,
+    G: Signer + Clone,
+    D: TwinDB + Clone,
+{
     id: u32,
     storage: S,
     signer: G,
-    con: Connection,
+    // this is wrapped in an option
+    // to support take()
+    con: Option<Connection>,
+    db: D,
 }
 
-impl<S, G> Peer<S, G>
+impl<S, G, D> Peer<S, G, D>
 where
     S: Storage,
     G: Signer + Clone + Send + Sync + 'static,
+    D: TwinDB + Clone,
 {
-    pub async fn new(rely: Url, id: u32, storage: S, signer: G) -> Self {
+    pub async fn new(rely: Url, id: u32, signer: G, storage: S, db: D) -> Self {
         let con = Connection::connect(rely, id, signer.clone());
         Self {
             id,
             storage,
             signer,
-            con,
+            con: Some(con),
+            db,
         }
     }
 
-    async fn process_msg(storage: &S, con: &mut Connection, msg: Message) -> Result<()> {
+    async fn process_msg(db: &D, storage: &S, con: &mut Connection, msg: Message) -> Result<()> {
         let bytes = match msg {
-            Message::Ping(m) => {
-                con.write(Message::Pong(m)).await?;
-                return Ok(());
-            }
             Message::Pong(_) => return Ok(()),
             Message::Binary(bytes) => bytes,
             _ => {
@@ -49,8 +57,6 @@ where
         let envelope = Envelope::parse_from_bytes(&bytes).context("received invalid envelope")?;
 
         envelope.valid().context("error validating envelope")?;
-        // todo: envelope signature validation goes here
-        // dispatch message back to either
 
         if envelope.has_request() {
             let request: JsonRequest = envelope
@@ -80,27 +86,81 @@ where
         let mut response: JsonResponse = envelope.try_into()?;
         // set the reference back to original value
         response.reference = backlog.reference;
-
         storage.reply(&backlog.reply_to, response).await
     }
 
-    async fn process(storage: S, mut reader: Connection) {
+    async fn process(db: D, storage: S, mut reader: Connection) {
         while let Some(input) = reader.read().await {
-            if let Err(err) = Self::process_msg(&storage, &mut reader, input).await {
+            if let Err(err) = Self::process_msg(&db, &storage, &mut reader, input).await {
                 log::error!("error while handling received message: {:#}", err);
                 continue;
             }
         }
     }
 
-    pub async fn start(self) -> Result<()> {
+    async fn request(&self, writer: &Writer, request: JsonRequest) -> Result<()> {
+        // generate an id?
+        let uid = uuid::Uuid::new_v4().to_string();
+        let (backlog, envelopes, ttl) = request.parts()?;
+        self.storage
+            .track(&uid, ttl, backlog)
+            .await
+            .context("failed to store message tracking information")?;
+
+        for mut envelope in envelopes {
+            envelope.uid = uid.clone();
+            envelope.source = self.id;
+            envelope.stamp();
+            envelope.ttl().context("message has expired")?;
+            envelope.sign(&self.signer);
+            let bytes = envelope
+                .write_to_bytes()
+                .context("failed to serialize envelope")?;
+            writer.write(Message::Binary(bytes)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn response(&self, writer: &Writer, response: JsonResponse) -> Result<()> {
+        // that's a reply message that is initiated locally and need to be
+        // sent to a remote peer
+        let mut envelope: Envelope = response
+            .try_into()
+            .context("failed to build envelope from response")?;
+        envelope.source = self.id;
+        envelope.stamp();
+        envelope.ttl().context("message has expired")?;
+        envelope.sign(&self.signer);
+        let bytes = envelope
+            .write_to_bytes()
+            .context("failed to serialize envelope")?;
+        writer.write(Message::Binary(bytes)).await?;
+
+        Ok(())
+    }
+
+    pub async fn start(mut self) -> Result<()> {
         use tokio::time::sleep;
         let wait = Duration::from_secs(1);
-        let writer = self.con.writer();
-        tokio::spawn(Self::process(self.storage.clone(), self.con));
+        let con = self.con.take().expect("unreachable");
+        let writer = con.writer();
+        let pinger = con.writer();
+        // start a processor for incoming message
+        tokio::spawn(Self::process(self.db.clone(), self.storage.clone(), con));
+
+        // start a routine to send pings to server every 20 seconds
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                    log::error!("ping error: {}", err);
+                }
+                sleep(Duration::from_secs(20)).await;
+            }
+        });
 
         loop {
-            let mut envelope = match self.storage.messages().await {
+            let msg = match self.storage.messages().await {
                 Ok(msg) => msg,
                 Err(err) => {
                     log::error!("failed to process local messages: {:#}", err);
@@ -109,35 +169,13 @@ where
                 }
             };
 
-            envelope.stamp();
-            if envelope.ttl().is_none() {
-                // todo: if this is a request we can immediately return a
-                // an error
-                log::warn!(
-                    "message with id({}, {}) has expired",
-                    envelope.uid,
-                    envelope.reference
-                );
-                continue;
-            }
-
-            if envelope.has_request() {
-                envelope.source = self.id;
-                self.storage.track(&envelope).await?;
-            }
-
-            envelope.sign(&self.signer);
-            // envelope.sign(self.id)
-            let bytes = match envelope.write_to_bytes() {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    log::error!("failed to serialize envelope: {}", err);
-                    continue;
-                }
+            let ret = match msg {
+                storage::JsonMessage::Request(request) => self.request(&writer, request).await,
+                storage::JsonMessage::Response(response) => self.response(&writer, response).await,
             };
 
-            if let Err(err) = writer.write(Message::Binary(bytes)).await {
-                log::error!("failed to queue message for sending: {}", err);
+            if let Err(err) = ret {
+                log::error!("failed to process message: {}", err);
             }
         }
     }

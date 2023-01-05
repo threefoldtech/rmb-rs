@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-use crate::types::{Backlog, Envelope, EnvelopeExt, JsonRequest, JsonResponse};
+use crate::types::{Backlog, Envelope, EnvelopeExt};
 
-use super::Storage;
+use super::{JsonMessage, JsonRequest, JsonResponse, Storage};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
@@ -141,20 +141,12 @@ impl RedisStorage {
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn track(&self, env: &Envelope) -> Result<()> {
+    async fn track(&self, uid: &str, ttl: u64, backlog: Backlog) -> Result<()> {
         let mut conn = self.get_connection().await?;
-
-        // add to backlog
-        let ttl = match env.ttl() {
-            Some(ttl) => ttl,
-            None => bail!("message has expired"),
-        };
-
-        let backlog: Backlog = env.try_into().context("failed to build message backlog")?;
-        let key = BacklogKey(&env.uid);
-        conn.set_ex(&key, backlog, ttl.as_secs() as usize)
+        let key = BacklogKey(uid);
+        conn.set_ex(&key, backlog, ttl as usize)
             .await
-            .with_context(|| format!("failed to set message ttl to '{}'", ttl.as_secs()))?;
+            .with_context(|| format!("failed to set message ttl to '{}'", ttl))?;
 
         Ok(())
     }
@@ -166,7 +158,7 @@ impl Storage for RedisStorage {
     async fn run(&self, mut request: JsonRequest) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
-        request.reply = Queue::Response.to_string();
+        request.reply_to = Queue::Response.to_string();
 
         let key = RunKey(&request.command);
         conn.lpush(&key, &request).await?;
@@ -187,7 +179,7 @@ impl Storage for RedisStorage {
         Ok(())
     }
 
-    async fn messages(&self) -> Result<Envelope> {
+    async fn messages(&self) -> Result<JsonMessage> {
         let mut conn = self.get_connection().await?;
         let req_queue = Queue::Request.as_ref();
         let resp_queue = Queue::Response.as_ref();
@@ -195,21 +187,19 @@ impl Storage for RedisStorage {
 
         let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
 
-        let env: Envelope = if queue == req_queue {
+        let msg: JsonMessage = if queue == req_queue {
             JsonRequest::from_redis_value(&value)
                 .context("failed to load json request")?
-                .try_into()
-                .context("failed to build request envelope")?
+                .into()
         } else {
             // reply queue had the message itself
             // decode it directly
             JsonResponse::from_redis_value(&value)
                 .context("failed to load json response")?
-                .try_into()
-                .context("failed to build response envelope")?
+                .into()
         };
 
-        Ok(env)
+        Ok(msg)
     }
 }
 

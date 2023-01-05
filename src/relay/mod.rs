@@ -175,11 +175,12 @@ async fn serve_websocket(
                 let envelope =
                     Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
-                for dest in envelope.destinations.iter() {
-                    log::debug!("forwarding message to peer {}", *dest);
-                    if let Err(err) = switch.send(*dest, &msg).await {
-                        log::error!("failed to route message to peer '{}': {}", *dest, err);
-                    }
+                if let Err(err) = switch.send(envelope.destination, &msg).await {
+                    log::error!(
+                        "failed to route message to peer '{}': {}",
+                        envelope.destination,
+                        err
+                    );
                 }
             }
             Message::Ping(_) => {

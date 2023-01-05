@@ -1,23 +1,15 @@
 //use std::io::Write;
 use crate::identity::{Identity, Signer};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bb8_redis::redis;
 use protobuf::Message;
 use serde::{Deserialize, Serialize};
-use std::any;
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
-pub use types::{Backlog, Envelope};
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UploadRequest {
-    pub path: PathBuf,
-    pub cmd: String,
-}
+pub use types::*;
 
 pub trait EnvelopeExt: Challengeable {
     /// sign the message with given signer
@@ -226,252 +218,13 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
         Some(d) => Some(Duration::from_secs(d)),
     }
 }
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonRequest {
-    #[serde(rename = "ver")]
-    pub version: usize,
-    #[serde(rename = "ref")]
-    pub reference: Option<String>,
-    #[serde(rename = "cmd")]
-    pub command: String,
-    #[serde(rename = "exp")]
-    pub expiration: u64,
-    #[serde(rename = "dat")]
-    pub data: String,
-    #[serde(rename = "tag")]
-    pub tags: Option<String>,
-    #[serde(rename = "dst")]
-    pub destinations: Vec<u32>,
-    #[serde(rename = "ret")]
-    pub reply: String,
-    #[serde(rename = "shm")]
-    pub schema: String,
-    #[serde(rename = "now")]
-    pub timestamp: u64,
-}
 
-impl redis::ToRedisArgs for JsonRequest {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + redis::RedisWrite,
-    {
-        let bytes = serde_json::to_vec(self).expect("failed to json encode message");
-        out.write_arg(&bytes);
-    }
-}
-
-impl redis::FromRedisValue for JsonRequest {
-    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
-            serde_json::from_slice(data).map_err(|e| {
-                redis::RedisError::from((
-                    redis::ErrorKind::TypeError,
-                    "cannot decode a message from json {}",
-                    e.to_string(),
-                ))
-            })
-        } else {
-            Err(redis::RedisError::from((
-                redis::ErrorKind::TypeError,
-                "expected a data type from redis",
-            )))
-        }
-    }
-}
-
-impl TryFrom<Envelope> for JsonRequest {
-    type Error = anyhow::Error;
-    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
-        let req = value.take_request();
-
-        Ok(JsonRequest {
-            version: 1,
-            reference: Some(value.uid),
-            command: req.command,
-            expiration: value.expiration,
-            data: base64::encode(&req.data),
-            tags: value.tags,
-            destinations: value.destinations,
-            reply: req.reply_to,
-            schema: String::default(),
-            timestamp: value.timestamp,
-        })
-    }
-}
-
-impl TryFrom<JsonRequest> for Envelope {
-    type Error = anyhow::Error;
-    fn try_from(value: JsonRequest) -> Result<Self> {
-        let mut request = types::Request::new();
-
-        request.command = value.command;
-        request.data = base64::decode(value.data)?;
-        request.reply_to = value.reply;
-
-        let mut env = Envelope::new();
-
-        env.uid = uuid::Uuid::new_v4().to_string();
-        env.reference = value.reference.unwrap_or_default();
-        env.tags = value.tags;
-        env.timestamp = value.timestamp;
-        env.expiration = value.expiration;
-        env.destinations = value.destinations;
-        env.signature = None;
-        env.set_request(request);
-
-        Ok(env)
-    }
-}
-
-impl TryFrom<&Envelope> for Backlog {
-    type Error = anyhow::Error;
-    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
-        // only valid for requests
-        if !value.has_request() {
-            anyhow::bail!("not a request envelope");
-        }
-        let req = value.request();
-        if req.reply_to == "" {
-            anyhow::bail!("no reply-to queue set");
-        }
-        let mut backlog = Backlog::new();
-        backlog.uid = value.uid.clone();
-        backlog.reference = value.reference.clone();
-        backlog.reply_to = req.reply_to.clone();
-
-        Ok(backlog)
-    }
-}
 impl Challengeable for types::Request {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.command)?;
         hash.write(&self.data)?;
-        write!(hash, "{}", self.reply_to)?;
 
         Ok(())
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonError {
-    pub code: u32,
-    pub message: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonResponse {
-    #[serde(rename = "ver")]
-    pub version: usize,
-    #[serde(rename = "ref")]
-    pub reference: String,
-    #[serde(rename = "dat")]
-    pub data: String,
-    #[serde(rename = "dst")]
-    pub destination: u32,
-    // #[serde(rename = "shm")]
-    // pub schema: String,
-    #[serde(rename = "now")]
-    pub timestamp: u64,
-    #[serde(rename = "err")]
-    pub error: Option<JsonError>,
-}
-
-impl redis::ToRedisArgs for JsonResponse {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + redis::RedisWrite,
-    {
-        let bytes = serde_json::to_vec(self).expect("failed to json encode message");
-        out.write_arg(&bytes);
-    }
-}
-
-impl redis::FromRedisValue for JsonResponse {
-    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
-            serde_json::from_slice(data).map_err(|e| {
-                redis::RedisError::from((
-                    redis::ErrorKind::TypeError,
-                    "cannot decode a message from json {}",
-                    e.to_string(),
-                ))
-            })
-        } else {
-            Err(redis::RedisError::from((
-                redis::ErrorKind::TypeError,
-                "expected a data type from redis",
-            )))
-        }
-    }
-}
-
-impl TryFrom<Envelope> for JsonResponse {
-    type Error = anyhow::Error;
-    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
-        use types::envelope::Message;
-        use types::response::Body;
-
-        let response = match env.message {
-            None => anyhow::bail!("invalid envelope has no message"),
-            Some(Message::Request(_)) => anyhow::bail!("invalid envelope has request message"),
-            Some(Message::Response(response)) => response,
-        };
-
-        let body = response.body.context("reply has no body")?;
-
-        let response = JsonResponse {
-            version: 1,
-            reference: String::default(),
-            data: if let Body::Reply(ref reply) = body {
-                base64::encode(&reply.data)
-            } else {
-                "".into()
-            },
-            destination: 0, // this should always be self
-            timestamp: env.timestamp,
-            error: if let Body::Error(err) = body {
-                Some(JsonError {
-                    code: err.code,
-                    message: err.message,
-                })
-            } else {
-                None
-            },
-        };
-
-        Ok(response)
-    }
-}
-
-impl TryFrom<JsonResponse> for Envelope {
-    type Error = anyhow::Error;
-
-    fn try_from(value: JsonResponse) -> Result<Self, Self::Error> {
-        let mut response = types::Response::new();
-
-        match value.error {
-            None => {
-                let mut body = types::Reply::new();
-                body.data = base64::decode(value.data)?;
-                response.set_reply(body);
-            }
-            Some(err) => {
-                let mut body = types::Error::new();
-                body.code = err.code;
-                body.message = err.message;
-                response.set_error(body);
-            }
-        };
-
-        let mut env = Envelope::new();
-
-        env.uid = value.reference;
-        env.timestamp = value.timestamp;
-        env.destinations = vec![value.destination];
-        env.signature = None;
-        env.set_response(response);
-
-        Ok(env)
     }
 }
 
@@ -493,27 +246,25 @@ impl Challengeable for types::Response {
 impl Challengeable for Envelope {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.uid)?;
-        write!(hash, "{}", self.reference)?;
         if let Some(ref tags) = self.tags {
             write!(hash, "{}", tags)?;
         }
 
         write!(hash, "{}", self.timestamp)?;
         write!(hash, "{}", self.source)?;
-        for dst in self.destinations.iter() {
-            write!(hash, "{}", dst)?;
-        }
+        write!(hash, "{}", self.destination)?;
 
         if let Some(ref message) = self.message {
             match message {
-                types::envelope::Message::Request(req) => req.challenge(hash),
-                types::envelope::Message::Response(resp) => resp.challenge(hash),
+                types::envelope::Message::Request(req) => req.challenge(hash)?,
+                types::envelope::Message::Response(resp) => resp.challenge(hash)?,
             };
         }
 
         Ok(())
     }
 }
+
 #[cfg(test)]
 mod test {
     #[test]
