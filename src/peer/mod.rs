@@ -2,6 +2,7 @@ use crate::identity::Signer;
 use crate::twin::{Twin, TwinDB};
 use crate::types::{Envelope, EnvelopeExt};
 use anyhow::{Context, Result};
+use nix::env;
 use protobuf::Message as ProtoMessage;
 use std::time::Duration;
 use storage::Storage;
@@ -57,6 +58,15 @@ where
         let envelope = Envelope::parse_from_bytes(&bytes).context("received invalid envelope")?;
 
         envelope.valid().context("error validating envelope")?;
+        let twin = db
+            .get_twin(envelope.source)
+            .await
+            .context("failed to get twin")?
+            .with_context(|| format!("unknown twin: {}", envelope.source))?;
+
+        envelope
+            .verify(&twin.account)
+            .context("invalid signature")?;
 
         if envelope.has_request() {
             let request: JsonRequest = envelope

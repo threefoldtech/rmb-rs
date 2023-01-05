@@ -161,7 +161,7 @@ async fn serve_websocket(
         let message = match message {
             Ok(message) => message,
             Err(err) => {
-                log::error!("error receiving a message: {}", err);
+                log::debug!("error receiving a message: {}", err);
                 return Ok(());
             }
         };

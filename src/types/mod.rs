@@ -45,7 +45,7 @@ pub fn sign<C: Challengeable, S: Signer>(c: &C, signer: &S) -> Vec<u8> {
     let mut hash = md5::Context::new();
     c.challenge(&mut hash).unwrap();
     let hash = hash.compute();
-    Vec::from(&hash[..])
+    Vec::from(signer.sign(&hash[..]))
 }
 
 // a generic verify for any challengeable
@@ -267,6 +267,11 @@ impl Challengeable for Envelope {
 
 #[cfg(test)]
 mod test {
+
+    use crate::identity::{Identity, Sr25519Signer};
+
+    use super::{Envelope, EnvelopeExt};
+
     #[test]
     fn stamp() {
         use super::stamp;
@@ -308,5 +313,18 @@ mod test {
 
         let t = ttl(30, 0, 20);
         assert_eq!(t, None);
+    }
+
+    #[test]
+    fn sign_verify() {
+        let signer = Sr25519Signer::try_from("//Alice").unwrap();
+
+        let account = signer.account();
+
+        let mut env = Envelope::new();
+
+        env.sign(&signer);
+
+        env.verify(&account).unwrap();
     }
 }
