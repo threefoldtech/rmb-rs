@@ -1,21 +1,23 @@
-use futures::stream::SplitSink;
-use futures::Future;
-use hyper::upgrade::Upgraded;
-use hyper_tungstenite::tungstenite::Message;
-use protobuf::Message as ProtoMessage;
-use tokio::net::ToSocketAddrs;
-
 use crate::token;
 use crate::types::Envelope;
 use anyhow::{Context, Result};
+use futures::stream::SplitSink;
+use futures::Future;
 use futures::{sink::SinkExt, stream::StreamExt};
+use http::Method;
 use hyper::server::conn::Http;
+use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::{Request, Response};
+use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
+use prometheus::Encoder;
+use prometheus::TextEncoder;
+use protobuf::Message as ProtoMessage;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::net::ToSocketAddrs;
 use tokio::sync::Mutex;
 
 mod switch;
@@ -133,12 +135,32 @@ async fn entry(
         });
 
         // Return the response so the spawned future can continue.
-        Ok(response)
-    } else {
-        // TODO add other end point
-        Response::builder()
+        return Ok(response);
+    }
+
+    // normal http handler
+    match (request.method(), request.uri().path()) {
+        (&Method::GET, "/metrics") => {
+            // TODO add other end point
+            let mut buffer = Vec::new();
+            let encoder = TextEncoder::new();
+
+            // Gather the metrics.
+            let metric_families = prometheus::gather();
+            // Encode them to send.
+            if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
+                return Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(err.to_string()));
+            }
+
+            Response::builder()
+                .status(http::StatusCode::OK)
+                .body(Body::from(buffer))
+        }
+        _ => Response::builder()
             .status(http::StatusCode::NOT_FOUND)
-            .body(Body::empty())
+            .body(Body::empty()),
     }
 }
 
