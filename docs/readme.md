@@ -4,15 +4,35 @@ RMB is (reliable message bus) is a set of tools (client and daemon) that aims to
 The point behind using RMB is to allow the clients to not know much about the other process, or where it lives (client doesn't know network addresses, or identity). Unlike HTTP(S) where the caller must know exact address (or dns-name) and endpoints of the calls. Instead RMB requires you to only know about
 - Twin ID (numeric ID) of where the service can be found
 - Command (string) is simply the function to call
+- The request "body" which is binary blob that is passed to the command as is
+  - implementation of the command need then to interpret this data as intended (out of scope of rmb)
 
-A single node can run multiple services behind a single RMB instance (on one node). Which means multiple commands can be handled by multiple processes running on the same node. But reachable only over a single RMB (with single node id) instance.
+Twins are stored on tfchain. hence identity of twins is granted not to be spoofed, or phished. When a twin is created he needs to define 2 things:
+- RMB Relay
+- His Elliptic Curve public key (we use secp256k1 (K-256) elliptic curve)
 
-> It's illegal to run multiple RMBs on a single node, unless each using it's own separate redis instance otherwise they will conflict on redis queue.
+Once all twins has their data set correctly on the chain. Any 2 twins can communicate with full end-to-end encryption as follows:
+- A twin establish a WS connection to his relay
+- A twin create an `envelope` as defined by the protobuf schema
+- Twin fill end all envelope information (more about this later)
+- Twin pushes the envelope to the relay
+  - If the destination twin is also using the same relay, message is directly forwarded to this twin
+  - If federation is needed (twin using different relay), message is forwarded to the proper twin.
+
+Any new messages that is designated to this twin, is pushed over the websocket to this twin. The twin can NOT maintain multiple connections to the relay hence a small tool (rmb-peer) is provided that runs as a dispatcher for a single twin identity.
+
+This rmb-peer tool makes it possible to run multiple services behind this twin and push replies back to their initiators
 
 ## Overview of the operation of RMB
 ![rmb](png/RMB.png)
 
+### Twins
+TODO
+
+### Relay
+The heart of the RMB project is the `relay` service. the Relay accepts `websockets` connection from clie
 The process can be summarized as follows:
+
 ### Client
 - A local process wants to call a function on remote/local process. It only know which twin-id, and the function (command) to run. The client also need to know what data the remote function expect.
 - The local process creates a message. In it's minimal form, a message is

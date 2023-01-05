@@ -1,4 +1,5 @@
 use crate::token;
+use crate::twin::TwinDB;
 use crate::types::Envelope;
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
@@ -6,9 +7,11 @@ use futures::Future;
 use futures::{sink::SinkExt, stream::StreamExt};
 use http::Method;
 use hyper::server::conn::Http;
+use hyper::service::Service;
 use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::{Request, Response};
+use hyper_tungstenite::tungstenite::error::ProtocolError;
 use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use prometheus::Encoder;
@@ -59,19 +62,29 @@ impl Hook for RelayHook {
     }
 }
 
-pub struct Relay {
+pub struct Relay<D: TwinDB> {
     switch: Switch<RelayHook>,
+    twins: D,
 }
 
-impl Relay {
-    pub async fn new(opt: SwitchOptions) -> Result<Self> {
+impl<D> Relay<D>
+where
+    D: TwinDB + Clone,
+{
+    pub async fn new(twins: D, opt: SwitchOptions) -> Result<Self> {
         let switch = opt.build().await?;
-        Ok(Self { switch })
+        Ok(Self { switch, twins })
     }
+
     pub async fn start<A: ToSocketAddrs>(self, address: A) -> Result<()> {
         let tcp_listener = TcpListener::bind(address).await?;
-        let http = HttpService {
+        let data = AppData {
             switch: Arc::new(self.switch),
+            twins: self.twins,
+        };
+
+        let http = HttpService {
+            data: Arc::new(data),
         };
 
         loop {
@@ -92,44 +105,105 @@ impl Relay {
     }
 }
 
-async fn entry(
+struct AppData<D: TwinDB> {
     switch: Arc<Switch<RelayHook>>,
+    twins: D,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum HttpError {
+    #[error("missing jwt")]
+    MissingJWT,
+    #[error("invalid jwt: {0}")]
+    InvalidJWT(#[from] token::Error),
+    #[error("failed to get twin: {0}")]
+    FailedToGetTwin(String),
+    #[error("twin not found {0}")]
+    TwinNotFound(u32),
+    #[error("{0}")]
+    WebsocketError(#[from] ProtocolError),
+    #[error("page not found")]
+    NotFound,
+    // generic catch all
+    #[error("{0}s")]
+    Http(#[from] http::Error),
+}
+
+impl HttpError {
+    pub fn status(&self) -> http::StatusCode {
+        use http::StatusCode as Codes;
+        match self {
+            Self::MissingJWT => Codes::BAD_REQUEST,
+            Self::InvalidJWT(_) => Codes::UNAUTHORIZED,
+            Self::FailedToGetTwin(_) => Codes::INTERNAL_SERVER_ERROR,
+            Self::TwinNotFound(_) => Codes::UNAUTHORIZED,
+            Self::WebsocketError(_) => Codes::INTERNAL_SERVER_ERROR,
+            Self::NotFound => Codes::NOT_FOUND,
+            Self::Http(_) => Codes::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+#[derive(Clone)]
+struct HttpService<D: TwinDB> {
+    data: Arc<AppData<D>>,
+}
+
+impl<D> Service<Request<Body>> for HttpService<D>
+where
+    D: TwinDB,
+{
+    type Response = Response<Body>;
+    type Error = HttpError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let data = Arc::clone(&self.data);
+
+        let fut = async {
+            match entry(data, req).await {
+                Ok(result) => Ok(result),
+                Err(err) => Response::builder()
+                    .status(err.status())
+                    .body(Body::from(err.to_string()))
+                    .map_err(HttpError::Http),
+            }
+        };
+
+        Box::pin(fut)
+    }
+}
+
+async fn entry<D: TwinDB>(
+    data: Arc<AppData<D>>,
     mut request: Request<Body>,
-) -> Result<Response<Body>, http::Error> {
+) -> Result<Response<Body>, HttpError> {
     // Check if the request is a websocket upgrade request.
     if hyper_tungstenite::is_upgrade_request(&request) {
-        let jwt = match request.uri().query() {
-            Some(token) => token,
-            None => {
-                log::debug!("missing jwt");
-                return Response::builder()
-                    .status(http::StatusCode::BAD_REQUEST)
-                    .body(Body::from("missing jwt token"));
-            }
-        };
+        let jwt = request.uri().query().ok_or(HttpError::MissingJWT)?;
 
-        let claims: token::Claims = match jwt.parse() {
-            Ok(claims) => claims,
-            Err(err) => {
-                log::debug!("failed to parse claims: {}", err);
-                return Response::builder()
-                    .status(http::StatusCode::BAD_REQUEST)
-                    .body(Body::from(err.to_string()));
-            }
-        };
+        let claims: token::Claims = jwt.parse()?;
 
-        let (response, websocket) = match hyper_tungstenite::upgrade(&mut request, None) {
-            Ok(v) => v,
-            Err(err) => {
-                return Response::builder()
-                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(err.to_string()))
-            }
-        };
+        let twin = data
+            .twins
+            .get_twin(claims.id)
+            .await
+            .map_err(|err| HttpError::FailedToGetTwin(err.to_string()))?
+            .ok_or(HttpError::TwinNotFound(claims.id))?;
+
+        token::verify(&twin.account, jwt)?;
+
+        let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims.id, switch, websocket).await {
+            if let Err(e) = serve_websocket(claims.id, Arc::clone(&data.switch), websocket).await {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -151,16 +225,16 @@ async fn entry(
             if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
                 return Response::builder()
                     .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(err.to_string()));
+                    .body(Body::from(err.to_string()))
+                    .map_err(HttpError::Http);
             }
 
             Response::builder()
                 .status(http::StatusCode::OK)
                 .body(Body::from(buffer))
+                .map_err(HttpError::Http)
         }
-        _ => Response::builder()
-            .status(http::StatusCode::NOT_FOUND)
-            .body(Body::empty()),
+        _ => Err(HttpError::NotFound),
     }
 }
 
@@ -221,30 +295,4 @@ async fn serve_websocket(
     }
 
     Ok(())
-}
-
-use hyper::service::Service;
-
-#[derive(Clone)]
-struct HttpService {
-    switch: Arc<Switch<RelayHook>>,
-}
-
-impl Service<Request<Body>> for HttpService {
-    type Response = Response<Body>;
-    type Error = http::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>>;
-
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let fut = entry(Arc::clone(&self.switch), req);
-
-        Box::pin(fut)
-    }
 }

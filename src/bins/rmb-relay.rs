@@ -56,7 +56,7 @@ async fn app(args: &Args) -> Result<()> {
         .await
         .context("failed to initialize redis pool")?;
 
-    let db = SubstrateTwinDB::<RedisCache>::new(
+    let twins = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
     )
@@ -64,7 +64,7 @@ async fn app(args: &Args) -> Result<()> {
     .context("cannot create substrate twin db object")?;
 
     let opt = relay::SwitchOptions::new(pool);
-    let r = relay::Relay::new(opt).await.unwrap();
+    let r = relay::Relay::new(twins, opt).await.unwrap();
 
     r.start("0.0.0.0:8080").await.unwrap();
     Ok(())
