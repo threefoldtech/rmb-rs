@@ -77,20 +77,6 @@ async fn app(args: &Args) -> Result<()> {
         },
     };
 
-    // // uploads config
-    // let _upload_config = match args.uploads {
-    //     None => UploadConfig::Disabled,
-    //     Some(ref dir) => {
-    //         if !dir.is_dir() {
-    //             bail!(
-    //                 "provided upload directory of '{:?}' does not exist or is not a directory",
-    //                 dir
-    //             );
-    //         }
-    //         UploadConfig::Enabled(dir.clone())
-    //     }
-    // };
-
     let identity = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret.as_str())

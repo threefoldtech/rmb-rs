@@ -18,11 +18,6 @@ impl Connection {
         self.rx.recv().await
     }
 
-    pub async fn write(&self, message: Message) -> Result<()> {
-        self.tx.send(message).await?;
-        Ok(())
-    }
-
     pub fn writer(&self) -> Writer {
         Writer {
             tx: self.tx.clone(),

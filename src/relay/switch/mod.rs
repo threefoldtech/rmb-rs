@@ -14,7 +14,7 @@ mod session;
 
 use bb8_redis::{
     bb8::{Pool, RunError},
-    redis::{cmd, FromRedisValue, IntoConnectionInfo, RedisError},
+    redis::{cmd, FromRedisValue, RedisError},
     RedisConnectionManager,
 };
 use queue::Queue;
@@ -196,11 +196,12 @@ where
         opts.registry.register(Box::new(MESSAGE_TX.clone()))?;
 
         for id in 0..workers {
+            // TODO: while workers are mostly ideal may be it's better in the
+            // future to spawn new workers only when needed (hitting max)
+            // number of users per current active workers for example!
             tokio::spawn(rely.clone().worker(id, user_per_worker));
         }
 
-        // let worker = Worker::new(pool.clone());
-        // let workers = WorkerPool::new(worker, size as usize);
         Ok(rely)
     }
 
@@ -282,7 +283,7 @@ where
     }
 
     async fn worker(self, id: u32, nr: usize) {
-        log::debug!("[{}] worker started", id);
+        log::trace!("[{}] worker started", id);
         // a worker will wait for available registrations.
         // once registrations are available, it will then maintain it's own list
         // of user ids (in memory) with a

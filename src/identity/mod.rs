@@ -90,7 +90,7 @@ where
     fn sign(&self, header: &str, claims: &str) -> Result<String, jwt::Error> {
         use base64::{CharacterSet, Config};
         let data = format!("{}.{}", header, claims);
-        let signature = self.0.sign(&data);
+        let signature = self.0.sign(data);
         let cfg = Config::new(CharacterSet::UrlSafe, false);
         Ok(base64::encode_config(signature, cfg))
     }

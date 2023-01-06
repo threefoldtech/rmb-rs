@@ -19,6 +19,7 @@ pub enum ParseError {
 pub struct StreamID(u32);
 
 impl StreamID {
+    #[allow(unused)]
     pub fn id(&self) -> u32 {
         self.0
     }

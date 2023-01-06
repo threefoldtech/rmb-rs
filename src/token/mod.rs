@@ -61,7 +61,7 @@ pub fn token<S: Signer>(signer: &S, id: u32, age: u64) -> Result<String, Error> 
 
     let signer: JwtSigner<_> = signer.into();
     let claims = Claims {
-        id: id,
+        id,
         timestamp: now,
         age,
     };

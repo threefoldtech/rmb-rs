@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::types::{Backlog, Envelope, EnvelopeExt};
+use crate::types::Backlog;
 
 use super::{JsonMessage, JsonRequest, JsonResponse, Storage};
 use anyhow::{Context, Result};
@@ -171,7 +171,7 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         // set reply queue
 
-        let key = RunKey(&queue);
+        let key = RunKey(queue);
 
         conn.lpush(&key, &response).await?;
         conn.ltrim(&key, 0, self.max_commands - 1).await?;
@@ -185,7 +185,7 @@ impl Storage for RedisStorage {
         let resp_queue = Queue::Response.as_ref();
         let queues = (req_queue, resp_queue);
 
-        let (queue, value): (String, Value) = conn.brpop(&queues, 0).await?;
+        let (queue, value): (String, Value) = conn.brpop(queues, 0).await?;
 
         let msg: JsonMessage = if queue == req_queue {
             JsonRequest::from_redis_value(&value)

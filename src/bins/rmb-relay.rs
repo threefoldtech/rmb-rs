@@ -1,15 +1,11 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use rmb::cache::RedisCache;
-use rmb::identity::Identity;
-use rmb::identity::KeyType;
-use rmb::peer::storage::RedisStorage;
+use rmb::redis;
 use rmb::relay;
-use rmb::twin::{SubstrateTwinDB, TwinDB};
-use rmb::{identity, redis};
+use rmb::twin::SubstrateTwinDB;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -31,6 +27,21 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
     substrate: String,
 
+    /// number of switch users. Each worker maintains a single connection to
+    /// redis used for waiting on user messages. hence this need to be sain value
+    /// defaults to 500
+    #[clap(short, long, default_value_t = 500)]
+    workers: u32,
+
+    /// maximum number of users per worker. the total number of users supported
+    /// by this process is then workers * user_per_worker before the switch start
+    /// rejecting new connections.
+    #[clap(short, long, default_value_t = 1000)]
+    user_per_worker: u32,
+
+    /// listen address
+    #[clap(short, long, default_value_t = String::from(":8080"))]
+    listen: String,
     /// enable debugging logs
     #[clap(short, long)]
     debug: bool,
@@ -63,10 +74,12 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
-    let opt = relay::SwitchOptions::new(pool);
+    let opt = relay::SwitchOptions::new(pool)
+        .with_workers(args.workers)
+        .with_max_users(args.workers as usize * args.user_per_worker as usize);
     let r = relay::Relay::new(twins, opt).await.unwrap();
 
-    r.start("0.0.0.0:8080").await.unwrap();
+    r.start(&args.listen).await.unwrap();
     Ok(())
 }
 

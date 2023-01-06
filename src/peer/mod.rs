@@ -1,8 +1,7 @@
 use crate::identity::Signer;
-use crate::twin::{Twin, TwinDB};
+use crate::twin::TwinDB;
 use crate::types::{Envelope, EnvelopeExt};
 use anyhow::{Context, Result};
-use nix::env;
 use protobuf::Message as ProtoMessage;
 use std::time::Duration;
 use storage::Storage;
@@ -46,7 +45,7 @@ where
         }
     }
 
-    async fn process_msg(db: &D, storage: &S, con: &mut Connection, msg: Message) -> Result<()> {
+    async fn process_msg(db: &D, storage: &S, msg: Message) -> Result<()> {
         let bytes = match msg {
             Message::Pong(_) => return Ok(()),
             Message::Binary(bytes) => bytes,
@@ -101,7 +100,7 @@ where
 
     async fn process(db: D, storage: S, mut reader: Connection) {
         while let Some(input) = reader.read().await {
-            if let Err(err) = Self::process_msg(&db, &storage, &mut reader, input).await {
+            if let Err(err) = Self::process_msg(&db, &storage, input).await {
                 log::error!("error while handling received message: {:#}", err);
                 continue;
             }

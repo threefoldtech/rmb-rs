@@ -1,9 +1,7 @@
-//use std::io::Write;
 use crate::identity::{Identity, Signer};
 use anyhow::Result;
 use bb8_redis::redis;
 use protobuf::Message;
-use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::time::{Duration, SystemTime};
 
@@ -63,7 +61,7 @@ pub fn verify<C: Challengeable, I: Identity>(
     c.challenge(&mut hash)?;
     let digest = hash.compute();
 
-    identity.verify(&signature, &digest[..])
+    identity.verify(signature, &digest[..])
 }
 
 impl<T> Challengeable for &[T]
@@ -222,7 +220,7 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
 impl Challengeable for types::Request {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.command)?;
-        hash.write(&self.data)?;
+        hash.write_all(&self.data)?;
 
         Ok(())
     }
@@ -236,7 +234,7 @@ impl Challengeable for types::Response {
             write!(hash, "{}", err.message)?;
         } else {
             let reply = self.reply();
-            hash.write(&reply.data)?;
+            hash.write_all(&reply.data)?;
         }
 
         Ok(())
