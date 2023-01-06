@@ -249,7 +249,7 @@ async fn serve_websocket(
 
     // handler is kept alive to keep the registration alive
     // once dropped (connection closed) registration stops
-    let _handler = switch
+    let mut registration = switch
         .register(id, RelayHook::new(id, Arc::clone(&switch), writer))
         .await?;
 
@@ -263,43 +263,50 @@ async fn serve_websocket(
     //  - or allow fanning out, basically maintain multiple registration of the
     //    same identity (twin)
 
-    while let Some(message) = reader.next().await {
-        let message = match message {
-            Ok(message) => message,
-            Err(err) => {
-                log::debug!("error receiving a message: {}", err);
+    loop {
+        tokio::select! {
+            _ = registration.cancelled() => {
                 return Ok(());
             }
-        };
+            Some(message) = reader.next()=> {
+                let message = match message {
+                    Ok(message) => message,
+                    Err(err) => {
+                        log::debug!("error receiving a message: {}", err);
+                        return Ok(());
+                    }
+                };
 
-        match message {
-            Message::Text(_) => {
-                log::trace!("received unsupported (text) message. disconnecting!");
-                break;
-            }
-            Message::Binary(msg) => {
-                let envelope =
-                    Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+                match message {
+                    Message::Text(_) => {
+                        log::trace!("received unsupported (text) message. disconnecting!");
+                        break;
+                    }
+                    Message::Binary(msg) => {
+                        let envelope =
+                            Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
-                if let Err(err) = switch.send(envelope.destination, &msg).await {
-                    log::error!(
-                        "failed to route message to peer '{}': {}",
-                        envelope.destination,
-                        err
-                    );
+                        if let Err(err) = switch.send(envelope.destination, &msg).await {
+                            log::error!(
+                                "failed to route message to peer '{}': {}",
+                                envelope.destination,
+                                err
+                            );
+                        }
+                    }
+                    Message::Ping(_) => {
+                        // No need to send a reply: tungstenite takes care of this for you.
+                    }
+                    Message::Pong(_) => {
+                        log::trace!("received pong message");
+                    }
+                    Message::Close(_) => {
+                        break;
+                    }
+                    Message::Frame(_) => {
+                        unreachable!();
+                    }
                 }
-            }
-            Message::Ping(_) => {
-                // No need to send a reply: tungstenite takes care of this for you.
-            }
-            Message::Pong(_) => {
-                log::trace!("received pong message");
-            }
-            Message::Close(_) => {
-                break;
-            }
-            Message::Frame(_) => {
-                unreachable!();
             }
         }
     }
