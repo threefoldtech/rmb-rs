@@ -63,7 +63,13 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("jsonrpsee_core", log::LevelFilter::Off)
         .init()?;
 
-    let pool = redis::pool(&args.redis)
+    // we know that a worker requires one connection so pool must be min of number of workers
+    // to have good preformance. but we also need a connection when a user sends a message to
+    // push to the queue that depends on how fast messages are sent but we can assume an extra 10%
+    // of number of workers is needed
+    let pool_size = args.workers + std::cmp::max((args.workers * 10) / 100, 1);
+    log::debug!("redis pool size: {}", pool_size);
+    let pool = redis::pool(&args.redis, pool_size)
         .await
         .context("failed to initialize redis pool")?;
 

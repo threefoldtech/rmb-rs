@@ -90,7 +90,7 @@ async fn app(args: &Args) -> Result<()> {
         }
     };
 
-    let pool = redis::pool(&args.redis)
+    let pool = redis::pool(&args.redis, 20)
         .await
         .context("failed to initialize redis pool")?;
 

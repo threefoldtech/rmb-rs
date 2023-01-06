@@ -83,6 +83,8 @@ pub struct JsonRequest {
     pub data: String,
     #[serde(rename = "tag")]
     pub tags: Option<String>,
+    #[serde(rename = "src")]
+    pub source: u32,
     #[serde(rename = "dst")]
     pub destinations: Vec<u32>,
     #[serde(rename = "ret")]
@@ -183,6 +185,7 @@ impl TryFrom<Envelope> for JsonRequest {
             expiration: value.expiration,
             data: base64::encode(&req.data),
             tags: value.tags,
+            source: value.source,
             destinations: vec![value.destination],
             reply_to: String::default(),
             schema: String::default(),
@@ -260,7 +263,7 @@ impl TryFrom<Envelope> for JsonResponse {
             } else {
                 "".into()
             },
-            destination: 0, // this should always be self
+            destination: env.destination,
             timestamp: env.timestamp,
             error: if let Body::Error(err) = body {
                 Some(JsonError {
@@ -300,6 +303,7 @@ impl TryFrom<JsonResponse> for Envelope {
 
         env.uid = value.reference;
         env.timestamp = value.timestamp;
+        env.expiration = 3600; // a response has a fixed timeout
         env.destination = value.destination;
         env.set_response(response);
 

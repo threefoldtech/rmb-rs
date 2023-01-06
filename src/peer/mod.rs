@@ -76,6 +76,8 @@ where
                 .await
                 .context("failed to schedule request to run");
         }
+
+        log::trace!("received a response: {}", envelope.uid);
         // - get message from backlog
         // - fill back everything else from
         //   the backlog then push to reply queue
@@ -95,6 +97,7 @@ where
         let mut response: JsonResponse = envelope.try_into()?;
         // set the reference back to original value
         response.reference = backlog.reference;
+        log::trace!("pushing response to reply queue: {}", backlog.reply_to);
         storage.reply(&backlog.reply_to, response).await
     }
 
@@ -107,6 +110,7 @@ where
         }
     }
 
+    // handle outgoing requests
     async fn request(&self, writer: &Writer, request: JsonRequest) -> Result<()> {
         // generate an id?
         let uid = uuid::Uuid::new_v4().to_string();
@@ -125,12 +129,20 @@ where
             let bytes = envelope
                 .write_to_bytes()
                 .context("failed to serialize envelope")?;
+
+            log::trace!(
+                "pushing outgoing request: {} -> {}",
+                envelope.uid,
+                envelope.destination
+            );
+
             writer.write(Message::Binary(bytes)).await?;
         }
 
         Ok(())
     }
 
+    // handle outgoing responses
     async fn response(&self, writer: &Writer, response: JsonResponse) -> Result<()> {
         // that's a reply message that is initiated locally and need to be
         // sent to a remote peer
@@ -139,11 +151,18 @@ where
             .context("failed to build envelope from response")?;
         envelope.source = self.id;
         envelope.stamp();
-        envelope.ttl().context("message has expired")?;
+        envelope
+            .ttl()
+            .context("response has expired before sending!")?;
         envelope.sign(&self.signer);
         let bytes = envelope
             .write_to_bytes()
             .context("failed to serialize envelope")?;
+        log::trace!(
+            "pushing outgoing response: {} -> {}",
+            envelope.uid,
+            envelope.destination
+        );
         writer.write(Message::Binary(bytes)).await?;
 
         Ok(())
