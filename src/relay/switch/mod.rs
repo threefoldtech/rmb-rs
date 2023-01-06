@@ -23,6 +23,7 @@ use session::*;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 
@@ -86,6 +87,24 @@ where
 {
     connection: ConnectionID,
     hook: H,
+    ch: oneshot::Sender<()>,
+}
+
+impl<H> User<H>
+where
+    H: Hook,
+{
+    fn new(connection: ConnectionID, hook: H, ch: oneshot::Sender<()>) -> Self {
+        Self {
+            connection,
+            hook,
+            ch,
+        }
+    }
+
+    fn cancel(self) {
+        let _ = self.ch.send(());
+    }
 }
 
 type UserMap<S> = HashMap<StreamID, User<S>>;
@@ -343,15 +362,14 @@ where
         }
     }
 
-    pub async fn register(&self, id: u32, hook: H) -> Result<Handle<H>> {
+    pub async fn register(&self, id: u32, hook: H) -> Result<Registration<H>> {
         // to make sure
         let stream_id: StreamID = id.into();
         let connection_id = ConnectionID::new();
 
-        let user = User {
-            connection: connection_id,
-            hook,
-        };
+        let (tx, rx) = oneshot::channel::<()>();
+
+        let user = User::new(connection_id, hook, tx);
 
         let mut map = self.users.write().await;
         if map.len() > self.max_users {
@@ -360,12 +378,20 @@ where
         // this overrides the previous user object. which means workers who
         // has been handling this user connection should forget about him and
         // don't wait on messages for it anymore.
-        map.insert(stream_id, user);
+        if let Some(old) = map.insert(stream_id, user) {
+            // old registration if exists should be used to close the
+            // join handler.
+            old.cancel();
+        }
+
         self.queue.push(Job(stream_id, connection_id)).await;
-        Ok(Handle {
-            id: stream_id,
-            m: Arc::clone(&self.users),
-        })
+
+        Ok(Registration::new(
+            stream_id,
+            connection_id,
+            Arc::clone(&self.users),
+            rx,
+        ))
     }
 
     pub async fn ack(&self, id: u32, ids: &[MessageID]) -> Result<()> {
@@ -406,26 +432,73 @@ where
     }
 }
 
-pub struct Handle<H>
+pub struct Registration<H>
 where
     H: Hook,
 {
     id: StreamID,
-    m: Arc<RwLock<UserMap<H>>>,
+    con: ConnectionID,
+    users: Option<Arc<RwLock<UserMap<H>>>>,
+    ch: oneshot::Receiver<()>,
 }
 
-impl<S> Drop for Handle<S>
+impl<H> Registration<H>
+where
+    H: Hook,
+{
+    fn new(
+        id: StreamID,
+        con: ConnectionID,
+        users: Arc<RwLock<UserMap<H>>>,
+        ch: oneshot::Receiver<()>,
+    ) -> Self {
+        Self {
+            id,
+            con,
+            users: Some(users),
+            ch,
+        }
+    }
+}
+
+impl<H> Registration<H>
+where
+    H: Hook,
+{
+    // cancelled blocks until the registration
+    // is cancelled by the switch
+    pub async fn cancelled(&mut self) {
+        if let Ok(_) = (&mut self.ch).await {
+            // save some time by removing the users list
+            // hence dropping will go faster.
+            self.users.take();
+        }
+    }
+}
+
+impl<S> Drop for Registration<S>
 where
     S: Hook,
 {
     fn drop(&mut self) {
-        log::debug!("dropping stream: {}", self.id);
-        let m = self.m.clone();
-        let id = self.id;
-        tokio::spawn(async move {
-            let mut m = m.write().await;
-            m.remove(&id);
-        });
+        // if drop is called. it means whoever did the registration
+        // dropped his registration handler so what we need to do
+        // is
+        if let Some(users) = self.users.take() {
+            let m = users.clone();
+            let id = self.id;
+            let con = self.con;
+            tokio::spawn(async move {
+                let mut m = m.write().await;
+                match m.get(&id) {
+                    Some(user) if user.connection == con => {
+                        log::debug!("unregister stream duo to a registration drop: {}", id);
+                        m.remove(&id);
+                    }
+                    _ => {}
+                };
+            });
+        }
     }
 }
 

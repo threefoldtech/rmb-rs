@@ -40,7 +40,7 @@ struct Args {
     user_per_worker: u32,
 
     /// listen address
-    #[clap(short, long, default_value_t = String::from(":8080"))]
+    #[clap(short, long, default_value_t = String::from("[::]:8080"))]
     listen: String,
     /// enable debugging logs
     #[clap(short, long)]

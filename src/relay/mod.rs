@@ -253,6 +253,16 @@ async fn serve_websocket(
         .register(id, RelayHook::new(id, Arc::clone(&switch), writer))
         .await?;
 
+    // todo: if the same twin connected twice to the relay the switch will maintain a single registration
+    // to that identity. Hence, while this connection will remain open (and receiving messages) all
+    // messages received for this "twin" will be sent back over the new connection alone
+    //
+    // 2 solutions here:
+    //  - somehow this loop is notified that registration has been terminated
+    //    some sort of select!{handler, read}
+    //  - or allow fanning out, basically maintain multiple registration of the
+    //    same identity (twin)
+
     while let Some(message) = reader.next().await {
         let message = match message {
             Ok(message) => message,
