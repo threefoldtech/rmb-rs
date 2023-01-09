@@ -44,7 +44,7 @@ pub struct Claims {
     #[serde(rename = "iat")]
     pub timestamp: u64,
     #[serde(rename = "exp")]
-    pub age: u64,
+    pub ttl: u64,
 }
 
 fn now() -> Result<u64, Error> {
@@ -63,7 +63,7 @@ pub fn token<S: Signer>(signer: &S, id: u32, age: u64) -> Result<String, Error> 
     let claims = Claims {
         id,
         timestamp: now,
-        age,
+        ttl: age,
     };
 
     claims.sign_with_key(&signer).map_err(Error::Jwt)
@@ -76,7 +76,7 @@ impl FromStr for Claims {
 
         let claims = token.claims();
         let now = now()?;
-        if claims.timestamp + claims.age < now {
+        if claims.timestamp + claims.ttl < now {
             return Err(Error::Expired);
         }
 
@@ -98,10 +98,11 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::identity::Sr25519Signer;
+    use super::*;
+    use crate::identity::{Ed25519Signer, Sr25519Signer};
 
     #[test]
-    fn create_token() {
+    fn create_token_sr() {
         let signer = Sr25519Signer::try_from("//Alice").unwrap();
         //let identity = signer.account();
 
@@ -110,6 +111,29 @@ mod test {
         let claims: super::Claims = token.parse().unwrap();
 
         assert_eq!(claims.id, 100);
-        assert_eq!(claims.age, 20);
+        assert_eq!(claims.ttl, 20);
+    }
+
+    #[test]
+    fn create_token_ed() {
+        let signer = Ed25519Signer::try_from("//Alice").unwrap();
+        //let identity = signer.account();
+
+        let token = super::token(&signer, 100, 20).unwrap();
+
+        let claims: super::Claims = token.parse().unwrap();
+
+        assert_eq!(claims.id, 100);
+        assert_eq!(claims.ttl, 20);
+    }
+
+    #[test]
+    fn load_token() {
+        let t = "eyJhbGciOiJSUzUxMiJ9.eyJzdWIiOjcsImlhdCI6MTY3MzI2NzE1MCwiZXhwIjo2MH0.ZRCH2iy6VnwUFfhL0h7tjlweqJT9tQJuHpApPFD0tDDObyBdGUBrqy2EXS8XSX7YQUH1hswylONxoNLvFkdb2AY";
+
+        let token: Token<Header, Claims, _> = Token::parse_unverified(t).unwrap();
+
+        println!("headers: {:#?}", token.header());
+        println!("{:#?}", token.claims());
     }
 }

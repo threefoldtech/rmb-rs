@@ -249,6 +249,7 @@ impl Challengeable for Envelope {
         }
 
         write!(hash, "{}", self.timestamp)?;
+        write!(hash, "{}", self.expiration)?;
         write!(hash, "{}", self.source)?;
         write!(hash, "{}", self.destination)?;
 

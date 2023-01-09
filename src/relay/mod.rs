@@ -92,7 +92,6 @@ where
             let http = http.clone();
             tokio::task::spawn(async move {
                 if let Err(http_err) = Http::new()
-                    .http1_only(true)
                     .http1_keep_alive(true)
                     .serve_connection(tcp_stream, http)
                     .with_upgrades()
@@ -169,10 +168,13 @@ where
         let fut = async {
             match entry(data, req).await {
                 Ok(result) => Ok(result),
-                Err(err) => Response::builder()
-                    .status(err.status())
-                    .body(Body::from(err.to_string()))
-                    .map_err(HttpError::Http),
+                Err(err) => {
+                    log::debug!("connection error: {:#}", err);
+                    Response::builder()
+                        .status(err.status())
+                        .body(Body::from(err.to_string()))
+                        .map_err(HttpError::Http)
+                }
             }
         };
 
