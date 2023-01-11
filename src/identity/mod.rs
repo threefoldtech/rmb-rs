@@ -1,8 +1,12 @@
 mod ed25519;
 mod sr25519;
 
+use std::{fmt::Display, str::FromStr};
+
 pub use ed25519::{Ed25519Identity, Ed25519Signer, PREFIX as ED_PREFIX};
 pub use sr25519::{Sr25519Identity, Sr25519Signer, PREFIX as SR_PREFIX};
+
+use jwt::algorithm::{AlgorithmType, SigningAlgorithm, VerifyingAlgorithm};
 
 use anyhow::Result;
 use sp_core::crypto::AccountId32;
@@ -63,6 +67,67 @@ impl Identity for AccountId32 {
     }
 }
 
+pub struct JwtSigner<'a, S: Signer>(&'a S);
+impl<'a, S> From<&'a S> for JwtSigner<'a, S>
+where
+    S: Signer,
+{
+    fn from(value: &'a S) -> Self {
+        Self(value)
+    }
+}
+
+impl<'a, S> SigningAlgorithm for JwtSigner<'a, S>
+where
+    S: Signer,
+{
+    fn algorithm_type(&self) -> AlgorithmType {
+        // we return ALWAYS a fixed
+        // type.
+        AlgorithmType::Rs512
+    }
+
+    fn sign(&self, header: &str, claims: &str) -> Result<String, jwt::Error> {
+        use base64::{CharacterSet, Config};
+        let data = format!("{}.{}", header, claims);
+        let signature = self.0.sign(data);
+        let cfg = Config::new(CharacterSet::UrlSafe, false);
+        Ok(base64::encode_config(signature, cfg))
+    }
+}
+
+pub struct JwtVerifier<'a, I: Identity>(&'a I);
+impl<'a, I> From<&'a I> for JwtVerifier<'a, I>
+where
+    I: Identity,
+{
+    fn from(value: &'a I) -> Self {
+        Self(value)
+    }
+}
+
+impl<'a, I> VerifyingAlgorithm for JwtVerifier<'a, I>
+where
+    I: Identity,
+{
+    fn algorithm_type(&self) -> AlgorithmType {
+        AlgorithmType::Rs512
+    }
+
+    fn verify_bytes(
+        &self,
+        header: &str,
+        claims: &str,
+        signature: &[u8],
+    ) -> Result<bool, jwt::Error> {
+        let data = format!("{}.{}", header, claims);
+        self.0
+            .verify(signature, data)
+            .map(|_| true)
+            .map_err(|_| jwt::Error::InvalidSignature)
+    }
+}
+
 #[derive(Clone)]
 pub enum Signers {
     Ed25519(Ed25519Signer),
@@ -91,5 +156,33 @@ impl Signer for Signers {
             Signers::Ed25519(ref sk) => sk.sign(message),
             Signers::Sr25519(ref sk) => sk.sign(message),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum KeyType {
+    Ed25519,
+    Sr25519,
+}
+
+impl FromStr for KeyType {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ed25519" => Ok(KeyType::Ed25519),
+            "sr25519" => Ok(KeyType::Sr25519),
+            _ => Err("invalid key type"),
+        }
+    }
+}
+
+impl Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            KeyType::Ed25519 => "ed25519",
+            KeyType::Sr25519 => "sr25519",
+        };
+
+        f.write_str(s)
     }
 }

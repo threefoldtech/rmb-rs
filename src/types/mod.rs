@@ -1,194 +1,98 @@
-//use std::io::Write;
 use crate::identity::{Identity, Signer};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bb8_redis::redis;
-use serde::{Deserialize, Serialize};
+use protobuf::Message;
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-#[derive(Clone, Debug)]
-pub enum TransitMessage {
-    Request(Message),
-    Reply(Message),
-    Upload(Message),
-}
+include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UploadRequest {
-    pub path: PathBuf,
-    pub cmd: String,
-}
+pub use types::*;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Message {
-    #[serde(rename = "ver")]
-    pub version: usize,
-    #[serde(rename = "uid")]
-    pub id: String,
-    #[serde(rename = "cmd")]
-    pub command: String,
-    #[serde(rename = "exp")]
-    pub expiration: u64,
-    #[serde(rename = "try")]
-    pub retry: usize,
-    #[serde(rename = "dat")]
-    pub data: String,
-    #[serde(rename = "tag")]
-    pub tag: Option<String>,
-    #[serde(rename = "src")]
-    pub source: u32,
-    #[serde(rename = "dst")]
-    pub destination: Vec<u32>,
-    #[serde(rename = "ret")]
-    pub reply: String,
-    #[serde(rename = "shm")]
-    pub schema: String,
-    #[serde(rename = "now")]
-    pub timestamp: u64,
-    #[serde(rename = "err")]
-    pub error: Option<String>,
-    #[serde(rename = "sig")]
-    pub signature: Option<String>,
-    #[serde(default)]
-    #[serde(skip_serializing)]
-    #[serde(rename = "pxy")]
-    pub proxy: bool,
+pub trait EnvelopeExt: Challengeable {
+    /// sign the message with given signer
+    fn sign<S: Signer>(&mut self, signer: &S);
+
+    /// verify the message signature
+    fn verify<I: Identity>(&self, identity: &I) -> Result<()>;
+
+    fn stamp(&mut self);
+
+    /// ttl returns the time to live of this message
+    /// based it the timestamp expiration value and ttl
+    fn ttl(&self) -> Option<Duration>;
+
+    /// generic validation on the message
+    fn valid(&self) -> Result<()> {
+        if self.ttl().is_none() {
+            bail!("message has expired");
+        }
+
+        Ok(())
+    }
+
+    fn age(&self) -> Duration;
 }
 
 pub trait Challengeable {
-    fn challenge(&self) -> Result<md5::Digest>;
+    fn challenge<W: Write>(&self, w: &mut W) -> Result<()>;
 }
 
 // a generic sign for any challengeable
-pub fn sign<C: Challengeable, S: Signer>(c: &C, signer: &S) -> String {
-    let digest = c.challenge().unwrap();
-    let signature = signer.sign(&digest[..]);
-
-    hex::encode(signature)
+pub fn sign<C: Challengeable, S: Signer>(c: &C, signer: &S) -> Vec<u8> {
+    let mut hash = md5::Context::new();
+    c.challenge(&mut hash).unwrap();
+    let hash = hash.compute();
+    Vec::from(signer.sign(&hash[..]))
 }
 
 // a generic verify for any challengeable
 pub fn verify<C: Challengeable, I: Identity>(
     c: &C,
     identity: &I,
-    signature: &Option<String>,
+    signature: Option<&[u8]>,
 ) -> Result<()> {
     let signature = match signature {
-        Some(ref sig) => sig,
+        Some(sig) => sig,
         None => bail!("message is not signed"),
     };
 
-    let digest = c.challenge()?;
-    let signature = hex::decode(signature).context("failed to decode signature")?;
+    let mut hash = md5::Context::new();
+    c.challenge(&mut hash)?;
+    let digest = hash.compute();
 
-    identity.verify(&signature, &digest[..])
+    identity.verify(signature, &digest[..])
 }
 
 impl<T> Challengeable for &[T]
 where
     T: std::fmt::Display,
 {
-    fn challenge(&self) -> Result<md5::Digest> {
-        let mut hash = md5::Context::new();
+    fn challenge<W: Write>(&self, w: &mut W) -> Result<()> {
         for v in self.iter() {
-            write!(hash, "{}", v)?;
+            write!(w, "{}", v)?;
         }
 
-        Ok(hash.compute())
+        Ok(())
     }
 }
 
-impl UploadRequest {
-    pub fn new(path: PathBuf, cmd: String) -> Self {
-        Self { path, cmd }
-    }
-
-    pub fn sign<S: Signer>(&mut self, signer: &S, timestamp: u64, source: u32) -> String {
-        let fields = vec![timestamp.to_string(), source.to_string()];
-        sign(&fields.as_slice(), signer)
-    }
-
-    pub fn verify<I: Identity>(
-        &self,
-        identity: &I,
-        timestamp: u64,
-        source: u32,
-        signature: String,
-    ) -> Result<()> {
-        let fields = vec![timestamp.to_string(), source.to_string()];
-        verify(&fields.as_slice(), identity, &Some(signature))
-    }
-}
-
-impl Default for Message {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            id: Default::default(),
-            command: Default::default(),
-            expiration: Default::default(),
-            retry: Default::default(),
-            data: Default::default(),
-            tag: None,
-            source: Default::default(),
-            destination: Default::default(),
-            reply: Default::default(),
-            schema: Default::default(),
-            timestamp: Default::default(),
-            error: None,
-            signature: Default::default(),
-            proxy: Default::default(),
-        }
-    }
-}
-
-impl Challengeable for Message {
-    fn challenge(&self) -> Result<md5::Digest> {
-        let mut hash = md5::Context::new();
-        write!(hash, "{}", self.version)?;
-        write!(hash, "{}", self.id)?;
-        write!(hash, "{}", self.command)?;
-        write!(hash, "{}", self.data)?;
-        write!(hash, "{}", self.source)?;
-        for id in &self.destination {
-            write!(hash, "{}", *id)?;
-        }
-        write!(hash, "{}", self.reply)?;
-        write!(hash, "{}", self.timestamp)?;
-
-        // this is for backward compatibility
-        // proxy flag is now obsolete
-        write!(hash, "{}", self.proxy)?;
-
-        Ok(hash.compute())
-    }
-}
-
-impl Message {
-    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
-        serde_json::to_vec(self)
-    }
-
-    pub fn from_json(json: &[u8]) -> serde_json::Result<Self> {
-        serde_json::from_slice(json)
-    }
-
+impl EnvelopeExt for Envelope {
     /// sign the message with given signer
-    pub fn sign<S: Signer>(&mut self, signer: &S) {
+    fn sign<S: Signer>(&mut self, signer: &S) {
         self.signature = Some(sign(self, signer));
     }
 
     /// verify the message signature
-    pub fn verify<I: Identity>(&self, identity: &I) -> Result<()> {
-        verify(self, identity, &self.signature)
+    fn verify<I: Identity>(&self, identity: &I) -> Result<()> {
+        verify(self, identity, self.signature.as_deref())
     }
 
     /// stamp sets the correct timestamp on the message.
     /// - first validate the timestamp set by a client if in the future, it's reset to now
     /// - if the timestamp is (now) or in the past. the timestamp is updated also to now
     ///   but the expiration period is recalculated so the message deadline does not change
-    pub fn stamp(&mut self) {
+    fn stamp(&mut self) {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -199,7 +103,7 @@ impl Message {
 
     /// ttl returns the time to live of this message
     /// based it the timestamp expiration value and ttl
-    pub fn ttl(&self) -> Option<Duration> {
+    fn ttl(&self) -> Option<Duration> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -208,20 +112,11 @@ impl Message {
         ttl(now, self.timestamp, self.expiration)
     }
 
-    /// generic validation on the message
-    pub fn valid(&self) -> Result<()> {
-        if self.ttl().is_none() {
-            bail!("message has expired");
-        }
-
-        Ok(())
-    }
-
     /// age returns the now - message.timestamp
     /// this will give how old the message was when
     /// it was last stamped.
     /// if timestamp is in the future, age will be 0
-    pub fn age(&self) -> Duration {
+    fn age(&self) -> Duration {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -233,60 +128,49 @@ impl Message {
     }
 }
 
-impl TryFrom<&Message> for UploadRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(msg: &Message) -> Result<Self, Self::Error> {
-        let data = base64::decode(&msg.data).with_context(|| "cannot decode message data")?;
-        let request: Self =
-            serde_json::from_slice(&data).with_context(|| "cannot decode upload request")?;
-
-        if msg.destination.len() > 1 {
-            bail!("cannot send upload to multiple destinations");
-        }
-
-        if request.cmd.trim().is_empty() {
-            bail!("cmd is empty");
-        }
-
-        if request.path.is_file() && request.path.exists() {
-            Ok(request)
-        } else {
-            bail!("path does not exist or is not a file")
-        }
-    }
-}
-
-impl TryFrom<Vec<u8>> for Message {
-    type Error = serde_json::Error;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        Message::from_json(&value)
-    }
-}
-
-impl TryInto<Vec<u8>> for Message {
-    type Error = serde_json::Error;
-
-    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
-        self.to_json()
-    }
-}
-
-impl redis::ToRedisArgs for Message {
+impl redis::ToRedisArgs for Envelope {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + redis::RedisWrite,
     {
-        let bytes = self.to_json().expect("failed to json encode message");
+        let bytes = self.write_to_bytes().expect("failed to encode envelope");
         out.write_arg(&bytes);
     }
 }
 
-impl redis::FromRedisValue for Message {
+impl redis::FromRedisValue for Envelope {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         if let redis::Value::Data(data) = v {
-            Message::from_json(data).map_err(|e| {
+            Self::parse_from_bytes(data).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "cannot decode a message from json {}",
+                    e.to_string(),
+                ))
+            })
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
+    }
+}
+
+impl redis::ToRedisArgs for Backlog {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let bytes = self.write_to_bytes().expect("failed to encode envelope");
+        out.write_arg(&bytes);
+    }
+}
+
+impl redis::FromRedisValue for Backlog {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            Self::parse_from_bytes(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,
                     "cannot decode a message from json {}",
@@ -333,8 +217,60 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
     }
 }
 
+impl Challengeable for types::Request {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        write!(hash, "{}", self.command)?;
+        hash.write_all(&self.data)?;
+
+        Ok(())
+    }
+}
+
+impl Challengeable for types::Response {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        if self.has_error() {
+            let err = self.error();
+            write!(hash, "{}", err.code)?;
+            write!(hash, "{}", err.message)?;
+        } else {
+            let reply = self.reply();
+            hash.write_all(&reply.data)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Challengeable for Envelope {
+    fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
+        write!(hash, "{}", self.uid)?;
+        if let Some(ref tags) = self.tags {
+            write!(hash, "{}", tags)?;
+        }
+
+        write!(hash, "{}", self.timestamp)?;
+        write!(hash, "{}", self.expiration)?;
+        write!(hash, "{}", self.source)?;
+        write!(hash, "{}", self.destination)?;
+
+        if let Some(ref message) = self.message {
+            match message {
+                types::envelope::Message::Request(req) => req.challenge(hash)?,
+                types::envelope::Message::Response(resp) => resp.challenge(hash)?,
+            };
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
+
+    use crate::identity::{Identity, Sr25519Signer};
+
+    use super::{Envelope, EnvelopeExt};
+
     #[test]
     fn stamp() {
         use super::stamp;
@@ -376,5 +312,18 @@ mod test {
 
         let t = ttl(30, 0, 20);
         assert_eq!(t, None);
+    }
+
+    #[test]
+    fn sign_verify() {
+        let signer = Sr25519Signer::try_from("//Alice").unwrap();
+
+        let account = signer.account();
+
+        let mut env = Envelope::new();
+
+        env.sign(&signer);
+
+        env.verify(&account).unwrap();
     }
 }

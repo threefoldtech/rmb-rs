@@ -16,6 +16,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install musl-dev musl-tools
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+          sudo unzip -d /usr/local protoc-21.12-linux-x86_64.zip
       - name: Checkout code
         uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -38,13 +40,23 @@ jobs:
           release_name: Release ${{ github.ref }}
           draft: false
           prerelease: false
-      - name: Upload Release Asset
+      - name: Upload Release Asset (relay)
         id: upload-release-asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/x86_64-unknown-linux-musl/release/rmb
-          asset_name: rmb
+          asset_path: target/x86_64-unknown-linux-musl/release/rmb-relay
+          asset_name: rmb-relay
+          asset_content_type: application/x-pie-executable
+      - name: Upload Release Asset (peer)
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: target/x86_64-unknown-linux-musl/release/rmb-peer
+          asset_name: rmb-peer
           asset_content_type: application/x-pie-executable
