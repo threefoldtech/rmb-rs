@@ -171,8 +171,8 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         // set reply queue
 
-        conn.lpush(&queue, &response).await?;
-        conn.ltrim(&queue, 0, self.max_commands - 1).await?;
+        conn.lpush(queue, &response).await?;
+        conn.ltrim(queue, 0, self.max_commands - 1).await?;
 
         Ok(())
     }

@@ -468,7 +468,7 @@ where
     // cancelled blocks until the registration
     // is cancelled by the switch
     pub async fn cancelled(&mut self) {
-        if let Ok(_) = (&mut self.ch).await {
+        if (&mut self.ch).await.is_ok() {
             // save some time by removing the users list
             // hence dropping will go faster.
             self.users.take();
@@ -485,11 +485,10 @@ where
         // dropped his registration handler so what we need to do
         // is
         if let Some(users) = self.users.take() {
-            let m = users.clone();
             let id = self.id;
             let con = self.con;
             tokio::spawn(async move {
-                let mut m = m.write().await;
+                let mut m = users.write().await;
                 match m.get(&id) {
                     Some(user) if user.connection == con => {
                         log::debug!("unregister stream duo to a registration drop: {}", id);
