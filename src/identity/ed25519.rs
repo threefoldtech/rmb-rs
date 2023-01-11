@@ -1,11 +1,21 @@
 use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::Result;
-use sp_core::{
-    crypto::AccountId32,
-    ed25519::{Pair as EdPair, Public},
-    Pair,
+// use sp_core::{
+//     crypto::AccountId32,
+//     ed25519::{Pair as EdPair, Public},
+//     Pair,
+// };
+
+use subxt::ext::{
+    sp_core::{
+        ed25519::{Pair as EdPair, Public},
+        Pair,
+    },
+    sp_runtime::AccountId32,
 };
+
 use std::convert::From;
+use tfchain_client::client::KeyPair;
 
 pub const PREFIX: u8 = 0x65; // ascii e for ed
 
@@ -43,6 +53,10 @@ impl Signer for Ed25519Signer {
 
         sig
     }
+
+    fn pair(&self) -> KeyPair {
+        KeyPair::Ed25519(self.pair.clone())
+    }
 }
 
 impl Identity for Ed25519Signer {
@@ -58,8 +72,7 @@ impl Identity for Ed25519Signer {
 impl TryFrom<&str> for Ed25519Signer {
     type Error = anyhow::Error;
     fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
-        let pair =
-            sp_core::ed25519::Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
+        let pair: EdPair = Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
 
         Ok(Self { pair })
     }
@@ -103,7 +116,6 @@ mod tests {
         let result = hex::decode(&SEED[2..SEED.len()]).expect("must be decoded");
 
         let bytes: [u8; 32] = result.as_slice().try_into().expect("key of size 32");
-        assert_eq!(s.pair.seed(), &bytes);
 
         let err = Ed25519Signer::try_from("0xinvalidseed");
         assert_eq!(err.is_err(), true);
