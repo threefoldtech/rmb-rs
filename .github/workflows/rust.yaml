@@ -7,6 +7,12 @@ jobs:
     name: Test-Clippy-Build
     runs-on: ubuntu-latest
     steps:
+      - name: Prepare
+        run: |
+          sudo apt-get update
+          sudo apt-get install musl-dev musl-tools unzip
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+          sudo unzip -d /usr/local protoc-21.12-linux-x86_64.zip
       - uses: actions/checkout@v3
         name: Checkout code
         with:

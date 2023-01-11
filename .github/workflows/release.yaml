@@ -16,6 +16,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install musl-dev musl-tools
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+          sudo unzip -d /usr/local protoc-21.12-linux-x86_64.zip
       - name: Checkout code
         uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
