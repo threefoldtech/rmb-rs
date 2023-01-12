@@ -1,3 +1,5 @@
 FROM alpine
 
-COPY rmb-relay /rmb-relay
+COPY rmb-relay /usr/sbin
+ENTRYPOINT [ "/usr/sbin/rmb-relay" ]
+
