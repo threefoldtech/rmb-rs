@@ -35,7 +35,7 @@ jsonrpsee-core = "0.14.0"
 mime = "0.3"
 mpart-async = "0.6.0"
 url = "2.3.1"
-tokio-tungstenite = "0.18.0"
+tokio-tungstenite = { version = "0.18.0", features = ["native-tls"] }
 futures-util = "0.3.25"
 jwt = "0.16"
 subxt = "0.25.0"

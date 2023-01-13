@@ -47,6 +47,31 @@ struct Args {
     debug: bool,
 }
 
+fn set_limits() -> Result<()> {
+    // we set the soft, hard limit of max number of open file to a big value so we can handle as much connections
+    // as possible.
+    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+    let (_, max) = getrlimit(Resource::RLIMIT_NOFILE).context("failed to get rlimit")?;
+
+    const MAX_NOFILE: u64 = 524288;
+    let max = if max < MAX_NOFILE {
+        log::warn!(
+            "maximum possible connections is set at '{}' please run as root for higher value",
+            max
+        );
+        MAX_NOFILE
+    } else {
+        max
+    };
+
+    log::debug!("setting rlimit(nofile) to: {}", max);
+    if let Err(err) = setrlimit(Resource::RLIMIT_NOFILE, max, max) {
+        log::error!("failed to increase max number of open files: {}", err);
+    }
+
+    Ok(())
+}
+
 async fn app(args: &Args) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
@@ -63,6 +88,7 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("jsonrpsee_core", log::LevelFilter::Off)
         .init()?;
 
+    set_limits()?;
     // we know that a worker requires one connection so pool must be min of number of workers
     // to have good preformance. but we also need a connection when a user sends a message to
     // push to the queue that depends on how fast messages are sent but we can assume an extra 10%
