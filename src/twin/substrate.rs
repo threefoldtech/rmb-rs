@@ -3,154 +3,16 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
-use jsonrpsee_core::Error as RequestError;
-use sp_core::crypto::AccountId32;
-use std::sync::Arc;
-use subxt::GenericError;
-use subxt::{
-    storage::StorageEntry, ClientBuilder, DefaultConfig, StorageEntryKey, StorageHasher,
-    StorageMapKey,
-};
-use tokio::sync::Mutex;
+use subxt::ext::sp_core::crypto::AccountId32;
 
-use workers::{Work, WorkerPool};
-
-const MAX_INFLIGHT: usize = 10;
-
-struct TwinID {
-    id: u32,
-}
-
-impl TwinID {
-    pub fn new(id: u32) -> Self {
-        Self { id }
-    }
-}
-
-impl StorageEntry for TwinID {
-    type Value = Twin;
-    const PALLET: &'static str = "TfgridModule";
-    const STORAGE: &'static str = "Twins";
-
-    fn key(&self) -> StorageEntryKey {
-        let args = vec![StorageMapKey::new(
-            &self.id,
-            StorageHasher::Blake2_128Concat,
-        )];
-        StorageEntryKey::Map(args)
-    }
-}
-
-pub struct TwinAccountID {
-    id: AccountId32,
-}
-
-impl TwinAccountID {
-    pub fn new(id: AccountId32) -> Self {
-        Self { id }
-    }
-}
-
-impl StorageEntry for TwinAccountID {
-    type Value = u32;
-    const PALLET: &'static str = "TfgridModule";
-    const STORAGE: &'static str = "TwinIdByAccountID";
-
-    fn key(&self) -> StorageEntryKey {
-        let args = vec![StorageMapKey::new(
-            &self.id,
-            StorageHasher::Blake2_128Concat,
-        )];
-        StorageEntryKey::Map(args)
-    }
-}
-
-type Client = subxt::Client<DefaultConfig>;
-
-#[derive(Debug, Clone)]
-struct ReconnectingClient {
-    client: Arc<Mutex<Client>>,
-    url: String,
-}
-
-impl ReconnectingClient {
-    async fn get_new(url: &str) -> Result<Client> {
-        Ok(ClientBuilder::new().set_url(url).build().await?)
-    }
-
-    pub async fn new<S: Into<String>>(url: S) -> Result<Self> {
-        let url = url.into();
-
-        let client = Self::get_new(&url).await?;
-        Ok(Self {
-            client: Arc::new(Mutex::new(client)),
-            url,
-        })
-    }
-
-    pub async fn fetch<E: StorageEntry>(&self, entry: &E) -> Result<Option<E::Value>> {
-        let mut client = self.client.lock().await;
-        let result = client.storage().fetch(entry, None).await;
-
-        let err = match result {
-            Ok(value) => return Ok(value),
-            Err(err) => err,
-        };
-
-        if let GenericError::Rpc(RequestError::RestartNeeded(_)) = err {
-            *client = Self::get_new(&self.url).await?;
-            return client
-                .storage()
-                .fetch(entry, None)
-                .await
-                .map_err(|err| anyhow!(err));
-        }
-
-        Err(err.into())
-    }
-}
-
-#[derive(Clone)]
-struct TwinGetter<C>
-where
-    C: Cache<Twin>,
-{
-    client: ReconnectingClient,
-    cache: C,
-}
-
-#[async_trait::async_trait]
-impl<C> Work for TwinGetter<C>
-where
-    C: Cache<Twin>,
-{
-    type Input = u32;
-    type Output = Result<Option<Twin>>;
-
-    async fn run(&self, twin_id: Self::Input) -> Self::Output {
-        // note: we hit the cache again so if many requests are querying the
-        // same twin and they were "blocked" waiting for a turn to
-        // execute the query, there might be already someone who
-        // have populated the cache with this value. Otherwise
-        // we need to do the actual query.
-        // this looks ugly we have to hit the cache 2 times for
-        // twins that are not in cache but overall performance is
-        // improved.
-        if let Some(twin) = self.cache.get(twin_id).await? {
-            return Ok(Some(twin));
-        }
-
-        Ok(self.client.fetch(&TwinID::new(twin_id)).await?)
-    }
-}
+use tfchain_client::client::{Client, KeyPair};
 
 #[derive(Clone)]
 pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    pool: Arc<Mutex<WorkerPool<TwinGetter<C>>>>,
-    client: ReconnectingClient,
+    client: Client,
     cache: C,
 }
 
@@ -159,17 +21,14 @@ where
     C: Cache<Twin> + Clone,
 {
     pub async fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
-        let client = ReconnectingClient::new(url).await?;
-        let work = TwinGetter {
-            client: client.clone(),
-            cache: cache.clone(),
-        };
-        let pool = Arc::new(Mutex::new(WorkerPool::new(work, MAX_INFLIGHT)));
-        Ok(Self {
-            pool,
-            client,
-            cache,
-        })
+        let client = Client::new(url.into(), tfchain_client::client::Runtime::Devnet).await?;
+        Ok(Self { client, cache })
+    }
+
+    pub async fn update_twin(&self, kp: &KeyPair, relay: Option<String>) -> Result<()> {
+        let hash = self.client.update_twin(kp, relay, None).await?;
+        log::debug!("hash: {:?}", hash);
+        Ok(())
     }
 }
 
@@ -184,11 +43,10 @@ where
             return Ok(Some(twin));
         }
 
+        let twin = self.client.get_twin_by_id(twin_id, None).await?;
         // but if we wanna hit the grid we get throttled by the workers pool
         // the pool has a limited size so only X queries can be in flight.
-        let worker = self.pool.lock().await.get().await;
 
-        let twin = worker.run(twin_id).await??;
         if let Some(ref twin) = twin {
             self.cache.set(twin.id, twin.clone()).await?;
         }
@@ -197,7 +55,7 @@ where
     }
 
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        Ok(self.client.fetch(&TwinAccountID::new(account_id)).await?)
+        Ok(self.client.get_twin_id_by_account(account_id, None).await?)
     }
 }
 
@@ -229,7 +87,7 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert_eq!(twin.address, "::11");
+        assert!(matches!(twin.relay, Some(ref ip) if ip == "::11"));
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
@@ -262,7 +120,7 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert_eq!(twin.address, "::11");
+        assert!(matches!(twin.relay, Some(ip) if ip == "::11"));
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"

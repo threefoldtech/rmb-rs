@@ -9,6 +9,12 @@ include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
 pub use types::*;
 
+#[derive(thiserror::Error, Debug)]
+pub enum ValidationError {
+    #[error("message has expired")]
+    Expired,
+}
+
 pub trait EnvelopeExt: Challengeable {
     /// sign the message with given signer
     fn sign<S: Signer>(&mut self, signer: &S);
@@ -23,9 +29,9 @@ pub trait EnvelopeExt: Challengeable {
     fn ttl(&self) -> Option<Duration>;
 
     /// generic validation on the message
-    fn valid(&self) -> Result<()> {
+    fn valid(&self) -> Result<(), ValidationError> {
         if self.ttl().is_none() {
-            bail!("message has expired");
+            return Err(ValidationError::Expired);
         }
 
         Ok(())

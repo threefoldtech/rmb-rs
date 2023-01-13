@@ -4,8 +4,8 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use rmb::cache::RedisCache;
-use rmb::identity::Identity;
 use rmb::identity::KeyType;
+use rmb::identity::{Identity, Signer};
 use rmb::peer::storage::RedisStorage;
 use rmb::peer::Peer;
 use rmb::twin::{SubstrateTwinDB, TwinDB};
@@ -101,13 +101,44 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
-    let id = match db
+    let id = db
         .get_twin_with_account(identity.account())
         .await
         .context("failed to get own twin id")?
-    {
-        Some(id) => id,
-        None => bail!("no twin found on this network with given key"),
+        .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
+
+    // we need to make sure our twin is up to date
+    let twin = db
+        .get_twin(id)
+        .await
+        .context("failed to get twin details")?
+        .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
+
+    match twin.relay {
+        Some(relay) if relay == args.relay => {}
+        _ => {
+            // remote relay is not the same as configure one. update is needed
+            log::info!(
+                "update twin details on the chain with relay address: {}",
+                args.relay
+            );
+
+            // TODO: this code will probably fail (silently) against devnet
+            // because it's not possible yet to set a full url in the ip field
+            // also the client doesn't check the errors returned from the extrensic
+            // hence it does not fail although the update failed
+            let update = db
+                .update_twin(&identity.pair(), Some(args.relay.clone()))
+                .await;
+
+            //TODO: this is a temporary work around because ALL updates
+            // will fail because right now chain accept only IP address
+            // not a full url
+            // the right way of course is to return an error and exit!
+            if let Err(err) = update {
+                log::error!("failed to update twin: {:#}", err);
+            }
+        }
     };
 
     let storage = RedisStorage::builder(pool).build();

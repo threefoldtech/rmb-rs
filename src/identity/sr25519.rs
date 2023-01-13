@@ -1,12 +1,15 @@
 use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::Result;
-use sp_core::{
-    crypto::AccountId32,
-    sr25519::{Pair as SrPair, Public},
-    Pair,
-};
 
 use std::convert::From;
+use subxt::ext::{
+    sp_core::{
+        sr25519::{Pair as SrPair, Public},
+        Pair,
+    },
+    sp_runtime::AccountId32,
+};
+use tfchain_client::client::KeyPair;
 
 pub const PREFIX: u8 = 0x73; // ascii s for sr
 
@@ -44,6 +47,10 @@ impl Signer for Sr25519Signer {
 
         sig
     }
+
+    fn pair(&self) -> KeyPair {
+        KeyPair::Sr25519(self.pair.clone())
+    }
 }
 
 impl Identity for Sr25519Signer {
@@ -60,8 +67,7 @@ impl TryFrom<&str> for Sr25519Signer {
     type Error = anyhow::Error;
 
     fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
-        let pair =
-            sp_core::sr25519::Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
+        let pair: SrPair = Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
 
         Ok(Self { pair })
     }

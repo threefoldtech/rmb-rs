@@ -2,11 +2,9 @@ mod substrate;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use parity_scale_codec::Decode;
-use serde::{Deserialize, Serialize};
-use sp_core::crypto::AccountId32;
 
 pub use substrate::*;
+use subxt::ext::sp_runtime::AccountId32;
 
 #[async_trait]
 pub trait TwinDB: Send + Sync + 'static {
@@ -14,17 +12,4 @@ pub trait TwinDB: Send + Sync + 'static {
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>>;
 }
 
-#[derive(Clone, Decode, Serialize, Deserialize, Eq, PartialEq, Debug)]
-pub struct EntityProof {
-    pub id: u32,
-    pub signature: String,
-}
-
-#[derive(Clone, Decode, Serialize, Deserialize, Eq, PartialEq, Debug)]
-pub struct Twin {
-    pub version: u32,
-    pub id: u32,
-    pub account: AccountId32,
-    pub address: String, // we use string not IP because the twin address can be a dns name
-    pub entities: Vec<EntityProof>,
-}
+pub use tfchain_client::client::Twin;
