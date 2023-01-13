@@ -127,8 +127,17 @@ async fn app(args: &Args) -> Result<()> {
             // because it's not possible yet to set a full url in the ip field
             // also the client doesn't check the errors returned from the extrensic
             // hence it does not fail although the update failed
-            db.update_twin(&identity.pair(), Some(args.relay.clone()))
-                .await?;
+            let update = db
+                .update_twin(&identity.pair(), Some(args.relay.clone()))
+                .await;
+
+            //TODO: this is a temporary work around because ALL updates
+            // will fail because right now chain accept only IP address
+            // not a full url
+            // the right way of course is to return an error and exit!
+            if let Err(err) = update {
+                log::error!("failed to update twin: {:#}", err);
+            }
         }
     };
 
