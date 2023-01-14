@@ -1,6 +1,6 @@
 mod redis_storage;
 
-use crate::types::{self, EnvelopeExt};
+use crate::types::{self, Address, AddressExt, EnvelopeExt};
 use crate::types::{Backlog, Envelope};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // SUGGESTED FIX: instead of setting TTL on the $cmd queue we can limit the length
     // of the queue. So for example, we allow maximum of 500 message to be on this queue
     // after that we need to trim the queue to specific length after push (so drop older messages)
-    async fn run(&self, msg: JsonRequest) -> Result<()>;
+    async fn run(&self, msg: JsonIncomingRequest) -> Result<()>;
 
     // pushed a json response back to the caller according to his
     // reply queue.
@@ -47,12 +47,12 @@ pub trait Storage: Clone + Send + Sync + 'static {
 }
 
 pub enum JsonMessage {
-    Request(JsonRequest),
+    Request(JsonOutgoingRequest),
     Response(JsonResponse),
 }
 
-impl From<JsonRequest> for JsonMessage {
-    fn from(value: JsonRequest) -> Self {
+impl From<JsonOutgoingRequest> for JsonMessage {
+    fn from(value: JsonOutgoingRequest) -> Self {
         Self::Request(value)
     }
 }
@@ -70,7 +70,7 @@ pub struct JsonError {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonRequest {
+pub struct JsonOutgoingRequest {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
@@ -83,8 +83,6 @@ pub struct JsonRequest {
     pub data: String,
     #[serde(rename = "tag")]
     pub tags: Option<String>,
-    #[serde(rename = "src")]
-    pub source: u32,
     #[serde(rename = "dst")]
     pub destinations: Vec<u32>,
     #[serde(rename = "ret")]
@@ -95,7 +93,7 @@ pub struct JsonRequest {
     pub timestamp: u64,
 }
 
-impl JsonRequest {
+impl JsonOutgoingRequest {
     /// parts return all the components of this message. this include a backlog
     /// object with all the tracking information, and all envelopes (one for)
     /// each destination. each envelope is already stamped with correct time
@@ -128,12 +126,12 @@ impl JsonRequest {
 
         let mut envs: Vec<Envelope>;
         if self.destinations.len() == 1 {
-            env.destination = self.destinations[0];
+            env.destination = Some(self.destinations[0].into()).into();
             envs = vec![env]
         } else {
             envs = Vec::default();
             for dest in self.destinations {
-                env.destination = dest;
+                env.destination = Some(dest.into()).into();
                 envs.push(env.clone());
             }
         }
@@ -141,7 +139,8 @@ impl JsonRequest {
         Ok((backlog, envs, ttl))
     }
 }
-impl redis::ToRedisArgs for JsonRequest {
+
+impl redis::ToRedisArgs for JsonOutgoingRequest {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + redis::RedisWrite,
@@ -151,7 +150,7 @@ impl redis::ToRedisArgs for JsonRequest {
     }
 }
 
-impl redis::FromRedisValue for JsonRequest {
+impl redis::FromRedisValue for JsonOutgoingRequest {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         if let redis::Value::Data(data) = v {
             serde_json::from_slice(data).map_err(|e| {
@@ -170,7 +169,7 @@ impl redis::FromRedisValue for JsonRequest {
     }
 }
 
-impl TryFrom<Envelope> for JsonRequest {
+impl TryFrom<Envelope> for JsonOutgoingRequest {
     type Error = anyhow::Error;
     fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
         if !value.has_request() {
@@ -178,15 +177,90 @@ impl TryFrom<Envelope> for JsonRequest {
         }
         let req = value.take_request();
 
-        Ok(JsonRequest {
+        Ok(JsonOutgoingRequest {
             version: 1,
             reference: Some(value.uid),
             command: req.command,
             expiration: value.expiration,
             data: base64::encode(&req.data),
             tags: value.tags,
-            source: value.source,
-            destinations: vec![value.destination],
+            destinations: vec![value.destination.twin],
+            reply_to: String::default(),
+            schema: String::default(),
+            timestamp: value.timestamp,
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonIncomingRequest {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    #[serde(rename = "src")]
+    pub source: String,
+    #[serde(rename = "cmd")]
+    pub command: String,
+    #[serde(rename = "exp")]
+    pub expiration: u64,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "tag")]
+    pub tags: Option<String>,
+    #[serde(rename = "ret")]
+    pub reply_to: String,
+    #[serde(rename = "shm")]
+    pub schema: String,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+}
+
+impl redis::ToRedisArgs for JsonIncomingRequest {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let bytes = serde_json::to_vec(self).expect("failed to json encode message");
+        out.write_arg(&bytes);
+    }
+}
+
+impl redis::FromRedisValue for JsonIncomingRequest {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            serde_json::from_slice(data).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "cannot decode a message from json {}",
+                    e.to_string(),
+                ))
+            })
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
+    }
+}
+
+impl TryFrom<Envelope> for JsonIncomingRequest {
+    type Error = anyhow::Error;
+    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
+        if !value.has_request() {
+            anyhow::bail!("envelope doesn't hold a request");
+        }
+        let req = value.take_request();
+
+        Ok(JsonIncomingRequest {
+            version: 1,
+            reference: Some(value.uid),
+            command: req.command,
+            expiration: value.expiration,
+            data: base64::encode(&req.data),
+            tags: value.tags,
+            source: value.source.stringify(),
             reply_to: String::default(),
             schema: String::default(),
             timestamp: value.timestamp,
@@ -203,7 +277,7 @@ pub struct JsonResponse {
     #[serde(rename = "dat")]
     pub data: String,
     #[serde(rename = "dst")]
-    pub destination: u32,
+    pub destination: String,
     // #[serde(rename = "shm")]
     // pub schema: String,
     #[serde(rename = "now")]
@@ -263,7 +337,7 @@ impl TryFrom<Envelope> for JsonResponse {
             } else {
                 "".into()
             },
-            destination: env.destination,
+            destination: env.destination.stringify(),
             timestamp: env.timestamp,
             error: if let Body::Error(err) = body {
                 Some(JsonError {
@@ -304,7 +378,11 @@ impl TryFrom<JsonResponse> for Envelope {
         env.uid = value.reference;
         env.timestamp = value.timestamp;
         env.expiration = 3600; // a response has a fixed timeout
-        env.destination = value.destination;
+        env.destination = Some(
+            Address::from_string(value.destination)
+                .context("failed to parse destination address")?,
+        )
+        .into();
         env.set_response(response);
 
         Ok(env)

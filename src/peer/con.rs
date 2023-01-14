@@ -62,7 +62,7 @@ impl Connection {
         };
 
         let u = u.into();
-        let builder = token::TokenBuilder::new(id, signer);
+        let builder = token::TokenBuilder::new(id, None, signer);
         tokio::spawn(retainer(u, builder, writer_rx, reader_tx));
 
         connection

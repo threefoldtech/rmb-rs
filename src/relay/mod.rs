@@ -1,6 +1,6 @@
-use crate::token;
+use crate::token::{self, Claims};
 use crate::twin::TwinDB;
-use crate::types::Envelope;
+use crate::types::{AddressExt, Envelope};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
 use futures::Future;
@@ -27,15 +27,17 @@ mod switch;
 pub use switch::SwitchOptions;
 use switch::{Hook, Switch};
 
+use self::switch::StreamID;
+
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
 struct RelayHook {
-    peer: u32,
+    peer: StreamID,
     switch: Arc<Switch<Self>>,
     writer: Arc<Mutex<Writer>>,
 }
 
 impl RelayHook {
-    fn new(peer: u32, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
         Self {
             peer,
             switch,
@@ -56,7 +58,7 @@ impl Hook for RelayHook {
             return;
         }
 
-        if let Err(err) = self.switch.ack(self.peer, &[id]).await {
+        if let Err(err) = self.switch.ack(&self.peer, &[id]).await {
             log::error!("failed to ack message ({}, {}): {}", self.peer, id, err);
         }
     }
@@ -205,7 +207,7 @@ async fn entry<D: TwinDB>(
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims.id, Arc::clone(&data.switch), websocket).await {
+            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket).await {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -242,7 +244,7 @@ async fn entry<D: TwinDB>(
 
 /// Handle a websocket connection.
 async fn serve_websocket(
-    id: u32,
+    claim: Claims,
     switch: Arc<Switch<RelayHook>>,
     websocket: HyperWebsocket,
 ) -> Result<()> {
@@ -251,8 +253,10 @@ async fn serve_websocket(
 
     // handler is kept alive to keep the registration alive
     // once dropped (connection closed) registration stops
+    let id: StreamID = (claim.id, claim.sid).into();
+    log::debug!("got connection from '{}'", id);
     let mut registration = switch
-        .register(id, RelayHook::new(id, Arc::clone(&switch), writer))
+        .register(id.clone(), RelayHook::new(id, Arc::clone(&switch), writer))
         .await?;
 
     // todo: if the same twin connected twice to the relay the switch will maintain a single registration
@@ -288,10 +292,11 @@ async fn serve_websocket(
                         let envelope =
                             Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
-                        if let Err(err) = switch.send(envelope.destination, &msg).await {
+                        let dst: StreamID = (&envelope.destination).into();
+                        if let Err(err) = switch.send(&dst, &msg).await {
                             log::error!(
                                 "failed to route message to peer '{}': {}",
-                                envelope.destination,
+                                envelope.destination.stringify(),
                                 err
                             );
                         }

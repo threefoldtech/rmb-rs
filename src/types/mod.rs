@@ -1,5 +1,5 @@
 use crate::identity::{Identity, Signer};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bb8_redis::redis;
 use protobuf::Message;
 use std::io::Write;
@@ -38,6 +38,11 @@ pub trait EnvelopeExt: Challengeable {
     }
 
     fn age(&self) -> Duration;
+}
+
+pub trait AddressExt: Sized {
+    fn stringify(&self) -> String;
+    fn from_string<S: AsRef<str>>(s: S) -> Result<Self>;
 }
 
 pub trait Challengeable {
@@ -80,6 +85,42 @@ where
         }
 
         Ok(())
+    }
+}
+
+impl AddressExt for Address {
+    fn from_string<S: AsRef<str>>(s: S) -> Result<Self> {
+        let mut addr = Self::new();
+        let s = s.as_ref();
+        match s.split_once(':') {
+            None => {
+                // assume the entire string is just twin id
+                addr.twin = s.parse().context("invalid address twin id is not number")?;
+            }
+            Some((twin, connection)) => {
+                addr.twin = twin
+                    .parse()
+                    .context("invalid address twin id is not number")?;
+                addr.connection = Some(connection.into());
+            }
+        };
+        Ok(addr)
+    }
+
+    fn stringify(&self) -> String {
+        match self.connection {
+            Some(ref con) => format!("{}:{}", self.twin, con),
+            None => format!("{}", self.twin),
+        }
+    }
+}
+
+impl From<u32> for Address {
+    fn from(value: u32) -> Self {
+        let mut addr = Address::new();
+        addr.twin = value;
+
+        addr
     }
 }
 
@@ -247,6 +288,17 @@ impl Challengeable for types::Response {
     }
 }
 
+impl Challengeable for protobuf::MessageField<Address> {
+    fn challenge<W: Write>(&self, w: &mut W) -> Result<()> {
+        write!(w, "{}", self.twin)?;
+        if let Some(ref con) = self.connection {
+            write!(w, "{}", con)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl Challengeable for Envelope {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.uid)?;
@@ -256,8 +308,8 @@ impl Challengeable for Envelope {
 
         write!(hash, "{}", self.timestamp)?;
         write!(hash, "{}", self.expiration)?;
-        write!(hash, "{}", self.source)?;
-        write!(hash, "{}", self.destination)?;
+        self.source.challenge(hash)?;
+        self.destination.challenge(hash)?;
 
         if let Some(ref message) = self.message {
             match message {

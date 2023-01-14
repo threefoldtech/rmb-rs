@@ -6,6 +6,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::types::{Address, AddressExt};
+
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     #[error("invalid prefix")]
@@ -15,19 +17,24 @@ pub enum ParseError {
 }
 /// StreamID is a type alias for a user id. can be replaced later
 /// but for now we using numeric ids
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct StreamID(u32);
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct StreamID(String);
 
 impl StreamID {
-    #[allow(unused)]
-    pub fn id(&self) -> u32 {
-        self.0
+    pub fn id(&self) -> &str {
+        &self.0
     }
 }
 
 impl Display for StreamID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "stream:{}", self.0)
+    }
+}
+
+impl AsRef<StreamID> for &StreamID {
+    fn as_ref(&self) -> &StreamID {
+        self
     }
 }
 
@@ -38,13 +45,36 @@ impl FromStr for StreamID {
             return Err(ParseError::InvalidPrefix);
         }
 
-        Ok(Self(s[7..].parse()?))
+        Ok(Self(s[7..].into()))
+    }
+}
+
+impl From<&Address> for StreamID {
+    fn from(value: &Address) -> Self {
+        Self(value.stringify())
+    }
+}
+
+impl From<&protobuf::MessageField<Address>> for StreamID {
+    fn from(value: &protobuf::MessageField<Address>) -> Self {
+        Self(value.stringify())
     }
 }
 
 impl From<u32> for StreamID {
     fn from(value: u32) -> Self {
-        Self(value)
+        Self(format!("{}", value))
+    }
+}
+
+impl From<(u32, Option<String>)> for StreamID {
+    fn from((id, sid): (u32, Option<String>)) -> Self {
+        let inner = match sid {
+            Some(sid) => format!("{}:{}", id, sid),
+            None => format!("{}", id),
+        };
+
+        Self(inner)
     }
 }
 
