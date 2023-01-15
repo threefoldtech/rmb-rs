@@ -1,6 +1,6 @@
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
-use crate::types::{AddressExt, Envelope};
+use crate::types::Envelope;
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
 use futures::Future;
@@ -52,6 +52,7 @@ impl Hook for RelayHook {
     where
         T: AsRef<[u8]> + Send + Sync,
     {
+        log::trace!("relaying message {} to peer {}", id, self.peer);
         let mut writer = self.writer.lock().await;
         if let Err(err) = writer.send(Message::Binary(data.as_ref().into())).await {
             log::debug!("failed to forward message to peer: {}", err);
@@ -296,7 +297,7 @@ async fn serve_websocket(
                         if let Err(err) = switch.send(&dst, &msg).await {
                             log::error!(
                                 "failed to route message to peer '{}': {}",
-                                envelope.destination.stringify(),
+                                dst,
                                 err
                             );
                         }

@@ -388,7 +388,7 @@ where
         self.queue.push(Job(stream_id.clone(), connection_id)).await;
 
         Ok(Registration::new(
-            stream_id.clone(),
+            stream_id,
             connection_id,
             Arc::clone(&self.users),
             rx,
@@ -602,7 +602,7 @@ mod test {
         assert_eq!(output.len(), 1);
 
         let messages = &output[0];
-        assert_eq!(messages.0.id(), "0");
+        assert_eq!(messages.0.to_string(), "0");
         let messages = &messages.1;
 
         assert_eq!(messages.len(), 1);
