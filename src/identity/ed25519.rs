@@ -55,7 +55,7 @@ impl Signer for Ed25519Signer {
     }
 
     fn pair(&self) -> KeyPair {
-        KeyPair::Ed25519(self.pair.clone())
+        KeyPair::Ed25519(self.pair)
     }
 }
 
