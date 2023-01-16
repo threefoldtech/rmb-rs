@@ -33,7 +33,7 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/usr/sbin/rmb-relay","-d","--domain", "{{.Values.config.RMB_DOMAIN}}", "-r", "redis://redis:6379", "-s", "{{.Values.config.SUBSTRATE_URL}}", "-u",  "{{.Values.config.USER_PER_WORKER}}", "-w", "{{.Values.config.WORKERS}}", "-l", "0.0.0.0:80" ]
+          command: ["/usr/sbin/rmb-relay","--domain", "{{.Values.config.RMB_DOMAIN}}", "-r", "redis://redis:6379", "-s", "{{.Values.config.SUBSTRATE_URL}}", "-u",  "{{.Values.config.USER_PER_WORKER}}", "-w", "{{.Values.config.WORKERS}}", "-l", "0.0.0.0:80" ]
           ports:
             - name: http
               containerPort: 80

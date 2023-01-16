@@ -8,7 +8,7 @@ name: Create Release
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: rmb-relay
+  IMAGE_NAME: threefoldtech/rmb-relay
 
 jobs:
   build:
