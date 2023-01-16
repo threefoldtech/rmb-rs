@@ -18,8 +18,8 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 use queue::Queue;
-pub use session::MessageID;
 use session::*;
+pub use session::{MessageID, StreamID};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,6 +47,7 @@ const READ_COUNT: usize = 100;
 const READ_BLOCK_MS: usize = 5000; // 5 seconds
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 const QUEUE_MAXLEN: usize = 10000;
+const QUEUE_EXPIRE: usize = 3600; // queues can live max of 1 hour
 
 #[derive(thiserror::Error, Debug)]
 pub enum SwitchError {
@@ -362,7 +363,7 @@ where
         }
     }
 
-    pub async fn register(&self, id: u32, hook: H) -> Result<Registration<H>> {
+    pub async fn register<ID: Into<StreamID>>(&self, id: ID, hook: H) -> Result<Registration<H>> {
         // to make sure
         let stream_id: StreamID = id.into();
         let connection_id = ConnectionID::new();
@@ -378,13 +379,13 @@ where
         // this overrides the previous user object. which means workers who
         // has been handling this user connection should forget about him and
         // don't wait on messages for it anymore.
-        if let Some(old) = map.insert(stream_id, user) {
+        if let Some(old) = map.insert(stream_id.clone(), user) {
             // old registration if exists should be used to close the
             // join handler.
             old.cancel();
         }
 
-        self.queue.push(Job(stream_id, connection_id)).await;
+        self.queue.push(Job(stream_id.clone(), connection_id)).await;
 
         Ok(Registration::new(
             stream_id,
@@ -394,12 +395,12 @@ where
         ))
     }
 
-    pub async fn ack(&self, id: u32, ids: &[MessageID]) -> Result<()> {
+    pub async fn ack<ID: AsRef<StreamID>>(&self, id: ID, ids: &[MessageID]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
 
-        let id: StreamID = id.into();
+        let id = id.as_ref();
         let mut con = self.pool.get().await?;
         let mut c = cmd("XDEL");
         let mut c = c.arg(id);
@@ -412,11 +413,15 @@ where
         Ok(())
     }
 
-    pub async fn send<T: AsRef<[u8]>>(&self, id: u32, msg: T) -> Result<MessageID> {
-        let id: StreamID = id.into();
+    pub async fn send<ID: AsRef<StreamID>, T: AsRef<[u8]>>(
+        &self,
+        id: ID,
+        msg: T,
+    ) -> Result<MessageID> {
+        let stream_id = id.as_ref();
         let mut con = self.pool.get().await?;
-        let id: MessageID = cmd("XADD")
-            .arg(id)
+        let msg_id: MessageID = cmd("XADD")
+            .arg(stream_id)
             .arg("MAXLEN")
             .arg("~")
             .arg(QUEUE_MAXLEN)
@@ -426,9 +431,15 @@ where
             .query_async(&mut *con)
             .await?;
 
+        cmd("EXPIRE")
+            .arg(stream_id)
+            .arg(QUEUE_EXPIRE)
+            .query_async(&mut *con)
+            .await?;
+
         MESSAGE_RX.inc();
 
-        Ok(id)
+        Ok(msg_id)
     }
 }
 
@@ -485,7 +496,7 @@ where
         // dropped his registration handler so what we need to do
         // is
         if let Some(users) = self.users.take() {
-            let id = self.id;
+            let id = self.id.clone();
             let con = self.con;
             tokio::spawn(async move {
                 let mut m = users.write().await;
@@ -567,7 +578,7 @@ mod test {
         let stream = StreamID::from(0);
         let msg = "hello world";
         let _: () = cmd("XADD")
-            .arg(stream)
+            .arg(stream.clone())
             .arg("MAXLEN")
             .arg(1)
             .arg("*")
@@ -591,7 +602,7 @@ mod test {
         assert_eq!(output.len(), 1);
 
         let messages = &output[0];
-        assert_eq!(messages.0.id(), 0);
+        assert_eq!(messages.0.to_string(), "0");
         let messages = &messages.1;
 
         assert_eq!(messages.len(), 1);

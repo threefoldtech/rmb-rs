@@ -49,6 +49,10 @@ struct Args {
     /// enable debugging logs
     #[clap(short, long)]
     debug: bool,
+
+    /// skip twin update on chain if relay is not matching. only used for debugging
+    #[clap(long = "no-update")]
+    no_update: bool,
 }
 
 async fn app(args: &Args) -> Result<()> {
@@ -107,39 +111,43 @@ async fn app(args: &Args) -> Result<()> {
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
 
-    // we need to make sure our twin is up to date
-    let twin = db
-        .get_twin(id)
-        .await
-        .context("failed to get twin details")?
-        .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
+    if !args.no_update {
+        // try to check and update the twin info on chain
 
-    match twin.relay {
-        Some(relay) if relay == args.relay => {}
-        _ => {
-            // remote relay is not the same as configure one. update is needed
-            log::info!(
-                "update twin details on the chain with relay address: {}",
-                args.relay
-            );
+        // we need to make sure our twin is up to date
+        let twin = db
+            .get_twin(id)
+            .await
+            .context("failed to get twin details")?
+            .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
 
-            // TODO: this code will probably fail (silently) against devnet
-            // because it's not possible yet to set a full url in the ip field
-            // also the client doesn't check the errors returned from the extrensic
-            // hence it does not fail although the update failed
-            let update = db
-                .update_twin(&identity.pair(), Some(args.relay.clone()))
-                .await;
+        match twin.relay {
+            Some(relay) if relay == args.relay => {}
+            _ => {
+                // remote relay is not the same as configure one. update is needed
+                log::info!(
+                    "update twin details on the chain with relay address: {}",
+                    args.relay
+                );
 
-            //TODO: this is a temporary work around because ALL updates
-            // will fail because right now chain accept only IP address
-            // not a full url
-            // the right way of course is to return an error and exit!
-            if let Err(err) = update {
-                log::error!("failed to update twin: {:#}", err);
+                // TODO: this code will probably fail (silently) against devnet
+                // because it's not possible yet to set a full url in the ip field
+                // also the client doesn't check the errors returned from the extrensic
+                // hence it does not fail although the update failed
+                let update = db
+                    .update_twin(&identity.pair(), Some(args.relay.clone()))
+                    .await;
+
+                //TODO: this is a temporary work around because ALL updates
+                // will fail because right now chain accept only IP address
+                // not a full url
+                // the right way of course is to return an error and exit!
+                if let Err(err) = update {
+                    log::error!("failed to update twin: {:#}", err);
+                }
             }
-        }
-    };
+        };
+    }
 
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);

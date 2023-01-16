@@ -1,6 +1,8 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::{Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError};
+use crate::types::{
+    Address, AddressExt, Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError,
+};
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
 use std::sync::Arc;
@@ -12,7 +14,7 @@ use url::Url;
 mod con;
 pub mod storage;
 use con::{Connection, Writer};
-use storage::{JsonRequest, JsonResponse};
+use storage::{JsonIncomingRequest, JsonOutgoingRequest, JsonResponse};
 
 #[derive(thiserror::Error, Debug)]
 enum EnvelopeErrorKind {
@@ -61,7 +63,7 @@ where
     G: Signer + Clone,
     D: TwinDB + Clone,
 {
-    id: u32,
+    address: Address,
     storage: S,
     signer: G,
     // this is wrapped in an option
@@ -76,10 +78,12 @@ where
     G: Signer + Clone + Send + Sync + 'static,
     D: TwinDB + Clone,
 {
-    pub async fn new(rely: Url, id: u32, signer: G, storage: S, db: D) -> Self {
-        let con = Connection::connect(rely, id, signer.clone());
+    pub async fn new(rely: Url, twin: u32, signer: G, storage: S, db: D) -> Self {
+        let con = Connection::connect(rely, twin, signer.clone());
+        let mut address = Address::new();
+        address.twin = twin;
         Self {
-            id,
+            address,
             storage,
             signer,
             con: Some(con),
@@ -103,7 +107,7 @@ where
 
         let twin = self
             .db
-            .get_twin(envelope.source)
+            .get_twin(envelope.source.twin)
             .await
             .map_err(EnvelopeErrorKind::GetTwin)?
             .ok_or(EnvelopeErrorKind::UnknownTwin)?;
@@ -113,7 +117,7 @@ where
             .map_err(EnvelopeErrorKind::InvalidSignature)?;
 
         if envelope.has_request() {
-            let request: JsonRequest = envelope
+            let request: JsonIncomingRequest = envelope
                 .try_into()
                 .context("failed to get request from envelope")?;
             return self
@@ -166,7 +170,7 @@ where
 
             // we track these here in case we need to send an error
             let uid = envelope.uid.clone();
-            let source = envelope.source;
+            let source = envelope.source.clone();
             match peer.process_envelope(envelope).await {
                 Ok(_) => {}
                 Err(ProcessError::Envelope(kind)) => {
@@ -193,7 +197,7 @@ where
     }
 
     // handle outgoing requests
-    async fn request(&self, writer: &Writer, request: JsonRequest) -> Result<()> {
+    async fn request(&self, writer: &Writer, request: JsonOutgoingRequest) -> Result<()> {
         // genepeerrate an id?
         let uid = uuid::Uuid::new_v4().to_string();
         let (backlog, envelopes, ttl) = request.parts()?;
@@ -204,7 +208,7 @@ where
 
         for mut envelope in envelopes {
             envelope.uid = uid.clone();
-            envelope.source = self.id;
+            envelope.source = Some(self.address.clone()).into();
             envelope.stamp();
             envelope.ttl().context("message has expired")?;
             envelope.sign(&self.signer);
@@ -212,10 +216,11 @@ where
                 .write_to_bytes()
                 .context("failed to serialize envelope")?;
 
-            log::trace!(
-                "pushing outgoing request: {} -> {}",
+            log::debug!(
+                "pushing outgoing request from ({}): {} -> {}",
+                envelope.source.stringify(),
                 envelope.uid,
-                envelope.destination
+                envelope.destination.stringify()
             );
 
             writer.write(Message::Binary(bytes)).await?;
@@ -225,7 +230,7 @@ where
     }
 
     async fn send(&self, writer: &Writer, mut envelope: Envelope) -> Result<()> {
-        envelope.source = self.id;
+        envelope.source = Some(self.address.clone()).into();
         envelope.stamp();
         envelope
             .ttl()
@@ -235,7 +240,7 @@ where
             .write_to_bytes()
             .context("failed to serialize envelope")?;
         log::trace!(
-            "pushing outgoing response: {} -> {}",
+            "pushing outgoing response: {} -> {:?}",
             envelope.uid,
             envelope.destination
         );

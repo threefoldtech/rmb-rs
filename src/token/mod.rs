@@ -22,18 +22,26 @@ pub enum Error {
 pub struct TokenBuilder<S: Signer> {
     id: u32,
     signer: S,
+    sid: Option<String>,
 }
 
 impl<S> TokenBuilder<S>
 where
     S: Signer,
 {
-    pub fn new(id: u32, signer: S) -> Self {
-        Self { id, signer }
+    /// create a new token build with this twin `id` and optional `sid` (session id)
+    /// a peer can maintain only 1 connection per (id, sid). An rmb-peer always use
+    /// sid = None, hence you cannot run 2 instance of rmb-peer with the same identity
+    /// other connections for the same twin has to have their own session id.
+    ///
+    /// a signer is used to sign the jwt token for validation.
+    pub fn new(id: u32, sid: Option<String>, signer: S) -> Self {
+        Self { id, signer, sid }
     }
 
+    /// get the token as string.
     pub fn token(&self, age: u64) -> Result<String, Error> {
-        token(&self.signer, self.id, age)
+        token(&self.signer, self.id, self.sid.clone(), age)
     }
 }
 
@@ -41,6 +49,8 @@ where
 pub struct Claims {
     #[serde(rename = "sub")]
     pub id: u32,
+    #[serde(rename = "sid")]
+    pub sid: Option<String>,
     #[serde(rename = "iat")]
     pub timestamp: u64,
     #[serde(rename = "exp")]
@@ -55,13 +65,19 @@ fn now() -> Result<u64, Error> {
 }
 
 /// create a new jwt token given the signer, id of the twin, and expiration (age) in seconds
-pub fn token<S: Signer>(signer: &S, id: u32, age: u64) -> Result<String, Error> {
+pub fn token<S: Signer>(
+    signer: &S,
+    id: u32,
+    sid: Option<String>,
+    age: u64,
+) -> Result<String, Error> {
     // get timestamp
     let now = now()?;
 
     let signer: JwtSigner<_> = signer.into();
     let claims = Claims {
         id,
+        sid,
         timestamp: now,
         ttl: age,
     };
@@ -106,7 +122,7 @@ mod test {
         let signer = Sr25519Signer::try_from("//Alice").unwrap();
         //let identity = signer.account();
 
-        let token = super::token(&signer, 100, 20).unwrap();
+        let token = super::token(&signer, 100, None, 20).unwrap();
 
         let claims: super::Claims = token.parse().unwrap();
 
@@ -119,7 +135,7 @@ mod test {
         let signer = Ed25519Signer::try_from("//Alice").unwrap();
         //let identity = signer.account();
 
-        let token = super::token(&signer, 100, 20).unwrap();
+        let token = super::token(&signer, 100, None, 20).unwrap();
 
         let claims: super::Claims = token.parse().unwrap();
 

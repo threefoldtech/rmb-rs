@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::types::Backlog;
 
-use super::{JsonMessage, JsonRequest, JsonResponse, Storage};
+use super::{JsonIncomingRequest, JsonMessage, JsonOutgoingRequest, JsonResponse, Storage};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
@@ -155,7 +155,7 @@ impl Storage for RedisStorage {
         self.get_from(BacklogKey(uid)).await
     }
 
-    async fn run(&self, mut request: JsonRequest) -> Result<()> {
+    async fn run(&self, mut request: JsonIncomingRequest) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
         request.reply_to = Queue::Response.to_string();
@@ -186,7 +186,7 @@ impl Storage for RedisStorage {
         let (queue, value): (String, Value) = conn.brpop(queues, 0).await?;
 
         let msg: JsonMessage = if queue == req_queue {
-            JsonRequest::from_redis_value(&value)
+            JsonOutgoingRequest::from_redis_value(&value)
                 .context("failed to load json request")?
                 .into()
         } else {
