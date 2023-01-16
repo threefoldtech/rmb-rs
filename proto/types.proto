@@ -59,4 +59,7 @@ message Envelope {
   }
   // signature
   optional bytes signature = 9;
+
+  // schema of the payload of either the request or the resposne message.
+  optional string schema = 10;
 }
