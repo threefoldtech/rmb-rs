@@ -5,10 +5,10 @@
 replicaCount: 1
 
 image:
-  repository: threefoldtech/rmb-relay
+  repository: ghcr.io/threefoldtech/rmb-relay
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "v1.0.0-rc2"
+  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""
