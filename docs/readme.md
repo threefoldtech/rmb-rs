@@ -54,9 +54,12 @@ To make it easy for apps to work behind an `rmb-peer`, we use JSON message for c
 maintains a fully binary communication with the relay.
 
 A request message is defined as follows
+##### Output requests
+This is created by a client who wants to request make a request to a remote service
+
 ```rust
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonRequest {
+pub struct JsonOutgoingRequest {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
@@ -69,8 +72,6 @@ pub struct JsonRequest {
     pub data: String,
     #[serde(rename = "tag")]
     pub tags: Option<String>,
-    #[serde(rename = "src")]
-    pub source: u32,
     #[serde(rename = "dst")]
     pub destinations: Vec<u32>,
     #[serde(rename = "ret")]
@@ -81,7 +82,9 @@ pub struct JsonRequest {
     pub timestamp: u64,
 }
 ```
-A response message is defined as follows
+##### Response
+A response message is defined as follows this is what is generated as a response by a service and also what is received
+by the client as a response to the Outgoing Request
 ```rust
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonError {
@@ -98,12 +101,41 @@ pub struct JsonResponse {
     #[serde(rename = "dat")]
     pub data: String,
     #[serde(rename = "dst")]
-    pub destination: u32,
-    // #[serde(rename = "shm")]
-    // pub schema: String,
+    pub destination: String,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
     pub error: Option<JsonError>,
 }
 ```
+
+##### Incoming Request
+An incoming request is a modified version of the request that is received by a service running behind RMB peer
+```rust
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonIncomingRequest {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    #[serde(rename = "src")]
+    pub source: String,
+    #[serde(rename = "cmd")]
+    pub command: String,
+    #[serde(rename = "exp")]
+    pub expiration: u64,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "tag")]
+    pub tags: Option<String>,
+    #[serde(rename = "ret")]
+    pub reply_to: String,
+    #[serde(rename = "shm")]
+    pub schema: String,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+}
+```
+
+Services that receive this needs to make sure their responses `destination` to have the same value as the incoming request `source`

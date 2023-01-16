@@ -88,7 +88,7 @@ pub struct JsonOutgoingRequest {
     #[serde(rename = "ret")]
     pub reply_to: String,
     #[serde(rename = "shm")]
-    pub schema: String,
+    pub schema: Option<String>,
     #[serde(rename = "now")]
     pub timestamp: u64,
 }
@@ -119,6 +119,7 @@ impl JsonOutgoingRequest {
         env.timestamp = self.timestamp;
         env.expiration = self.expiration;
         env.signature = None;
+        env.schema = self.schema;
         env.set_request(request);
 
         env.stamp();
@@ -186,7 +187,7 @@ impl TryFrom<Envelope> for JsonOutgoingRequest {
             tags: value.tags,
             destinations: vec![value.destination.twin],
             reply_to: String::default(),
-            schema: String::default(),
+            schema: value.schema,
             timestamp: value.timestamp,
         })
     }
@@ -211,7 +212,7 @@ pub struct JsonIncomingRequest {
     #[serde(rename = "ret")]
     pub reply_to: String,
     #[serde(rename = "shm")]
-    pub schema: String,
+    pub schema: Option<String>,
     #[serde(rename = "now")]
     pub timestamp: u64,
 }
@@ -262,7 +263,7 @@ impl TryFrom<Envelope> for JsonIncomingRequest {
             tags: value.tags,
             source: value.source.stringify(),
             reply_to: String::default(),
-            schema: String::default(),
+            schema: value.schema,
             timestamp: value.timestamp,
         })
     }
@@ -278,8 +279,8 @@ pub struct JsonResponse {
     pub data: String,
     #[serde(rename = "dst")]
     pub destination: String,
-    // #[serde(rename = "shm")]
-    // pub schema: String,
+    #[serde(rename = "shm")]
+    pub schema: Option<String>,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
@@ -339,6 +340,7 @@ impl TryFrom<Envelope> for JsonResponse {
             },
             destination: env.destination.stringify(),
             timestamp: env.timestamp,
+            schema: env.schema,
             error: if let Body::Error(err) = body {
                 Some(JsonError {
                     code: err.code,
@@ -384,6 +386,7 @@ impl TryFrom<JsonResponse> for Envelope {
         )
         .into();
         env.set_response(response);
+        env.schema = value.schema;
 
         Ok(env)
     }
