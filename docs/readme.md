@@ -26,8 +26,10 @@ This rmb-peer tool makes it possible to run multiple services behind this twin a
 ## Overview of the operation of RMB relay
 ![relay](png/relay.png)
 
-> NOTE: the relay can maintain **ONLY** one connection per twin. If 2 connections claims they have the same twin identity (after identity is proved) the later connection
-will be kept and the older connection will be dropped. This is for security reasons
+### Connections
+The relay can maintain **MULTIPLE** connections per peer given that each connection has a unique **SID** (session id). But for each (twin-id, session-id) combo there can be only one connection. if a new connection with the same (twin-id, session-id) is created, the older connection is dropped.
+
+The `rmb-peer` process reserved the `None` sid. It connection with No session id, hence you can only run one `rmb-peer` per `twin` (identity). But the same twin (identity) can make other connection with other rmb clients (for example rmb-sdk-go direct client) to establish more connections with unique session ids.
 
 ### Peer
 Any language or code that can open `WebSocket` connection to the relay can work as a peer. A peer need to do the following:
