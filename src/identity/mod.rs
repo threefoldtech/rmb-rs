@@ -130,6 +130,7 @@ where
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Signers {
     Ed25519(Ed25519Signer),

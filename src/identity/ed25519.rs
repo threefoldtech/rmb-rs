@@ -111,11 +111,11 @@ mod tests {
 
     #[test]
     fn test_load_from_seed() {
-        let s = Ed25519Signer::try_from(SEED).expect("key must be loaded");
+        let _ = Ed25519Signer::try_from(SEED).expect("key must be loaded");
 
         let result = hex::decode(&SEED[2..SEED.len()]).expect("must be decoded");
 
-        let bytes: [u8; 32] = result.as_slice().try_into().expect("key of size 32");
+        let _: [u8; 32] = result.as_slice().try_into().expect("key of size 32");
 
         let err = Ed25519Signer::try_from("0xinvalidseed");
         assert_eq!(err.is_err(), true);

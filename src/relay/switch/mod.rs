@@ -342,6 +342,9 @@ where
 
                 // no more sessions to serve
                 if connections.is_empty() {
+                    // make sure to set this back to 0
+                    CON_PER_WORKER.with_label_values(&[&name]).set(0);
+
                     break 'inner;
                 }
 
