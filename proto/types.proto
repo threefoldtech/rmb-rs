@@ -30,7 +30,7 @@ message Response {
 // about the message.
 message Backlog {
   string uid = 1;
-  string reference = 2;
+  optional string reference = 2;
   string reply_to = 3;
 }
 

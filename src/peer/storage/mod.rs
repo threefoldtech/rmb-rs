@@ -105,7 +105,7 @@ impl JsonOutgoingRequest {
         // that's the part of the request that stays locally
         let mut backlog = types::Backlog::new();
         backlog.reply_to = self.reply_to;
-        backlog.reference = self.reference.unwrap_or_default();
+        backlog.reference = self.reference;
 
         // create an (incomplete) envelope
         let mut request = types::Request::new();
@@ -274,7 +274,7 @@ pub struct JsonResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
-    pub reference: String,
+    pub reference: Option<String>,
     #[serde(rename = "dat")]
     pub data: String,
     #[serde(rename = "dst")]
@@ -332,7 +332,7 @@ impl TryFrom<Envelope> for JsonResponse {
 
         let response = JsonResponse {
             version: 1,
-            reference: String::default(),
+            reference: None,
             data: if let Body::Reply(ref reply) = body {
                 base64::encode(&reply.data)
             } else {
@@ -377,7 +377,7 @@ impl TryFrom<JsonResponse> for Envelope {
 
         let mut env = Envelope::new();
 
-        env.uid = value.reference;
+        env.uid = value.reference.unwrap_or_default();
         env.timestamp = value.timestamp;
         env.expiration = 3600; // a response has a fixed timeout
         env.destination = Some(

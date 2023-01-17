@@ -1,7 +1,7 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
 use crate::types::{
-    Address, AddressExt, Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError,
+    Address, Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError,
 };
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
@@ -16,6 +16,8 @@ pub mod storage;
 use con::{Connection, Writer};
 use storage::{JsonIncomingRequest, JsonOutgoingRequest, JsonResponse};
 
+use self::storage::JsonError;
+
 #[derive(thiserror::Error, Debug)]
 enum EnvelopeErrorKind {
     #[error("failed to validate envelope: {0}")]
@@ -26,6 +28,8 @@ enum EnvelopeErrorKind {
     GetTwin(anyhow::Error),
     #[error("twin not found")]
     UnknownTwin,
+    #[error("unknown built-in command '{0}'")]
+    UnknownCommand(String),
     #[error("{0}")]
     Other(anyhow::Error),
 }
@@ -37,7 +41,17 @@ impl EnvelopeErrorKind {
             Self::InvalidSignature(_) => 257,
             Self::GetTwin(_) => 258,
             Self::UnknownTwin => 259,
-            Self::Other(_) => 260,
+            Self::UnknownCommand(_) => 260,
+            Self::Other(_) => 500,
+        }
+    }
+}
+
+impl From<EnvelopeErrorKind> for JsonError {
+    fn from(value: EnvelopeErrorKind) -> Self {
+        Self {
+            code: value.code(),
+            message: value.to_string(),
         }
     }
 }
@@ -102,7 +116,7 @@ where
         Ok(Some(envelope))
     }
 
-    async fn process_envelope(&self, envelope: Envelope) -> Result<(), ProcessError> {
+    async fn handle_envelope(&self, envelope: Envelope) -> Result<(), ProcessError> {
         envelope.valid().map_err(EnvelopeErrorKind::Validation)?;
 
         let twin = self
@@ -157,7 +171,8 @@ where
         Ok(())
     }
 
-    async fn process(peer: Arc<Self>, mut reader: Connection) {
+    // handler for incoming envelopes from the relay
+    async fn handler(peer: Arc<Self>, mut reader: Connection) {
         while let Some(input) = reader.read().await {
             let envelope = match peer.parse(input) {
                 Ok(Some(env)) => env,
@@ -171,10 +186,13 @@ where
             // we track these here in case we need to send an error
             let uid = envelope.uid.clone();
             let source = envelope.source.clone();
-            match peer.process_envelope(envelope).await {
+            match peer.handle_envelope(envelope).await {
                 Ok(_) => {}
                 Err(ProcessError::Envelope(kind)) => {
-                    // send a response back to caller!
+                    // while processing incoming envelope, error happened
+                    // but this error happened after the envelope has been
+                    // decoded, so we have enough information to actually send
+                    // back an error response.
                     let mut e = MessageError::new();
                     e.code = kind.code();
                     e.message = kind.to_string();
@@ -198,7 +216,7 @@ where
 
     // handle outgoing requests
     async fn request(&self, writer: &Writer, request: JsonOutgoingRequest) -> Result<()> {
-        // genepeerrate an id?
+        // generate an id?
         let uid = uuid::Uuid::new_v4().to_string();
         let (backlog, envelopes, ttl) = request.parts()?;
         self.storage
@@ -209,24 +227,46 @@ where
         for mut envelope in envelopes {
             envelope.uid = uid.clone();
             envelope.source = Some(self.address.clone()).into();
-            envelope.stamp();
-            envelope.ttl().context("message has expired")?;
-            envelope.sign(&self.signer);
-            let bytes = envelope
-                .write_to_bytes()
-                .context("failed to serialize envelope")?;
 
-            log::debug!(
-                "pushing outgoing request from ({}): {} -> {}",
-                envelope.source.stringify(),
-                envelope.uid,
-                envelope.destination.stringify()
-            );
-
-            writer.write(Message::Binary(bytes)).await?;
+            self.send(writer, envelope).await?;
         }
 
         Ok(())
+    }
+
+    // handle outgoing requests (so sent by a client to the peer) but command is prefixed
+    // with `rmb.` which makes it internal command. rmb can then process this differently
+    // and send a reply back to caller.
+    async fn request_builtin(&self, _writer: &Writer, request: JsonOutgoingRequest) -> Result<()> {
+        // pushing an error back to caller
+        // implement handlers for different
+        self.storage
+            .reply(
+                &request.reply_to,
+                JsonResponse {
+                    version: 1,
+                    reference: request.reference,
+                    data: String::default(),
+                    destination: String::default(),
+                    schema: None,
+                    timestamp: 0,
+                    error: Some(EnvelopeErrorKind::UnknownCommand(request.command).into()),
+                },
+            )
+            .await
+    }
+
+    // handle outgoing responses
+    async fn response(&self, writer: &Writer, response: JsonResponse) -> Result<()> {
+        // that's a reply message that is initiated locally and need to be
+        // sent to a remote peer
+        self.send(
+            writer,
+            response
+                .try_into()
+                .context("failed to build envelope from response")?,
+        )
+        .await
     }
 
     async fn send(&self, writer: &Writer, mut envelope: Envelope) -> Result<()> {
@@ -249,19 +289,6 @@ where
         Ok(())
     }
 
-    // handle outgoing responses
-    async fn response(&self, writer: &Writer, response: JsonResponse) -> Result<()> {
-        // that's a reply message that is initiated locally and need to be
-        // sent to a remote peer
-        self.send(
-            writer,
-            response
-                .try_into()
-                .context("failed to build envelope from response")?,
-        )
-        .await
-    }
-
     pub async fn start(mut self) -> Result<()> {
         use tokio::time::sleep;
         let wait = Duration::from_secs(1);
@@ -270,7 +297,7 @@ where
         let pinger = con.writer();
         let peer = Arc::new(self);
         // start a processor for incoming message
-        tokio::spawn(Self::process(Arc::clone(&peer), con));
+        tokio::spawn(Self::handler(Arc::clone(&peer), con));
 
         // start a routine to send pings to server every 20 seconds
         tokio::spawn(async move {
@@ -293,6 +320,9 @@ where
             };
 
             let ret = match msg {
+                storage::JsonMessage::Request(request) if request.command.starts_with("rmb.") => {
+                    peer.request_builtin(&writer, request).await
+                }
                 storage::JsonMessage::Request(request) => peer.request(&writer, request).await,
                 storage::JsonMessage::Response(response) => peer.response(&writer, response).await,
             };
