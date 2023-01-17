@@ -11,6 +11,7 @@ use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
+mod builtin;
 mod con;
 pub mod storage;
 use con::{Connection, Writer};
@@ -42,7 +43,7 @@ impl EnvelopeErrorKind {
             Self::GetTwin(_) => 258,
             Self::UnknownTwin => 259,
             Self::UnknownCommand(_) => 260,
-            Self::Other(_) => 500,
+            Self::Other(_) => 300,
         }
     }
 }
@@ -57,7 +58,7 @@ impl From<EnvelopeErrorKind> for JsonError {
 }
 
 #[derive(thiserror::Error, Debug)]
-enum ProcessError {
+enum PeerError {
     #[error("received invalid message type")]
     InvalidMessage,
 
@@ -69,6 +70,26 @@ enum ProcessError {
 
     #[error("{0}")]
     Other(#[from] anyhow::Error),
+}
+
+impl PeerError {
+    fn code(&self) -> u32 {
+        match self {
+            Self::InvalidMessage => 1,
+            Self::InvalidPayload(_) => 2,
+            Self::Envelope(k) => k.code(),
+            Self::Other(_) => 500,
+        }
+    }
+}
+
+impl From<PeerError> for JsonError {
+    fn from(value: PeerError) -> Self {
+        Self {
+            code: value.code(),
+            message: value.to_string(),
+        }
+    }
 }
 
 pub struct Peer<S, G, D>
@@ -105,18 +126,18 @@ where
         }
     }
 
-    fn parse(&self, msg: Message) -> Result<Option<Envelope>, ProcessError> {
+    fn parse(&self, msg: Message) -> Result<Option<Envelope>, PeerError> {
         let bytes = match msg {
             Message::Pong(_) => return Ok(None),
             Message::Binary(bytes) => bytes,
-            _ => return Err(ProcessError::InvalidMessage),
+            _ => return Err(PeerError::InvalidMessage),
         };
 
         let envelope = Envelope::parse_from_bytes(&bytes)?;
         Ok(Some(envelope))
     }
 
-    async fn handle_envelope(&self, envelope: Envelope) -> Result<(), ProcessError> {
+    async fn handle_envelope(&self, envelope: Envelope) -> Result<(), PeerError> {
         envelope.valid().map_err(EnvelopeErrorKind::Validation)?;
 
         let twin = self
@@ -139,7 +160,7 @@ where
                 .run(request)
                 .await
                 .map_err(EnvelopeErrorKind::Other)
-                .map_err(ProcessError::Envelope);
+                .map_err(PeerError::Envelope);
         }
 
         log::trace!("received a response: {}", envelope.uid);
@@ -188,7 +209,7 @@ where
             let source = envelope.source.clone();
             match peer.handle_envelope(envelope).await {
                 Ok(_) => {}
-                Err(ProcessError::Envelope(kind)) => {
+                Err(PeerError::Envelope(kind)) => {
                     // while processing incoming envelope, error happened
                     // but this error happened after the envelope has been
                     // decoded, so we have enough information to actually send
@@ -215,7 +236,11 @@ where
     }
 
     // handle outgoing requests
-    async fn request(&self, writer: &Writer, request: JsonOutgoingRequest) -> Result<()> {
+    async fn request(
+        &self,
+        writer: &Writer,
+        request: JsonOutgoingRequest,
+    ) -> Result<(), PeerError> {
         // generate an id?
         let uid = uuid::Uuid::new_v4().to_string();
         let (backlog, envelopes, ttl) = request.parts()?;
@@ -237,23 +262,12 @@ where
     // handle outgoing requests (so sent by a client to the peer) but command is prefixed
     // with `rmb.` which makes it internal command. rmb can then process this differently
     // and send a reply back to caller.
-    async fn request_builtin(&self, _writer: &Writer, request: JsonOutgoingRequest) -> Result<()> {
-        // pushing an error back to caller
-        // implement handlers for different
-        self.storage
-            .reply(
-                &request.reply_to,
-                JsonResponse {
-                    version: 1,
-                    reference: request.reference,
-                    data: String::default(),
-                    destination: String::default(),
-                    schema: None,
-                    timestamp: 0,
-                    error: Some(EnvelopeErrorKind::UnknownCommand(request.command).into()),
-                },
-            )
-            .await
+    async fn request_builtin(
+        &self,
+        _writer: &Writer,
+        request: JsonOutgoingRequest,
+    ) -> Result<(), PeerError> {
+        Err(EnvelopeErrorKind::UnknownCommand(request.command).into())
     }
 
     // handle outgoing responses
@@ -319,15 +333,43 @@ where
                 }
             };
 
-            let ret = match msg {
-                storage::JsonMessage::Request(request) if request.command.starts_with("rmb.") => {
-                    peer.request_builtin(&writer, request).await
-                }
-                storage::JsonMessage::Request(request) => peer.request(&writer, request).await,
+            let result = match msg {
                 storage::JsonMessage::Response(response) => peer.response(&writer, response).await,
+                storage::JsonMessage::Request(request) => {
+                    let reply_to = request.reply_to.clone();
+                    let reference = request.reference.clone();
+
+                    let result = if request.command.starts_with("rmb.") {
+                        peer.request_builtin(&writer, request).await
+                    } else {
+                        peer.request(&writer, request).await
+                    };
+                    // failure to process the request then we can simply
+                    // push a response back directly to the client
+                    if let Err(err) = result {
+                        // we failed to process
+                        // self.storage
+                        peer.storage
+                            .reply(
+                                &reply_to,
+                                JsonResponse {
+                                    version: 1,
+                                    reference: reference,
+                                    data: String::default(),
+                                    destination: String::default(),
+                                    schema: None,
+                                    timestamp: 0,
+                                    error: Some(err.into()),
+                                },
+                            )
+                            .await?
+                    }
+
+                    Ok(())
+                }
             };
 
-            if let Err(err) = ret {
+            if let Err(err) = result {
                 log::error!("failed to process message: {}", err);
             }
         }
