@@ -11,7 +11,6 @@ use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
-mod builtin;
 mod con;
 pub mod storage;
 use con::{Connection, Writer};
@@ -38,12 +37,12 @@ enum EnvelopeErrorKind {
 impl EnvelopeErrorKind {
     fn code(&self) -> u32 {
         match self {
-            Self::Validation(_) => 256,
-            Self::InvalidSignature(_) => 257,
-            Self::GetTwin(_) => 258,
-            Self::UnknownTwin => 259,
-            Self::UnknownCommand(_) => 260,
-            Self::Other(_) => 300,
+            Self::Validation(_) => 300,
+            Self::InvalidSignature(_) => 301,
+            Self::GetTwin(_) => 302,
+            Self::UnknownTwin => 303,
+            Self::UnknownCommand(_) => 304,
+            Self::Other(_) => 305,
         }
     }
 }
@@ -75,9 +74,13 @@ enum PeerError {
 impl PeerError {
     fn code(&self) -> u32 {
         match self {
-            Self::InvalidMessage => 1,
-            Self::InvalidPayload(_) => 2,
+            // range 100
+            Self::InvalidMessage => 100,
+            // range 200
+            Self::InvalidPayload(_) => 200,
+            // range 300
             Self::Envelope(k) => k.code(),
+            // range 500
             Self::Other(_) => 500,
         }
     }
