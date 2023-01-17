@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 
 include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
+pub use peer::*;
 pub use types::*;
 
 #[derive(thiserror::Error, Debug)]

@@ -26,14 +26,6 @@ message Response {
   }
 }
 
-// Backlog is some "routing" infomation
-// about the message.
-message Backlog {
-  string uid = 1;
-  optional string reference = 2;
-  string reply_to = 3;
-}
-
 message Address {
   uint32 twin = 1;
   optional string connection = 2;

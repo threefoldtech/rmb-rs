@@ -5,13 +5,14 @@ use crate::types::{
 };
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
-use std::sync::Arc;
 use std::time::Duration;
 use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
+mod builtin;
 mod con;
+
 pub mod storage;
 use con::{Connection, Writer};
 use storage::{JsonIncomingRequest, JsonOutgoingRequest, JsonResponse};
@@ -106,7 +107,7 @@ where
     signer: G,
     // this is wrapped in an option
     // to support take()
-    con: Option<Connection>,
+    con: Connection,
     db: D,
 }
 
@@ -124,8 +125,182 @@ where
             address,
             storage,
             signer,
-            con: Some(con),
+            con,
             db,
+        }
+    }
+
+    pub async fn start(self) -> Result<()> {
+        let con = self.con;
+
+        // a high level sender that can stamp and sign the message before sending automatically
+        let sender = Sender::new(con.writer(), self.address, self.signer);
+
+        // handle all received messages from the relay
+        let downstream = Downstream::new(self.db, self.storage.clone(), sender.clone());
+        // handle all local generate traffic and push it to relay
+        let upstream = Upstream::new(self.storage, sender);
+
+        let pinger = con.writer();
+        // start a routine to send pings to server every 20 seconds
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                    log::error!("ping error: {}", err);
+                }
+                tokio::time::sleep(Duration::from_secs(20)).await;
+            }
+        });
+
+        //let upstream = Upstream::
+        // start a processor for incoming message
+        tokio::spawn(downstream.start(con));
+
+        upstream.start().await;
+        // shouldn't be reachable
+        Ok(())
+    }
+}
+
+/// Upstream handle all local traffic and making sure to push
+/// it to server (relay)
+struct Upstream<S, G>
+where
+    S: Storage,
+    G: Signer,
+{
+    storage: S,
+    sender: Sender<G>,
+}
+
+impl<S, G> Upstream<S, G>
+where
+    S: Storage,
+    G: Signer,
+{
+    pub fn new(storage: S, sender: Sender<G>) -> Self {
+        Self { storage, sender }
+    }
+
+    // handle outgoing requests
+    async fn request(&self, request: JsonOutgoingRequest) -> Result<(), PeerError> {
+        // generate an id?
+        let uid = uuid::Uuid::new_v4().to_string();
+        let (backlog, envelopes, ttl) = request.parts()?;
+        self.storage
+            .track(&uid, ttl, backlog)
+            .await
+            .context("failed to store message tracking information")?;
+
+        for mut envelope in envelopes {
+            envelope.uid = uid.clone();
+            self.sender.send(envelope).await?;
+        }
+
+        Ok(())
+    }
+
+    // handle outgoing requests (so sent by a client to the peer) but command is prefixed
+    // with `rmb.` which makes it internal command. rmb can then process this differently
+    // and send a reply back to caller.
+    async fn request_builtin(&self, request: JsonOutgoingRequest) -> Result<(), PeerError> {
+        Err(EnvelopeErrorKind::UnknownCommand(request.command).into())
+    }
+
+    // handle outgoing responses
+    async fn response(&self, response: JsonResponse) -> Result<()> {
+        // that's a reply message that is initiated locally and need to be
+        // sent to a remote peer
+        self.sender
+            .send(
+                response
+                    .try_into()
+                    .context("failed to build envelope from response")?,
+            )
+            .await
+    }
+
+    pub async fn start(self) {
+        let wait = Duration::from_secs(1);
+        loop {
+            let msg = match self.storage.messages().await {
+                Ok(msg) => msg,
+                Err(err) => {
+                    log::error!("failed to process local messages: {:#}", err);
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+            };
+
+            let result = match msg {
+                storage::JsonMessage::Response(response) => self.response(response).await,
+                storage::JsonMessage::Request(request) => {
+                    let reply_to = request.reply_to.clone();
+                    let reference = request.reference.clone();
+
+                    let result = if request.command.starts_with("rmb.") {
+                        self.request_builtin(request).await
+                    } else {
+                        self.request(request).await
+                    };
+                    // failure to process the request then we can simply
+                    // push a response back directly to the client
+                    match result {
+                        Ok(_) => Ok(()),
+                        Err(err) => {
+                            // we have enough information to send an erro
+                            // response back to the local caller
+                            self.storage
+                                .reply(
+                                    &reply_to,
+                                    JsonResponse {
+                                        version: 1,
+                                        reference,
+                                        data: String::default(),
+                                        destination: String::default(),
+                                        schema: None,
+                                        timestamp: 0,
+                                        error: Some(err.into()),
+                                    },
+                                )
+                                .await
+                        }
+                    }
+                }
+            };
+
+            if let Err(err) = result {
+                log::error!("failed to process message: {}", err);
+            }
+        }
+    }
+}
+
+/// downstream is handler for the connection down stream
+/// so basically anything that is received from the server (relay)
+/// and making sure to validate and dispatch it as needed.
+struct Downstream<DB, S, G>
+where
+    DB: TwinDB,
+    S: Storage,
+    G: Signer,
+{
+    db: DB,
+    storage: S,
+    sender: Sender<G>,
+}
+
+impl<DB, S, G> Downstream<DB, S, G>
+where
+    DB: TwinDB,
+    S: Storage,
+    G: Signer,
+{
+    pub fn new(db: DB, storage: S, sender: Sender<G>) -> Self {
+        Self {
+            db,
+            storage,
+            sender,
         }
     }
 
@@ -196,9 +371,9 @@ where
     }
 
     // handler for incoming envelopes from the relay
-    async fn handler(peer: Arc<Self>, mut reader: Connection) {
+    pub async fn start(self, mut reader: Connection) {
         while let Some(input) = reader.read().await {
-            let envelope = match peer.parse(input) {
+            let envelope = match self.parse(input) {
                 Ok(Some(env)) => env,
                 Ok(_) => continue,
                 Err(err) => {
@@ -210,7 +385,7 @@ where
             // we track these here in case we need to send an error
             let uid = envelope.uid.clone();
             let source = envelope.source.clone();
-            match peer.handle_envelope(envelope).await {
+            match self.handle_envelope(envelope).await {
                 Ok(_) => {}
                 Err(PeerError::Envelope(kind)) => {
                     // while processing incoming envelope, error happened
@@ -229,7 +404,7 @@ where
                     response.set_response(body);
                     response.expiration = 300;
 
-                    if let Err(err) = peer.send(&reader.writer(), response).await {
+                    if let Err(err) = self.sender.send(response).await {
                         log::error!("failed to push error response back to caller: {:#}", err);
                     }
                 }
@@ -237,56 +412,32 @@ where
             };
         }
     }
+}
 
-    // handle outgoing requests
-    async fn request(
-        &self,
-        writer: &Writer,
-        request: JsonOutgoingRequest,
-    ) -> Result<(), PeerError> {
-        // generate an id?
-        let uid = uuid::Uuid::new_v4().to_string();
-        let (backlog, envelopes, ttl) = request.parts()?;
-        self.storage
-            .track(&uid, ttl, backlog)
-            .await
-            .context("failed to store message tracking information")?;
+#[derive(Clone)]
+struct Sender<S>
+where
+    S: Signer,
+{
+    writer: Writer,
+    address: Address,
+    signer: S,
+}
 
-        for mut envelope in envelopes {
-            envelope.uid = uid.clone();
-            envelope.source = Some(self.address.clone()).into();
-
-            self.send(writer, envelope).await?;
-        }
-
-        Ok(())
-    }
-
-    // handle outgoing requests (so sent by a client to the peer) but command is prefixed
-    // with `rmb.` which makes it internal command. rmb can then process this differently
-    // and send a reply back to caller.
-    async fn request_builtin(
-        &self,
-        _writer: &Writer,
-        request: JsonOutgoingRequest,
-    ) -> Result<(), PeerError> {
-        Err(EnvelopeErrorKind::UnknownCommand(request.command).into())
-    }
-
-    // handle outgoing responses
-    async fn response(&self, writer: &Writer, response: JsonResponse) -> Result<()> {
-        // that's a reply message that is initiated locally and need to be
-        // sent to a remote peer
-        self.send(
+impl<S> Sender<S>
+where
+    S: Signer + Clone,
+{
+    pub fn new(writer: Writer, address: Address, signer: S) -> Self {
+        Self {
             writer,
-            response
-                .try_into()
-                .context("failed to build envelope from response")?,
-        )
-        .await
+            address,
+            signer,
+        }
     }
 
-    async fn send(&self, writer: &Writer, mut envelope: Envelope) -> Result<()> {
+    /// send an envelope, make sure to stamp, and sign the envelope
+    pub async fn send(&self, mut envelope: Envelope) -> Result<()> {
         envelope.source = Some(self.address.clone()).into();
         envelope.stamp();
         envelope
@@ -301,80 +452,8 @@ where
             envelope.uid,
             envelope.destination
         );
-        writer.write(Message::Binary(bytes)).await?;
+        self.writer.write(Message::Binary(bytes)).await?;
 
         Ok(())
-    }
-
-    pub async fn start(mut self) -> Result<()> {
-        use tokio::time::sleep;
-        let wait = Duration::from_secs(1);
-        let con = self.con.take().expect("unreachable");
-        let writer = con.writer();
-        let pinger = con.writer();
-        let peer = Arc::new(self);
-        // start a processor for incoming message
-        tokio::spawn(Self::handler(Arc::clone(&peer), con));
-
-        // start a routine to send pings to server every 20 seconds
-        tokio::spawn(async move {
-            loop {
-                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
-                    log::error!("ping error: {}", err);
-                }
-                sleep(Duration::from_secs(20)).await;
-            }
-        });
-
-        loop {
-            let msg = match peer.storage.messages().await {
-                Ok(msg) => msg,
-                Err(err) => {
-                    log::error!("failed to process local messages: {:#}", err);
-                    sleep(wait).await;
-                    continue;
-                }
-            };
-
-            let result = match msg {
-                storage::JsonMessage::Response(response) => peer.response(&writer, response).await,
-                storage::JsonMessage::Request(request) => {
-                    let reply_to = request.reply_to.clone();
-                    let reference = request.reference.clone();
-
-                    let result = if request.command.starts_with("rmb.") {
-                        peer.request_builtin(&writer, request).await
-                    } else {
-                        peer.request(&writer, request).await
-                    };
-                    // failure to process the request then we can simply
-                    // push a response back directly to the client
-                    if let Err(err) = result {
-                        // we failed to process
-                        // self.storage
-                        peer.storage
-                            .reply(
-                                &reply_to,
-                                JsonResponse {
-                                    version: 1,
-                                    reference: reference,
-                                    data: String::default(),
-                                    destination: String::default(),
-                                    schema: None,
-                                    timestamp: 0,
-                                    error: Some(err.into()),
-                                },
-                            )
-                            .await?
-                    }
-
-                    Ok(())
-                }
-            };
-
-            if let Err(err) = result {
-                log::error!("failed to process message: {}", err);
-            }
-        }
     }
 }
