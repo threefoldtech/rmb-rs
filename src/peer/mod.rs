@@ -96,70 +96,51 @@ impl From<PeerError> for JsonError {
     }
 }
 
-pub struct Peer<S, G, D>
-where
-    S: Storage,
-    G: Signer + Clone,
-    D: TwinDB + Clone,
-{
-    address: Address,
-    storage: S,
-    signer: G,
-    // this is wrapped in an option
-    // to support take()
-    con: Connection,
-    db: D,
-}
-
-impl<S, G, D> Peer<S, G, D>
+/// entry point for peer, it initializes connection to the relay and handle both up stream
+/// and down stream
+/// - it uses the storage to get local generated requests or responses, and forward it to the relay
+/// - it handle all received messages and dispatch it to local clients or services.
+/// - sign all outgoing messages
+/// - verify all incoming messages
+/// - restore relay connection if lost
+pub async fn start<S, G, DB>(relay: Url, twin: u32, signer: G, storage: S, db: DB) -> Result<()>
 where
     S: Storage,
     G: Signer + Clone + Send + Sync + 'static,
-    D: TwinDB + Clone,
+    DB: TwinDB + Clone,
 {
-    pub async fn new(rely: Url, twin: u32, signer: G, storage: S, db: D) -> Self {
-        let con = Connection::connect(rely, twin, signer.clone());
-        let mut address = Address::new();
-        address.twin = twin;
-        Self {
-            address,
-            storage,
-            signer,
-            con,
-            db,
-        }
-    }
+    let con = Connection::connect(relay, twin, signer.clone());
+    let mut address = Address::new();
+    address.twin = twin;
 
-    pub async fn start(self) -> Result<()> {
-        let con = self.con;
+    // a high level sender that can stamp and sign the message before sending automatically
+    let sender = Sender::new(con.writer(), address, signer);
 
-        // a high level sender that can stamp and sign the message before sending automatically
-        let sender = Sender::new(con.writer(), self.address, self.signer);
+    // handle all received messages from the relay
+    let downstream = Downstream::new(db, storage.clone(), sender.clone());
+    // handle all local generate traffic and push it to relay
+    let upstream = Upstream::new(storage, sender);
 
-        // handle all received messages from the relay
-        let downstream = Downstream::new(self.db, self.storage.clone(), sender.clone());
-        // handle all local generate traffic and push it to relay
-        let upstream = Upstream::new(self.storage, sender);
-
-        let pinger = con.writer();
-        // start a routine to send pings to server every 20 seconds
-        tokio::spawn(async move {
-            loop {
-                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
-                    log::error!("ping error: {}", err);
-                }
-                tokio::time::sleep(Duration::from_secs(20)).await;
+    let pinger = con.writer();
+    // start a routine to send pings to server every 20 seconds
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                log::error!("ping error: {}", err);
             }
-        });
+            tokio::time::sleep(Duration::from_secs(20)).await;
+        }
+    });
 
-        //let upstream = Upstream::
-        // start a processor for incoming message
-        tokio::spawn(downstream.start(con));
+    //let upstream = Upstream::
+    // start a processor for incoming message
+    tokio::spawn(downstream.start(con));
 
-        upstream.start().await;
-        // shouldn't be reachable
-        Ok(())
-    }
+    // we start this in this current routine to block the peer from exiting
+    // no need to spawn it in the back
+    upstream.start().await;
+    // shouldn't be reachable
+    Ok(())
 }
 
 /// Upstream handle all local traffic and making sure to push
