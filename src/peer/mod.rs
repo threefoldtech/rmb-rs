@@ -10,7 +10,6 @@ use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
-mod builtin;
 mod con;
 
 pub mod storage;
