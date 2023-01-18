@@ -13,6 +13,7 @@ fn main() {
         .includes(["proto"])
         // Inputs must reside in some of include paths.
         .input("proto/types.proto")
+        .input("proto/peer.proto")
         // Specify output directory relative to Cargo output directory.
         .cargo_out_dir("protos")
         .run_from_script();
