@@ -40,8 +40,8 @@ where
     }
 
     /// get the token as string.
-    pub fn token(&self, age: u64) -> Result<String, Error> {
-        token(&self.signer, self.id, self.sid.clone(), age)
+    pub fn token(&self, ttl: u64) -> Result<String, Error> {
+        token(&self.signer, self.id, self.sid.clone(), ttl)
     }
 }
 
@@ -54,7 +54,7 @@ pub struct Claims {
     #[serde(rename = "iat")]
     pub timestamp: u64,
     #[serde(rename = "exp")]
-    pub ttl: u64,
+    pub expiration: u64,
 }
 
 fn now() -> Result<u64, Error> {
@@ -69,7 +69,7 @@ pub fn token<S: Signer>(
     signer: &S,
     id: u32,
     sid: Option<String>,
-    age: u64,
+    ttl: u64,
 ) -> Result<String, Error> {
     // get timestamp
     let now = now()?;
@@ -79,7 +79,7 @@ pub fn token<S: Signer>(
         id,
         sid,
         timestamp: now,
-        ttl: age,
+        expiration: now + ttl,
     };
 
     claims.sign_with_key(&signer).map_err(Error::Jwt)
@@ -92,7 +92,7 @@ impl FromStr for Claims {
 
         let claims = token.claims();
         let now = now()?;
-        if claims.timestamp + claims.ttl < now {
+        if claims.expiration > now {
             return Err(Error::Expired);
         }
 
@@ -127,7 +127,7 @@ mod test {
         let claims: super::Claims = token.parse().unwrap();
 
         assert_eq!(claims.id, 100);
-        assert_eq!(claims.ttl, 20);
+        assert_eq!(claims.expiration, 20);
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod test {
         let claims: super::Claims = token.parse().unwrap();
 
         assert_eq!(claims.id, 100);
-        assert_eq!(claims.ttl, 20);
+        assert_eq!(claims.expiration, 20);
     }
 
     #[test]
