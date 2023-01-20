@@ -92,7 +92,7 @@ impl FromStr for Claims {
 
         let claims = token.claims();
         let now = now()?;
-        if claims.expiration > now {
+        if now > claims.expiration {
             return Err(Error::Expired);
         }
 
@@ -127,7 +127,7 @@ mod test {
         let claims: super::Claims = token.parse().unwrap();
 
         assert_eq!(claims.id, 100);
-        assert_eq!(claims.expiration, 20);
+        assert_eq!(claims.expiration, claims.timestamp + 20);
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod test {
         let claims: super::Claims = token.parse().unwrap();
 
         assert_eq!(claims.id, 100);
-        assert_eq!(claims.expiration, 20);
+        assert_eq!(claims.expiration, claims.timestamp + 20);
     }
 
     #[test]
