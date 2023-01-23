@@ -3,7 +3,10 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::sync::Arc;
 use subxt::ext::sp_core::crypto::AccountId32;
+use subxt::Error as ClientError;
+use tokio::sync::Mutex;
 
 use tfchain_client::client::{Client, KeyPair};
 
@@ -12,7 +15,8 @@ pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    client: Client,
+    url: String,
+    client: Arc<Mutex<Client>>,
     cache: C,
 }
 
@@ -21,12 +25,23 @@ where
     C: Cache<Twin> + Clone,
 {
     pub async fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
-        let client = Client::new(url.into(), tfchain_client::client::Runtime::Devnet).await?;
-        Ok(Self { client, cache })
+        let url = url.into();
+        let client = Self::connect(&url).await?;
+        Ok(Self {
+            url,
+            client: Arc::new(Mutex::new(client)),
+            cache,
+        })
+    }
+
+    async fn connect(url: &str) -> Result<Client> {
+        let client = Client::new(&url, tfchain_client::client::Runtime::Devnet).await?;
+        Ok(client)
     }
 
     pub async fn update_twin(&self, kp: &KeyPair, relay: Option<String>) -> Result<()> {
-        let hash = self.client.update_twin(kp, relay, None).await?;
+        let client = self.client.lock().await;
+        let hash = client.update_twin(kp, relay, None).await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
     }
@@ -43,7 +58,18 @@ where
             return Ok(Some(twin));
         }
 
-        let twin = self.client.get_twin_by_id(twin_id, None).await?;
+        let mut client = self.client.lock().await;
+
+        let twin = loop {
+            match client.get_twin_by_id(twin_id, None).await {
+                Ok(twin) => break twin,
+                Err(ClientError::Rpc(_)) => {
+                    *client = Self::connect(&self.url).await?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
+
         // but if we wanna hit the grid we get throttled by the workers pool
         // the pool has a limited size so only X queries can be in flight.
 
@@ -55,7 +81,22 @@ where
     }
 
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        Ok(self.client.get_twin_id_by_account(account_id, None).await?)
+        let mut client = self.client.lock().await;
+
+        let id = loop {
+            match client
+                .get_twin_id_by_account(account_id.clone(), None)
+                .await
+            {
+                Ok(twin) => break twin,
+                Err(ClientError::Rpc(_)) => {
+                    *client = Self::connect(&self.url).await?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
+
+        Ok(id)
     }
 }
 

@@ -54,4 +54,11 @@ message Envelope {
 
   // schema of the payload of either the request or the resposne message.
   optional string schema = 10;
+
+  // a federation url (domain)
+  // if not provided the relay assumes it's a local twin
+  // but if provided it can be checked against the relay
+  // domain, and hence decided if message need federation
+  // or local.
+  optional string federation = 11;
 }
