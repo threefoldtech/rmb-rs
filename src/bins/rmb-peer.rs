@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
@@ -46,8 +46,8 @@ struct Args {
     relay: String,
 
     /// enable debugging logs
-    #[clap(short, long)]
-    debug: bool,
+    #[clap(short, long, action=ArgAction::Count)]
+    debug: u8,
 
     /// skip twin update on chain if relay is not matching. only used for debugging
     #[clap(long = "no-update")]
@@ -58,10 +58,12 @@ async fn app(args: &Args) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
     simple_logger::SimpleLogger::new()
-        .with_level(if args.debug {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
+        .with_level({
+            match args.debug {
+                0 => log::LevelFilter::Info,
+                1 => log::LevelFilter::Debug,
+                _ => log::LevelFilter::Trace,
+            }
         })
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)

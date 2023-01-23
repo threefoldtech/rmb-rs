@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
@@ -42,9 +42,10 @@ struct Args {
     /// listen address
     #[clap(short, long, default_value_t = String::from("[::]:8080"))]
     listen: String,
+
     /// enable debugging logs
-    #[clap(short, long)]
-    debug: bool,
+    #[clap(short, long, action=ArgAction::Count)]
+    debug: u8,
 }
 
 fn set_limits() -> Result<()> {
@@ -76,10 +77,12 @@ async fn app(args: &Args) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
     simple_logger::SimpleLogger::new()
-        .with_level(if args.debug {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
+        .with_level({
+            match args.debug {
+                0 => log::LevelFilter::Info,
+                1 => log::LevelFilter::Debug,
+                _ => log::LevelFilter::Trace,
+            }
         })
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)

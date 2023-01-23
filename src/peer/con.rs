@@ -94,6 +94,7 @@ async fn retainer<S: Signer>(
         'receive: loop {
             tokio::select! {
                 Some(message) = writer_rx.recv() => {
+                    log::trace!("sending message to relay");
                     if let Err(err) = write.send(message).await {
                         // probably connection closed as well, we need to renew!
                         log::error!("error while sending message: {}", err);
@@ -101,6 +102,7 @@ async fn retainer<S: Signer>(
                     }
                 },
                 Some(message) = read.next() => {
+                    log::trace!("received a message from relay");
                     let message = match message {
                         Ok(message) => message,
                         Err(err) => {

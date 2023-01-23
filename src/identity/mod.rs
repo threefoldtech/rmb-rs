@@ -169,7 +169,7 @@ impl Signer for Signers {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum KeyType {
     Ed25519,
     Sr25519,
