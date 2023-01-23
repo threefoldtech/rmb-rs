@@ -109,7 +109,7 @@ async fn app(args: &Args) -> Result<()> {
     let opt = relay::SwitchOptions::new(pool)
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
-    let r = relay::Relay::new(twins, opt).await.unwrap();
+    let r = relay::Relay::new(&args.domain, twins, opt).await.unwrap();
 
     r.start(&args.listen).await.unwrap();
     Ok(())
