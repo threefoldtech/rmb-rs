@@ -99,9 +99,11 @@ async fn app(args: &Args) -> Result<()> {
         .await
         .context("failed to initialize redis pool")?;
 
+    // we use 6 hours cache for twin information because twin id will not change anyway
+    // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(21600)),
     )
     .await
     .context("cannot create substrate twin db object")?;
