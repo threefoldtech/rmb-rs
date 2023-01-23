@@ -125,7 +125,7 @@ async fn entry<D: TwinDB>(
 
     // normal http handler
     match (request.method(), request.uri().path()) {
-        (&Method::POST, "/") => federation(),
+        (&Method::POST, "/") => federation(&data, request).await,
         (&Method::GET, "/metrics") => metrics(),
         _ => Err(HttpError::NotFound),
     }
@@ -152,13 +152,43 @@ fn metrics() -> Result<Response<Body>, HttpError> {
         .map_err(HttpError::Http)
 }
 
-fn federation() -> Result<Response<Body>, HttpError> {
-    log::debug!("federation request");
+async fn federation<D: TwinDB>(
+    data: &AppData<D>,
+    request: Request<Body>,
+) -> Result<Response<Body>, HttpError> {
+    // TODO:
+    //   there are many things that can go wrong here
+    //   - this is not an authorized endpoint. means anyone (not necessary a relay)
+    //     can use to push messages to other twins. The receiver twin will fail to verify
+    //     the signature (if the message is fake) but will produce a lot of traffic never the less
+    //   - there is no check on the message size
+    //   - there is no check if federation information is actually correct. we don't check
+    //     if twin data on the chain (federation) is actually matching to this message for
+    //     performance.
+    //
+    // this method trust whoever call it to provide correct federation information and proper message
+    // size.
+    let body = hyper::body::to_bytes(request.into_body())
+        .await
+        .map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
-    Response::builder()
-        .status(http::StatusCode::ACCEPTED)
-        .body(Body::empty())
-        .map_err(HttpError::Http)
+    let envelope =
+        Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
+
+    match envelope.federation {
+        Some(federation) if federation == data.domain => {
+            // correct federation, accept the message
+            let dst: StreamID = (&envelope.destination).into();
+            data.switch.send(&dst, &body).await?;
+
+            // check for federation information
+            Response::builder()
+                .status(http::StatusCode::ACCEPTED)
+                .body(Body::empty())
+                .map_err(HttpError::Http)
+        }
+        _ => Err(HttpError::BadRequest("invalid federation".into())),
+    }
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -234,6 +264,7 @@ async fn serve_websocket(
                     }
                 };
 
+                // TODO: throttling to avoid sending too many messages in short time!
                 match message {
                     Message::Text(_) => {
                         log::trace!("received unsupported (text) message. disconnecting!");
@@ -243,6 +274,12 @@ async fn serve_websocket(
                         let envelope =
                             Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
+                        // TODO: federation
+                        //  instead of sending the message directly to the switch
+                        //  we check federation information attached to the envelope
+                        //  if federation is not empty and does not match the domain
+                        //  of this server, we need to schedule this message to be
+                        //  federated to the right relay (according to specs)
                         let dst: StreamID = (&envelope.destination).into();
                         if let Err(err) = switch.send(&dst, &msg).await {
                             log::error!(

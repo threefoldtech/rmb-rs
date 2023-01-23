@@ -68,8 +68,12 @@ pub enum HttpError {
     WebsocketError(#[from] ProtocolError),
     #[error("page not found")]
     NotFound,
+    #[error("bad request: {0}")]
+    BadRequest(String),
+    #[error("switch error: {0}")]
+    SwitchingError(#[from] switch::SwitchError),
     // generic catch all
-    #[error("{0}s")]
+    #[error("{0}")]
     Http(#[from] http::Error),
 }
 
@@ -83,6 +87,8 @@ impl HttpError {
             Self::TwinNotFound(_) => Codes::UNAUTHORIZED,
             Self::WebsocketError(_) => Codes::INTERNAL_SERVER_ERROR,
             Self::NotFound => Codes::NOT_FOUND,
+            Self::BadRequest(_) => Codes::BAD_REQUEST,
+            Self::SwitchingError(_) => Codes::INTERNAL_SERVER_ERROR,
             Self::Http(_) => Codes::INTERNAL_SERVER_ERROR,
         }
     }
