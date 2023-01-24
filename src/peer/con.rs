@@ -5,8 +5,12 @@ use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
+
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+const READ_TIMEOUT: Duration = Duration::from_secs(40);
 
 pub struct Connection {
     rx: mpsc::Receiver<Message>,
@@ -49,22 +53,31 @@ impl Connection {
         // background. but we will return only reader and writer channels
         // that then can be used to send and receive messages.
 
-        // the "reader" channels is attached to the "reader" part of the stream
+        // the "down" channels is attached to the "reader" part of the stream
         // hence it's used to "receiver" or "read" messages
-        let (reader_tx, reader_rx) = mpsc::channel(200);
-        // the writer channels on the other hand are used to allow writing to the connection
-        let (writer_tx, writer_rx) = mpsc::channel::<Message>(1);
+        let (down_tx, down_rx) = mpsc::channel(200);
+        // the up channels on the other hand are used to allow writing to the connection (sending to relay)
+        let (up_tx, up_rx) = mpsc::channel::<Message>(1);
 
         // select both futures
         let connection = Connection {
-            rx: reader_rx,
-            tx: writer_tx,
+            rx: down_rx,
+            tx: up_tx,
         };
 
         let u = u.into();
         let builder = token::TokenBuilder::new(id, None, signer);
-        tokio::spawn(retainer(u, builder, writer_rx, reader_tx));
-
+        tokio::spawn(retainer(u, builder, up_rx, down_tx));
+        // we also auto send ping messages to detect stall connections
+        let pinger = connection.writer();
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                    log::error!("ping error: {}", err);
+                }
+                tokio::time::sleep(PING_INTERVAL).await;
+            }
+        });
         connection
     }
 }
@@ -72,8 +85,8 @@ impl Connection {
 async fn retainer<S: Signer>(
     mut u: Url,
     b: token::TokenBuilder<S>,
-    mut writer_rx: mpsc::Receiver<Message>,
-    reader_tx: mpsc::Sender<Message>,
+    mut up_rx: mpsc::Receiver<Message>,
+    down_tx: mpsc::Sender<Message>,
 ) {
     loop {
         let token = b.token(60).context("failed to create jwt token").unwrap();
@@ -91,9 +104,23 @@ async fn retainer<S: Signer>(
         };
 
         let (mut write, mut read) = ws.split();
+        let mut last = Instant::now();
+
         'receive: loop {
+            // we check here when was the last time a message was received
+            // from the relay. we expect to receive PONG answers (because we
+            // send PING every PING_INTERVAL).
+            // hence if for some reason there are NO received messaged for
+            // period of READ_TIMEOUT, we can safely assume connection is stalling
+            // and we can try to reconnect
+            if Instant::now().duration_since(last) > READ_TIMEOUT {
+                log::debug!("reading timeout trying to reconnect");
+                // the problem is on break this message will be lost!
+                break 'receive;
+            }
+
             tokio::select! {
-                Some(message) = writer_rx.recv() => {
+                Some(message) = up_rx.recv() => {
                     log::trace!("sending message to relay");
                     if let Err(err) = write.send(message).await {
                         // probably connection closed as well, we need to renew!
@@ -101,7 +128,9 @@ async fn retainer<S: Signer>(
                         break 'receive;
                     }
                 },
-                Some(message) = read.next() => {
+                Some(message) =  read.next() => {
+                    // we take a note with when a message was received
+                    last = Instant::now();
                     log::trace!("received a message from relay");
                     let message = match message {
                         Ok(message) => message,
@@ -113,7 +142,7 @@ async fn retainer<S: Signer>(
                         }
                     };
 
-                    if let Err(err) = reader_tx.send(message).await {
+                    if let Err(err) = down_tx.send(message).await {
                         log::error!("failed to queue received message for processing: {}", err);
                     }
                 }

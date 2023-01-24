@@ -120,17 +120,6 @@ where
     // handle all local generate traffic and push it to relay
     let upstream = Upstream::new(storage, sender);
 
-    let pinger = con.writer();
-    // start a routine to send pings to server every 20 seconds
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
-                log::error!("ping error: {}", err);
-            }
-            tokio::time::sleep(Duration::from_secs(20)).await;
-        }
-    });
-
     //let upstream = Upstream::
     // start a processor for incoming message
     tokio::spawn(downstream.start(con));
@@ -355,7 +344,10 @@ where
         while let Some(input) = reader.read().await {
             let envelope = match self.parse(input) {
                 Ok(Some(env)) => env,
-                Ok(_) => continue,
+                Ok(_) => {
+                    log::trace!("received a pong message");
+                    continue;
+                }
                 Err(err) => {
                     log::error!("error while loading received message: {:#}", err);
                     continue;
