@@ -111,11 +111,14 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
-    let opt = relay::SwitchOptions::new(pool)
+    let opt = relay::SwitchOptions::new(pool.clone())
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
-    let r = relay::Relay::new(&args.domain, twins, opt).await.unwrap();
 
+    let federation = relay::Federation::new(pool).with_workers(args.workers as usize);
+    let r = relay::Relay::new(&args.domain, twins, opt, federation)
+        .await
+        .unwrap();
     r.start(&args.listen).await.unwrap();
     Ok(())
 }

@@ -62,3 +62,6 @@ rand_core = "0.6"
 [build-dependencies]
 git-version = "0.3.5"
 protobuf-codegen = "3.2.0"
+
+[dev-dependencies]
+httpmock = "0.6"

@@ -20,23 +20,30 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::switch::{Hook, MessageID, StreamID, Switch};
-use super::HttpError;
+use super::{Federation, HttpError};
 
 pub(crate) struct AppData<D: TwinDB> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
+    federation: Arc<Federation>,
 }
 
 impl<D> AppData<D>
 where
     D: TwinDB,
 {
-    pub(crate) fn new<S: Into<String>>(domain: S, switch: Switch<RelayHook>, twins: D) -> Self {
+    pub(crate) fn new<S: Into<String>>(
+        domain: S,
+        switch: Switch<RelayHook>,
+        twins: D,
+        federation: Federation,
+    ) -> Self {
         Self {
             domain: domain.into(),
             switch: Arc::new(switch),
             twins,
+            federation: Arc::new(federation),
         }
     }
 }
@@ -114,7 +121,15 @@ async fn entry<D: TwinDB>(
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket).await {
+            if let Err(e) = serve_websocket(
+                &data.domain.clone(),
+                claims,
+                Arc::clone(&data.switch),
+                websocket,
+                Arc::clone(&data.federation),
+            )
+            .await
+            {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -230,9 +245,11 @@ impl Hook for RelayHook {
 
 /// Handle a websocket connection.
 async fn serve_websocket(
+    domain: &str,
     claim: Claims,
     switch: Arc<Switch<RelayHook>>,
     websocket: HyperWebsocket,
+    federation: Arc<Federation>,
 ) -> Result<()> {
     let websocket = websocket.await?;
     let (writer, mut reader) = websocket.split();
@@ -274,12 +291,24 @@ async fn serve_websocket(
                         let envelope =
                             Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
-                        // TODO: federation
                         //  instead of sending the message directly to the switch
                         //  we check federation information attached to the envelope
                         //  if federation is not empty and does not match the domain
                         //  of this server, we need to schedule this message to be
                         //  federated to the right relay (according to specs)
+                        match &envelope.federation {
+                            Some(fed) if fed != domain => {
+                                // push message to the (relay.federation) queue
+                                if let Err(err) = federation.send(&msg).await {
+                                    log::error!(
+                                "failed to route message to relay '{}': {}",
+                                fed,
+                                err
+                            );
+                                };
+                            }
+                            _ => {},
+                        }
                         let dst: StreamID = (&envelope.destination).into();
                         if let Err(err) = switch.send(&dst, &msg).await {
                             log::error!(
