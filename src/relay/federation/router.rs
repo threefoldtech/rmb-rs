@@ -1,36 +1,36 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use http::{Request, StatusCode};
 use hyper::Client;
-use workers::{Work, WorkerPool};
 
-use crate::types::{Envelope, EnvelopeExt};
 use protobuf::Message;
+use workers::Work;
+
+use crate::types::Envelope;
+
 pub struct Router {}
 
 #[async_trait]
 impl Work for Router {
-    type Input = Vec<u8>;
+    type Input = Envelope;
 
     type Output = ();
 
-    async fn run(&self, msg: Self::Input) {
-        let envelope = match Envelope::parse_from_bytes(&msg) {
-            Ok(envelope) => envelope,
-            Err(_) => {
-                log::error!("could not parse message");
-                return;
-            }
-        };
-        let domain = match envelope.federation {
+    async fn run(&self, env: Self::Input) {
+        let domain = match &env.federation {
             Some(domain) => domain,
             None => {
                 log::error!("federation information not found in msg");
                 return;
             }
         };
-        let request = match Request::post(&domain).body(hyper::Body::from(msg)) {
+        let msg = match env.write_to_bytes() {
+            Ok(msg) => msg,
+            Err(err) => {
+                log::error!("could not decode envelop, {}", err);
+                return;
+            }
+        };
+        let request = match Request::post(domain).body(hyper::Body::from(msg)) {
             Ok(request) => request,
             Err(_) => return,
         };
@@ -52,34 +52,41 @@ impl Work for Router {
         }
     }
 }
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::types::{Envelope, EnvelopeExt};
+    use std::sync::Arc;
+    use workers::WorkerPool;
 
-#[tokio::test]
-async fn test_router() {
-    use httpmock::prelude::*;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_router() {
+        use httpmock::prelude::*;
 
-    // Start a lightweight mock server.
-    let server = MockServer::start();
+        // Start a lightweight mock server.
+        let server = MockServer::start();
 
-    // Create a mock on the server.
-    let federation = server.mock(|when, then| {
-        when.method(POST).path("/");
-        then.status(200)
-            .header("content-type", "text/html")
-            .body("ohi");
-    });
-    let mut env = Envelope::new();
+        // Create a mock on the server.
+        let federation = server.mock(|when, then| {
+            when.method(POST).path("/");
+            then.status(200)
+                .header("content-type", "text/html")
+                .body("ohi");
+        });
+        let work_runner = Router {};
+        let mut worker_pool = WorkerPool::new(Arc::new(work_runner), 2);
+        let mut env = Envelope::new();
 
-    env.tags = None;
-    env.signature = None;
-    env.schema = None;
-    env.federation = Some(server.url("/"));
-    env.stamp();
+        env.tags = None;
+        env.signature = None;
+        env.schema = None;
+        env.federation = Some(server.url("/"));
+        env.stamp();
 
-    let msg = env.write_to_bytes().unwrap();
-    let work_runner = Router {};
-    let mut worker_pool = WorkerPool::new(Arc::new(work_runner), 2);
-    let worker_handler = worker_pool.get().await;
+        let worker_handler = worker_pool.get().await;
 
-    worker_handler.run(msg).await.unwrap();
-    federation.assert()
+        worker_handler.send(env).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        federation.assert()
+    }
 }
