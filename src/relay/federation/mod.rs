@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
+use bb8_redis::{bb8::Pool, redis::{cmd, RedisError}, RedisConnectionManager};
 use protobuf::Message;
+use subxt::ext::sp_runtime::print;
 use workers::{Work, WorkerPool};
 
 use crate::types::Envelope;
@@ -35,11 +36,13 @@ impl Federation {
     // Sends federation msg to redis on (relay.federation)
     pub async fn send<T: AsRef<[u8]>>(&self, msg: T) -> Result<()> {
         let mut con = self.redis_pool.get().await?;
-        cmd("LPUSH")
+        if let Err(err) = cmd("LPUSH")
             .arg(FEDERATION_QUEUE)
             .arg(msg.as_ref())
-            .query_async(&mut *con)
-            .await?;
+            .query_async::<_, u32>(&mut *con)
+            .await{
+                bail!("could not push msg to queue: {}", err)
+            };
         Ok(())
     }
 
@@ -93,19 +96,16 @@ mod test {
     async fn test_router() {
         use httpmock::prelude::*;
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
-        let federation = Federation::new(pool.clone()).with_workers(10);
-        tokio::spawn(federation.start());
-        // Start a lightweight mock server.
+        let federation_sender = Federation::new(pool.clone()).with_workers(10);
+        let federation_receiver = federation_sender.clone();
+        tokio::spawn(federation_receiver.start());
         let server = MockServer::start();
-
-        // Create a mock on the server.
-        let federation_server = server.mock(|when, then| {
+        let mock = server.mock(|when, then| {
             when.method(POST).path("/");
             then.status(200)
                 .header("content-type", "text/html")
                 .body("ohi");
         });
-        let federation2 = Federation::new(pool).with_workers(10);
         for _ in 0..10 {
             let mut env = Envelope::new();
             env.tags = None;
@@ -114,10 +114,10 @@ mod test {
             env.federation = Some(server.url("/"));
             env.stamp();
             let msg = env.write_to_bytes().unwrap();
-            federation2.send(msg).await.unwrap();
+            federation_sender.send(msg).await.unwrap();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        federation_server.assert_hits(10);
+        mock.assert_hits(10);
     }
 }
