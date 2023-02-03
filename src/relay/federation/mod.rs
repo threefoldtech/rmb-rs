@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
-use bb8_redis::{bb8::Pool, redis::{cmd, RedisError}, RedisConnectionManager};
+use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
 use protobuf::Message;
-use subxt::ext::sp_runtime::print;
-use workers::{Work, WorkerPool};
+use workers::WorkerPool;
 
 use crate::types::Envelope;
 

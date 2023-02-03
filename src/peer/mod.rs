@@ -109,14 +109,14 @@ where
     let con = Connection::connect(relay, twin, signer.clone());
     let mut address = Address::new();
     address.twin = twin;
-
+    let upstream_db = db.clone();
     // a high level sender that can stamp and sign the message before sending automatically
     let sender = Sender::new(con.writer(), address, signer);
 
     // handle all received messages from the relay
     let downstream = Downstream::new(db, storage.clone(), sender.clone());
     // handle all local generate traffic and push it to relay
-    let upstream = Upstream::new(storage, sender);
+    let upstream = Upstream::new(upstream_db, storage, sender);
 
     //let upstream = Upstream::
     // start a processor for incoming message
@@ -131,22 +131,25 @@ where
 
 /// Upstream handle all local traffic and making sure to push
 /// it to server (relay)
-struct Upstream<S, G>
+struct Upstream<DB, S, G>
 where
+    DB: TwinDB,
     S: Storage,
     G: Signer,
 {
+    db: DB,
     storage: S,
     sender: Sender<G>,
 }
 
-impl<S, G> Upstream<S, G>
+impl<DB, S, G> Upstream<DB, S, G>
 where
+    DB: TwinDB,
     S: Storage,
     G: Signer,
 {
-    pub fn new(storage: S, sender: Sender<G>) -> Self {
-        Self { storage, sender }
+    pub fn new(db: DB, storage: S, sender: Sender<G>) -> Self {
+        Self { db, storage, sender }
     }
 
     // handle outgoing requests
@@ -161,10 +164,19 @@ where
 
         for mut envelope in envelopes {
             envelope.uid = uid.clone();
+            envelope.federation = self.get_federation_information(envelope.destination.twin).await?;
             self.sender.send(envelope).await?;
         }
 
         Ok(())
+    }
+
+    async fn get_federation_information(&self, twin_id: u32) -> Result<Option<String>, PeerError>{
+        let twin =  match self.db.get_twin(twin_id).await?{
+            Some(twin) => twin,
+            None => {return Ok(None)}
+        };
+        return Ok(twin.relay);
     }
 
     // handle outgoing requests (so sent by a client to the peer) but command is prefixed
