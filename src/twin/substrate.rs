@@ -35,7 +35,7 @@ where
     }
 
     async fn connect(url: &str) -> Result<Client> {
-        let client = Client::new(&url, tfchain_client::client::Runtime::Local).await?;
+        let client = Client::new(&url, tfchain_client::client::Runtime::Devnet).await?;
         Ok(client)
     }
 
