@@ -4221,8 +4221,8 @@ dependencies = [
 
 [[package]]
 name = "tfchain-client"
-version = "0.1.0"
-source = "git+https://github.com/threefoldtech/grid3_client_rs?rev=a969d4bda9bdc7fea67945f20f906592f61f29e2#a969d4bda9bdc7fea67945f20f906592f61f29e2"
+version = "0.2.0"
+source = "git+https://github.com/threefoldtech/grid3_client_rs?rev=v0.2.0#21cb8b362798a5974602cb58fc51757c09c2a6a5"
 dependencies = [
  "frame-metadata",
  "frame-support",

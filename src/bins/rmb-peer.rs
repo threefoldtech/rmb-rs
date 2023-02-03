@@ -42,7 +42,7 @@ struct Args {
     substrate: String,
 
     /// substrate address please make sure the url also include the port number
-    #[clap(long, default_value_t = String::from("wss://rely.grid.tf:443"))]
+    #[clap(long, default_value_t = String::from("wss://relay.grid.tf:443"))]
     relay: String,
 
     /// enable debugging logs
@@ -99,6 +99,8 @@ async fn app(args: &Args) -> Result<()> {
         .await
         .context("failed to initialize redis pool")?;
 
+    // cache is a little bit tricky because while it improves performance it
+    // makes changes to twin data takes at least 5 min before they are detected
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
@@ -112,6 +114,8 @@ async fn app(args: &Args) -> Result<()> {
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
 
+    let relay_url: url::Url = args.relay.parse().context("failed to parse relay url")?;
+
     if !args.no_update {
         // try to check and update the twin info on chain
 
@@ -122,32 +126,18 @@ async fn app(args: &Args) -> Result<()> {
             .context("failed to get twin details")?
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
 
-        match twin.relay {
-            Some(relay) if relay == args.relay => {}
-            _ => {
-                // remote relay is not the same as configure one. update is needed
-                log::info!(
-                    "update twin details on the chain with relay address: {}",
-                    args.relay
-                );
+        log::debug!("twin relay domain: {:?}", twin.relay);
+        if twin.relay.as_deref() != relay_url.domain() {
+            // remote relay is not the same as configure one. update is needed
+            log::info!(
+                "update twin details on the chain with relay address: {:?}",
+                relay_url.domain()
+            );
 
-                // TODO: this code will probably fail (silently) against devnet
-                // because it's not possible yet to set a full url in the ip field
-                // also the client doesn't check the errors returned from the extrensic
-                // hence it does not fail although the update failed
-                let update = db
-                    .update_twin(&identity.pair(), Some(args.relay.clone()))
-                    .await;
-
-                //TODO: this is a temporary work around because ALL updates
-                // will fail because right now chain accept only IP address
-                // not a full url
-                // the right way of course is to return an error and exit!
-                if let Err(err) = update {
-                    log::error!("failed to update twin: {:#}", err);
-                }
-            }
-        };
+            db.update_twin(&identity.pair(), relay_url.domain().map(|d| d.to_owned()))
+                .await
+                .context("failed to update twin information")?;
+        }
     }
 
     let storage = RedisStorage::builder(pool).build();
