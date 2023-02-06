@@ -38,9 +38,10 @@ impl Federation {
             .arg(FEDERATION_QUEUE)
             .arg(msg.as_ref())
             .query_async::<_, u32>(&mut *con)
-            .await{
-                bail!("could not push msg to queue: {}", err)
-            };
+            .await
+        {
+            bail!("could not push msg to queue: {}", err)
+        };
         Ok(())
     }
 
@@ -57,14 +58,15 @@ impl Federation {
         loop {
             let worker_handler = worker_pool.get().await;
             worker_pool.get().await;
-            let msg: Vec<u8> = match cmd("RPOP")
+            let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
                 .arg(FEDERATION_QUEUE)
+                .arg(0.0)
                 .query_async(&mut *con)
                 .await
             {
                 Ok(msg) => msg,
-                Err(_) => {
-                    log::error!("could not get message from redis");
+                Err(err) => {
+                    log::error!("could not get message from redis {}", err);
                     continue;
                 }
             };

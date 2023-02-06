@@ -149,7 +149,11 @@ where
     G: Signer,
 {
     pub fn new(db: DB, storage: S, sender: Sender<G>) -> Self {
-        Self { db, storage, sender }
+        Self {
+            db,
+            storage,
+            sender,
+        }
     }
 
     // handle outgoing requests
@@ -164,19 +168,21 @@ where
 
         for mut envelope in envelopes {
             envelope.uid = uid.clone();
-            envelope.federation = self.get_federation_information(envelope.destination.twin).await?;
+            envelope.federation = self
+                .get_federation_information(envelope.destination.twin)
+                .await?;
             self.sender.send(envelope).await?;
         }
 
         Ok(())
     }
 
-    async fn get_federation_information(&self, twin_id: u32) -> Result<Option<String>, PeerError>{
-        let twin =  match self.db.get_twin(twin_id).await?{
+    async fn get_federation_information(&self, twin_id: u32) -> Result<Option<String>, PeerError> {
+        let twin = match self.db.get_twin(twin_id).await? {
             Some(twin) => twin,
-            None => {return Ok(None)}
+            None => return Ok(None),
         };
-        return Ok(twin.relay);
+        Ok(twin.relay)
     }
 
     // handle outgoing requests (so sent by a client to the peer) but command is prefixed
