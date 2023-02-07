@@ -6,6 +6,7 @@ use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
 use rmb::twin::SubstrateTwinDB;
+use rmb::relay::rate_limiter;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -114,7 +115,10 @@ async fn app(args: &Args) -> Result<()> {
     let opt = relay::SwitchOptions::new(pool)
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
-    let r = relay::Relay::new(&args.domain, twins, opt).await.unwrap();
+    
+    let throttler_cache = rate_limiter::cache::LFUCache::new(args.workers as usize * args.user_per_worker as usize, 60, 60, 100);
+    let throttler = rate_limiter::Throttler::new(throttler_cache, 60, 60);
+    let r = relay::Relay::new(&args.domain, twins, opt, throttler).await.unwrap();
 
     r.start(&args.listen).await.unwrap();
     Ok(())

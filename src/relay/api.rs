@@ -1,3 +1,4 @@
+use crate::relay::rate_limiter::Params;
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
 use crate::types::Envelope;
@@ -19,46 +20,52 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::rate_limiter::{Throttler, ThrottlerCache};
 use super::switch::{Hook, MessageID, StreamID, Switch};
 use super::HttpError;
 
-pub(crate) struct AppData<D: TwinDB> {
+pub(crate) struct AppData<D: TwinDB, T: ThrottlerCache> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
+    throttler: Arc<Throttler<T>>,
 }
 
-impl<D> AppData<D>
+impl<D, T> AppData<D, T>
 where
     D: TwinDB,
+    T: ThrottlerCache
 {
-    pub(crate) fn new<S: Into<String>>(domain: S, switch: Switch<RelayHook>, twins: D) -> Self {
+    pub(crate) fn new<S: Into<String>>(domain: S, switch: Switch<RelayHook>, twins: D, throttler: Throttler<T>) -> Self {
         Self {
             domain: domain.into(),
             switch: Arc::new(switch),
             twins,
+            throttler: Arc::new(throttler),
         }
     }
 }
 #[derive(Clone)]
-pub(crate) struct HttpService<D: TwinDB> {
-    data: Arc<AppData<D>>,
+pub(crate) struct HttpService<D: TwinDB, T: ThrottlerCache> {
+    data: Arc<AppData<D, T>>,
 }
 
-impl<D> HttpService<D>
+impl<D, T> HttpService<D, T>
 where
     D: TwinDB,
+    T: ThrottlerCache,
 {
-    pub(crate) fn new(data: AppData<D>) -> Self {
+    pub(crate) fn new(data: AppData<D, T>) -> Self {
         Self {
             data: Arc::new(data),
         }
     }
 }
 
-impl<D> Service<Request<Body>> for HttpService<D>
+impl<D, T> Service<Request<Body>> for HttpService<D, T>
 where
     D: TwinDB,
+    T: ThrottlerCache,
 {
     type Response = Response<Body>;
     type Error = HttpError;
@@ -91,8 +98,8 @@ where
     }
 }
 
-async fn entry<D: TwinDB>(
-    data: Arc<AppData<D>>,
+async fn entry<D: TwinDB, T: ThrottlerCache>(
+    data: Arc<AppData<D, T>>,
     mut request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // Check if the request is a websocket upgrade request.
@@ -110,11 +117,14 @@ async fn entry<D: TwinDB>(
 
         token::verify(&twin.account, jwt)?;
 
+        // throttling should be done here
+        
+
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket).await {
+            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket, Arc::clone(&data.throttler)).await {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -152,8 +162,8 @@ fn metrics() -> Result<Response<Body>, HttpError> {
         .map_err(HttpError::Http)
 }
 
-async fn federation<D: TwinDB>(
-    data: &AppData<D>,
+async fn federation<D: TwinDB, T: ThrottlerCache>(
+    data: &AppData<D, T>,
     request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // TODO:
@@ -229,14 +239,15 @@ impl Hook for RelayHook {
 }
 
 /// Handle a websocket connection.
-async fn serve_websocket(
+async fn serve_websocket<T: ThrottlerCache>(
     claim: Claims,
     switch: Arc<Switch<RelayHook>>,
     websocket: HyperWebsocket,
+    throttler: Arc<Throttler<T>>
 ) -> Result<()> {
     let websocket = websocket.await?;
     let (writer, mut reader) = websocket.split();
-
+    
     // handler is kept alive to keep the registration alive
     // once dropped (connection closed) registration stops
     let id: StreamID = (claim.id, claim.sid).into();
@@ -272,8 +283,18 @@ async fn serve_websocket(
                     }
                     Message::Binary(msg) => {
                         let envelope =
-                            Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
-
+                        Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+                        let params = Params{
+                            size: msg.len(),
+                            timestamp: envelope.timestamp,
+                        };
+                        if !throttler.can_send_message(&claim.id, &params).await? {
+                            // writer.send(Message::Text(String::from("too many requests, message dropped")));
+                            log::warn!("twin {} exceeded its rate limits, dropping message", claim.id);
+                            continue;
+                            
+                        }
+                        throttler.cache_message(&claim.id, &params).await?;
                         // TODO: federation
                         //  instead of sending the message directly to the switch
                         //  we check federation information attached to the envelope
