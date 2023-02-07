@@ -10,3 +10,4 @@ pub mod relay;
 pub mod token;
 pub mod twin;
 pub mod types;
+pub mod e2e;
