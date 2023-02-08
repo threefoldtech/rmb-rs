@@ -5,8 +5,9 @@ use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
+use rmb::relay::throttler;
+use rmb::relay::throttler::lfu_cache::CleanUp;
 use rmb::twin::SubstrateTwinDB;
-use rmb::relay::rate_limiter;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -47,6 +48,10 @@ struct Args {
     /// enable debugging logs
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
+
+    time_window: u64,
+    requests_per_window: usize,
+    size_per_window: usize,
 }
 
 fn set_limits() -> Result<()> {
@@ -115,10 +120,18 @@ async fn app(args: &Args) -> Result<()> {
     let opt = relay::SwitchOptions::new(pool)
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
-    
-    let throttler_cache = rate_limiter::cache::LFUCache::new(args.workers as usize * args.user_per_worker as usize, 60, 60, 100);
-    let throttler = rate_limiter::Throttler::new(throttler_cache, 60, 60);
-    let r = relay::Relay::new(&args.domain, twins, opt, throttler).await.unwrap();
+
+    let throttler_cache = throttler::lfu_cache::LFUCache::new(
+        CleanUp::SlidingWindow,
+        args.workers as usize * args.user_per_worker as usize,
+        args.time_window,
+        args.requests_per_window,
+        args.size_per_window,
+    );
+    let throttler = throttler::Throttler::new(throttler_cache);
+    let r = relay::Relay::new(&args.domain, twins, opt, throttler)
+        .await
+        .unwrap();
 
     r.start(&args.listen).await.unwrap();
     Ok(())

@@ -1,4 +1,3 @@
-use crate::cache::RedisCache;
 use crate::token;
 use crate::twin::TwinDB;
 use anyhow::Result;
@@ -9,17 +8,17 @@ use tokio::net::ToSocketAddrs;
 
 mod api;
 mod switch;
-pub mod rate_limiter;
+pub mod throttler;
 
 use api::RelayHook;
 use switch::Switch;
 pub use switch::SwitchOptions;
-use rate_limiter::{Throttler, ThrottlerCache};
+use throttler::{Throttler, ThrottlerCache};
 pub struct Relay<D: TwinDB, T: ThrottlerCache> {
     switch: Switch<RelayHook>,
     twins: D,
     domain: String,
-    throttler: Throttler<T>
+    throttler: Throttler<T>,
 }
 
 impl<D, T> Relay<D, T>
@@ -27,7 +26,12 @@ where
     D: TwinDB + Clone,
     T: ThrottlerCache + Clone,
 {
-    pub async fn new<S: Into<String>>(domain: S, twins: D, opt: SwitchOptions, throttler: Throttler<T>) -> Result<Self> {
+    pub async fn new<S: Into<String>>(
+        domain: S,
+        twins: D,
+        opt: SwitchOptions,
+        throttler: Throttler<T>,
+    ) -> Result<Self> {
         let switch = opt.build().await?;
         Ok(Self {
             switch,
@@ -40,12 +44,17 @@ where
     pub async fn start<A: ToSocketAddrs>(self, address: A) -> Result<()> {
         let tcp_listener = TcpListener::bind(address).await?;
 
-        let http = api::HttpService::new(api::AppData::new(self.domain, self.switch, self.twins, self.throttler));
-        
+        let http = api::HttpService::new(api::AppData::new(
+            self.domain,
+            self.switch,
+            self.twins,
+            self.throttler,
+        ));
+
         loop {
             let (tcp_stream, _) = tcp_listener.accept().await?;
             let http = http.clone();
-            
+
             tokio::task::spawn(async move {
                 if let Err(http_err) = Http::new()
                     .http1_keep_alive(true)

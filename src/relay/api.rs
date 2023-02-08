@@ -1,4 +1,4 @@
-use crate::relay::rate_limiter::Params;
+use crate::relay::throttler::Params;
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
 use crate::types::Envelope;
@@ -20,8 +20,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use super::rate_limiter::{Throttler, ThrottlerCache};
 use super::switch::{Hook, MessageID, StreamID, Switch};
+use super::throttler::{Throttler, ThrottlerCache};
 use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB, T: ThrottlerCache> {
@@ -34,9 +34,14 @@ pub(crate) struct AppData<D: TwinDB, T: ThrottlerCache> {
 impl<D, T> AppData<D, T>
 where
     D: TwinDB,
-    T: ThrottlerCache
+    T: ThrottlerCache,
 {
-    pub(crate) fn new<S: Into<String>>(domain: S, switch: Switch<RelayHook>, twins: D, throttler: Throttler<T>) -> Self {
+    pub(crate) fn new<S: Into<String>>(
+        domain: S,
+        switch: Switch<RelayHook>,
+        twins: D,
+        throttler: Throttler<T>,
+    ) -> Self {
         Self {
             domain: domain.into(),
             switch: Arc::new(switch),
@@ -118,13 +123,19 @@ async fn entry<D: TwinDB, T: ThrottlerCache>(
         token::verify(&twin.account, jwt)?;
 
         // throttling should be done here
-        
 
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
         // Spawn a task to handle the websocket connection.
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket, Arc::clone(&data.throttler)).await {
+            if let Err(e) = serve_websocket(
+                claims,
+                Arc::clone(&data.switch),
+                websocket,
+                Arc::clone(&data.throttler),
+            )
+            .await
+            {
                 eprintln!("Error in websocket connection: {}", e);
             }
         });
@@ -210,11 +221,11 @@ pub(crate) struct RelayHook {
 }
 
 impl RelayHook {
-    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Arc<Mutex<Writer>>) -> Self {
         Self {
             peer,
             switch,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
         }
     }
 }
@@ -243,17 +254,20 @@ async fn serve_websocket<T: ThrottlerCache>(
     claim: Claims,
     switch: Arc<Switch<RelayHook>>,
     websocket: HyperWebsocket,
-    throttler: Arc<Throttler<T>>
+    throttler: Arc<Throttler<T>>,
 ) -> Result<()> {
     let websocket = websocket.await?;
     let (writer, mut reader) = websocket.split();
-    
+    let writer_arc = Arc::new(Mutex::new(writer));
     // handler is kept alive to keep the registration alive
     // once dropped (connection closed) registration stops
     let id: StreamID = (claim.id, claim.sid).into();
     log::debug!("got connection from '{}'", id);
     let mut registration = switch
-        .register(id.clone(), RelayHook::new(id, Arc::clone(&switch), writer))
+        .register(
+            id.clone(),
+            RelayHook::new(id, Arc::clone(&switch), writer_arc.clone()),
+        )
         .await?;
 
     loop {
@@ -289,10 +303,12 @@ async fn serve_websocket<T: ThrottlerCache>(
                             timestamp: envelope.timestamp,
                         };
                         if !throttler.can_send_message(&claim.id, &params).await? {
-                            // writer.send(Message::Text(String::from("too many requests, message dropped")));
                             log::warn!("twin {} exceeded its rate limits, dropping message", claim.id);
+                            let mut writer_lock = writer_arc.lock().await;
+                            writer_lock.send(Message::Text(String::from("exceeded rate limits. message dropped"))).await?;
+                            drop(writer_lock);
                             continue;
-                            
+
                         }
                         throttler.cache_message(&claim.id, &params).await?;
                         // TODO: federation
