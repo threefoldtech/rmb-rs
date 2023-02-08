@@ -42,8 +42,7 @@ subxt = "0.25.0"
 
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }
-workers = { path = "tokio-worker-pool"}
-#workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
+workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
 protobuf = { version = "3.2.0", features = ["with-bytes"]}
 
 hyper = {version = "0.14", features = ["full"]}
