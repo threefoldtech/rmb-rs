@@ -109,14 +109,13 @@ where
     let con = Connection::connect(relay, twin, signer.clone());
     let mut address = Address::new();
     address.twin = twin;
-    let upstream_db = db.clone();
     // a high level sender that can stamp and sign the message before sending automatically
     let sender = Sender::new(con.writer(), address, signer);
 
     // handle all received messages from the relay
-    let downstream = Downstream::new(db, storage.clone(), sender.clone());
+    let downstream = Downstream::new(db.clone(), storage.clone(), sender.clone());
     // handle all local generate traffic and push it to relay
-    let upstream = Upstream::new(upstream_db, storage, sender);
+    let upstream = Upstream::new(db, storage, sender);
 
     //let upstream = Upstream::
     // start a processor for incoming message

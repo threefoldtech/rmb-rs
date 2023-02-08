@@ -296,18 +296,13 @@ async fn serve_websocket(
                         //  if federation is not empty and does not match the domain
                         //  of this server, we need to schedule this message to be
                         //  federated to the right relay (according to specs)
-                        match &envelope.federation {
-                            Some(fed) if fed != domain => {
-                                // push message to the (relay.federation) queue
-                                if let Err(err) = federation.send(&msg).await {
-                                    log::error!(
-                                "failed to route message to relay '{}': {}",
-                                fed,
-                                err
-                            );
-                                };
-                            }
-                            _ => {},
+
+                        if matches!(&envelope.federation, Some(fed) if fed != domain) {
+                            // push message to the (relay.federation) queue
+                            if let Err(err) = federation.send(&msg).await {
+                                log::error!("failed to route message to relay '{}': {}", envelope.federation.unwrap() , err);
+                            };
+                            continue
                         }
                         let dst: StreamID = (&envelope.destination).into();
                         if let Err(err) = switch.send(&dst, &msg).await {

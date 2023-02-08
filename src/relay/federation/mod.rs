@@ -1,11 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
-use protobuf::Message;
 use workers::WorkerPool;
-
-use crate::types::Envelope;
 
 use self::router::Router;
 
@@ -13,6 +9,15 @@ mod router;
 
 pub const DEFAULT_WORKERS: usize = 100;
 pub const FEDERATION_QUEUE: &str = "relay.federation";
+
+#[derive(thiserror::Error, Debug)]
+pub enum FederationError {
+    #[error("could not push federation msg to redis: {0}")]
+    RedisPushError(String),
+    #[error("could not get redis connection from pool: {0}")]
+    RedisConnectionError(String),
+}
+
 #[derive(Clone)]
 pub struct Federation {
     redis_pool: Pool<RedisConnectionManager>,
@@ -32,15 +37,20 @@ impl Federation {
         self
     }
     // Sends federation msg to redis on (relay.federation)
-    pub async fn send<T: AsRef<[u8]>>(&self, msg: T) -> Result<()> {
-        let mut con = self.redis_pool.get().await?;
+    pub async fn send<T: AsRef<[u8]>>(&self, msg: T) -> Result<(), FederationError> {
+        let mut con = self
+            .redis_pool
+            .get()
+            .await
+            .map_err(|err| FederationError::RedisConnectionError(err.to_string()))?;
+
         if let Err(err) = cmd("LPUSH")
             .arg(FEDERATION_QUEUE)
             .arg(msg.as_ref())
             .query_async::<_, u32>(&mut *con)
             .await
         {
-            bail!("could not push msg to queue: {}", err)
+            return Err(FederationError::RedisPushError(err.to_string()));
         };
         Ok(())
     }
@@ -49,13 +59,15 @@ impl Federation {
     pub async fn start(self) {
         let work_runner = Router {};
         let mut worker_pool = WorkerPool::new(Arc::new(work_runner), DEFAULT_WORKERS);
-        let mut con = match self.redis_pool.get().await {
-            Ok(con) => con,
-            Err(err) => {
-                panic!("could not get redis connection from pool, {}", err);
-            }
-        };
+
         loop {
+            let mut con = match self.redis_pool.get().await {
+                Ok(con) => con,
+                Err(err) => {
+                    log::error!("could not get redis connection from pool, {}", err);
+                    continue;
+                }
+            };
             let worker_handler = worker_pool.get().await;
             let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
                 .arg(FEDERATION_QUEUE)
@@ -69,14 +81,7 @@ impl Federation {
                     continue;
                 }
             };
-            let env = match Envelope::parse_from_bytes(&msg) {
-                Ok(env) => env,
-                Err(err) => {
-                    log::error!("failed to parse msg to envelop: {}", err);
-                    continue;
-                }
-            };
-            if let Err(err) = worker_handler.send(env) {
+            if let Err(err) = worker_handler.send(msg) {
                 log::error!("failed to send job to worker: {}", err);
             }
         }
@@ -85,6 +90,8 @@ impl Federation {
 
 #[cfg(test)]
 mod test {
+    use protobuf::Message;
+
     use super::*;
     use crate::{
         redis,

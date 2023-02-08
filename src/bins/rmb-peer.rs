@@ -134,7 +134,7 @@ async fn app(args: &Args) -> Result<()> {
                 relay_url.domain()
             );
 
-            db.update_twin(twin.id, &identity.pair(), relay_url.domain().map(|d| d.to_owned()))
+            db.update_twin(&identity.pair(), relay_url.domain().map(|d| d.to_owned()))
                 .await
                 .context("failed to update twin information")?;
         }

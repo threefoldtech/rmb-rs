@@ -9,22 +9,22 @@ pub struct Router {}
 
 #[async_trait]
 impl Work for Router {
-    type Input = Envelope;
+    type Input = Vec<u8>;
 
     type Output = ();
 
-    async fn run(&self, env: Self::Input) {
+    async fn run(&self, msg: Self::Input) {
+        let env = match Envelope::parse_from_bytes(&msg) {
+            Ok(env) => env,
+            Err(err) => {
+                log::error!("failed to parse msg to envelop: {}", err);
+                return;
+            }
+        };
         let domain = match &env.federation {
             Some(domain) => domain,
             None => {
                 log::error!("federation information not found in msg");
-                return;
-            }
-        };
-        let msg = match env.write_to_bytes() {
-            Ok(msg) => msg,
-            Err(err) => {
-                log::error!("could not decode envelop, {}", err);
                 return;
             }
         };

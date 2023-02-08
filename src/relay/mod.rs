@@ -113,18 +113,20 @@ mod test {
 
     use super::*;
     use crate::{
-        redis,
-        types::{Envelope, EnvelopeExt}, twin::{SubstrateTwinDB, self}, cache::{RedisCache, self}, identity, peer,
+        cache::{self, RedisCache},
+        identity, peer, redis,
+        twin::{self, SubstrateTwinDB},
+        types::{Envelope, EnvelopeExt},
     };
     use bb8_redis::redis::aio::ConnectionLike;
-    use httpmock::{MockServer, Method::POST};
-    use switch::SwitchOptions;
+    use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
+    use httpmock::{Method::POST, MockServer};
     pub(crate) use identity::KeyType;
     use identity::{Identity, Signer};
-    pub use peer::{ storage::RedisStorage};
-    use twin::{ TwinDB};
-    use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
+    pub use peer::storage::RedisStorage;
     use protobuf::Message;
+    use switch::SwitchOptions;
+    use twin::TwinDB;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_federation() {
@@ -156,25 +158,27 @@ mod test {
         });
 
         tokio::spawn(async {
-            let secret = "route visual hundred rabbit wet crunch ice castle milk model inherit outside";
-            let identity= identity::Sr25519Signer::try_from(secret).unwrap();
+            let secret =
+                "route visual hundred rabbit wet crunch ice castle milk model inherit outside";
+            let identity = identity::Sr25519Signer::try_from(secret).unwrap();
             let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
-        
+
             let db = SubstrateTwinDB::<RedisCache>::new(
                 "wss://tfchain.dev.grid.tf:443",
                 RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
             )
             .await
             .unwrap();
-        
+
             let id = db
                 .get_twin_with_account(identity.account())
                 .await
-                .unwrap().unwrap();
-        
+                .unwrap()
+                .unwrap();
+
             let storage = RedisStorage::builder(pool).build();
             log::info!("twin: {}", id);
-        
+
             let u = url::Url::parse("http://127.0.0.1:8080").unwrap();
             std::thread::sleep(std::time::Duration::from_secs(1));
             println!("starting rmb peer...");
@@ -193,30 +197,32 @@ mod test {
         let mut con = pool.get().await.unwrap();
         // let msg: Vec<u8> = Vec::new();
         println!("executing lpush....");
-        let msg = peer::storage::JsonOutgoingRequest{
+        let msg = peer::storage::JsonOutgoingRequest {
             command: String::default(),
             data: String::default(),
             reply_to: String::default(),
             destinations: Vec::new(),
             expiration: 100000,
-            timestamp: std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             reference: Some(String::default()),
             schema: Some(String::default()),
             tags: Some(String::default()),
             version: 0,
         };
-        
-        
+
         let x = cmd("LPUSH")
             .arg("msgbus.system.local")
             .arg(msg)
-            .query_async::<_, u32>(&mut *con).await.unwrap();
+            .query_async::<_, u32>(&mut *con)
+            .await
+            .unwrap();
         println!("x has retured from redis: {}", x);
-        
 
         std::thread::sleep(std::time::Duration::from_secs(20));
 
         mock.assert_hits(1);
-        
     }
 }
