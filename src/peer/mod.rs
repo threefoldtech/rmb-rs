@@ -1,8 +1,6 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::{
-    Address, Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError,
-};
+use crate::types::{Address, Envelope, EnvelopeExt, Error as MessageError, ValidationError};
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
 use std::time::Duration;
@@ -367,13 +365,11 @@ where
                     let mut e = MessageError::new();
                     e.code = kind.code();
                     e.message = kind.to_string();
-                    let mut body = Response::new();
-                    body.set_error(e);
 
                     let mut response = Envelope::new();
+                    response.set_error(e);
                     response.uid = uid;
                     response.destination = source;
-                    response.set_response(body);
                     response.expiration = 300;
 
                     if let Err(err) = self.sender.send(response).await {
@@ -392,7 +388,7 @@ where
     S: Signer,
 {
     writer: Writer,
-    address: Address,
+    source: Address,
     signer: S,
 }
 
@@ -400,17 +396,17 @@ impl<S> Sender<S>
 where
     S: Signer + Clone,
 {
-    pub fn new(writer: Writer, address: Address, signer: S) -> Self {
+    pub fn new(writer: Writer, source: Address, signer: S) -> Self {
         Self {
             writer,
-            address,
+            source,
             signer,
         }
     }
 
     /// send an envelope, make sure to stamp, and sign the envelope
     pub async fn send(&self, mut envelope: Envelope) -> Result<()> {
-        envelope.source = Some(self.address.clone()).into();
+        envelope.source = Some(self.source.clone()).into();
         envelope.stamp();
         envelope
             .ttl()

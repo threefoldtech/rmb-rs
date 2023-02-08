@@ -111,10 +111,9 @@ impl JsonOutgoingRequest {
         let mut request = types::Request::new();
 
         request.command = self.command;
-        request.data = base64::decode(self.data).context("invalid data base64 encoding")?;
 
         let mut env = Envelope::new();
-
+        env.set_plain(base64::decode(self.data).context("invalid data base64 encoding")?);
         env.tags = self.tags;
         env.timestamp = self.timestamp;
         env.expiration = self.expiration;
@@ -178,12 +177,13 @@ impl TryFrom<Envelope> for JsonOutgoingRequest {
         }
         let req = value.take_request();
 
+        let data = base64::encode(value.plain());
         Ok(JsonOutgoingRequest {
             version: 1,
             reference: Some(value.uid),
             command: req.command,
             expiration: value.expiration,
-            data: base64::encode(&req.data),
+            data: data,
             tags: value.tags,
             destinations: vec![value.destination.twin],
             reply_to: String::default(),
@@ -253,13 +253,14 @@ impl TryFrom<Envelope> for JsonIncomingRequest {
             anyhow::bail!("envelope doesn't hold a request");
         }
         let req = value.take_request();
+        let data = base64::encode(value.plain());
 
         Ok(JsonIncomingRequest {
             version: 1,
             reference: Some(value.uid),
             command: req.command,
             expiration: value.expiration,
-            data: base64::encode(&req.data),
+            data: data,
             tags: value.tags,
             source: value.source.stringify(),
             reply_to: String::default(),
@@ -320,28 +321,24 @@ impl TryFrom<Envelope> for JsonResponse {
     type Error = anyhow::Error;
     fn try_from(env: Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
-        use types::response::Body;
 
-        let response = match env.message {
+        // message can be only a response or error
+        match env.message {
             None => anyhow::bail!("invalid envelope has no message"),
             Some(Message::Request(_)) => anyhow::bail!("invalid envelope has request message"),
-            Some(Message::Response(response)) => response,
+            _ => {} //Some(Message::Response(response)) => response,
         };
 
-        let body = response.body.context("reply has no body")?;
+        let data = base64::encode(env.plain());
 
         let response = JsonResponse {
             version: 1,
             reference: None,
-            data: if let Body::Reply(ref reply) = body {
-                base64::encode(&reply.data)
-            } else {
-                "".into()
-            },
+            data: data,
             destination: env.destination.stringify(),
             timestamp: env.timestamp,
             schema: env.schema,
-            error: if let Body::Error(err) = body {
+            error: if let Some(Message::Error(err)) = env.message {
                 Some(JsonError {
                     code: err.code,
                     message: err.message,
@@ -359,23 +356,20 @@ impl TryFrom<JsonResponse> for Envelope {
     type Error = anyhow::Error;
 
     fn try_from(value: JsonResponse) -> Result<Self, Self::Error> {
-        let mut response = types::Response::new();
+        let mut env = Envelope::new();
 
         match value.error {
             None => {
-                let mut body = types::Reply::new();
-                body.data = base64::decode(value.data)?;
-                response.set_reply(body);
+                env.set_plain(base64::decode(value.data)?);
+                env.set_response(types::Response::new());
             }
-            Some(err) => {
-                let mut body = types::Error::new();
-                body.code = err.code;
-                body.message = err.message;
-                response.set_error(body);
+            Some(e) => {
+                let mut err = types::Error::new();
+                err.code = e.code;
+                err.message = e.message;
+                env.set_error(err);
             }
-        };
-
-        let mut env = Envelope::new();
+        }
 
         env.uid = value.reference.unwrap_or_default();
         env.timestamp = value.timestamp;
@@ -385,7 +379,6 @@ impl TryFrom<JsonResponse> for Envelope {
                 .context("failed to parse destination address")?,
         )
         .into();
-        env.set_response(response);
         env.schema = value.schema;
 
         Ok(env)

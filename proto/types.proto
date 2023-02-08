@@ -1,29 +1,21 @@
 syntax = "proto3";
 
+// A Request annotate this message as a request message
+// with proper command
 message Request {
-  // command queue to use on receiver side
+  reserved 2;
   string command = 1;
-  // pay load of th emssage
-  bytes data = 2;
 }
 
+// A Response annotate this message as a response message
+message Response { reserved 1, 2; }
+
+// A Error annotiate this message as an error message
 message Error {
   // error code (app specific)
   uint32 code = 1;
   // error message
   string message = 2;
-}
-
-// a reply is only data, but it get it's own type
-// to support extending later.
-message Reply { bytes data = 1; }
-
-// a response can be an error, or data
-message Response {
-  oneof body {
-    Reply reply = 1;
-    Error error = 2;
-  }
 }
 
 message Address {
@@ -48,6 +40,7 @@ message Envelope {
   oneof message {
     Request request = 7;
     Response response = 8;
+    Error error = 12;
   }
   // signature
   optional bytes signature = 9;
@@ -61,4 +54,11 @@ message Envelope {
   // domain, and hence decided if message need federation
   // or local.
   optional string federation = 11;
+
+  // pyload of the message is interpreted differently based
+  // on the message filed
+  oneof payload {
+    bytes plain = 13;
+    bytes cipher = 14;
+  }
 }
