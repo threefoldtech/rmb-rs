@@ -286,31 +286,10 @@ mod test {
         let lfu = LFUCache::new(clean_up, 10, 60, 100, 10);
         let throttler = Throttler::new(lfu);
         for _ in 0..10 {
-            throttler
-                .cache_message(
-                    &1,
-                    &Params {
-                        size: 1,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    },
-                )
-                .await
-                .unwrap();
+            throttler.cache_message(&1, &get_params(1)).await.unwrap();
         }
         assert!(!throttler
-            .can_send_message(
-                &1,
-                &Params {
-                    size: 1,
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                }
-            )
+            .can_send_message(&1, &get_params(1),)
             .await
             .unwrap())
     }
@@ -325,31 +304,10 @@ mod test {
         let lfu = LFUCache::new(clean_up, 10, 60, 10, 100);
         let throttler = Throttler::new(lfu);
         for _ in 0..10 {
-            throttler
-                .cache_message(
-                    &1,
-                    &Params {
-                        size: 1,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    },
-                )
-                .await
-                .unwrap();
+            throttler.cache_message(&1, &get_params(1)).await.unwrap();
         }
         assert!(!throttler
-            .can_send_message(
-                &1,
-                &Params {
-                    size: 1,
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                }
-            )
+            .can_send_message(&1, &get_params(1),)
             .await
             .unwrap())
     }
@@ -362,29 +320,26 @@ mod test {
     async fn exceed_capacity(clean_up: CleanUp) {
         let lfu = LFUCache::new(clean_up, 10, 60, 100, 1);
         let throttler = Throttler::new(lfu);
-        let params = Params {
-            size: 1,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
+
         // this loop inserts cache for ids from 0 -> 9
         for i in 0..10 {
-            throttler.cache_message(&i, &params).await.unwrap();
+            throttler.cache_message(&i, &get_params(1)).await.unwrap();
         }
 
         // this loop inserts cache for ids from 0 -> 8
         for i in 0..9 {
-            throttler.cache_message(&i, &params).await.unwrap();
+            throttler.cache_message(&i, &get_params(1)).await.unwrap();
         }
 
         // this line inserts cache for id 10, while capacity is full, a twin should be removed from cache
         // the only twin with the least frequency is twin 9
-        throttler.cache_message(&10, &params).await.unwrap();
+        throttler.cache_message(&10, &get_params(1)).await.unwrap();
 
         // since twin 9 is removed from cache, it should be able to send a message
-        assert!(throttler.can_send_message(&9, &params).await.unwrap())
+        assert!(throttler
+            .can_send_message(&9, &get_params(1))
+            .await
+            .unwrap())
     }
 
     #[tokio::test]
@@ -395,18 +350,51 @@ mod test {
     async fn valid_rate(clean_up: CleanUp) {
         let lfu = LFUCache::new(clean_up, 10, 60, 100, 100);
         let throttler = Throttler::new(lfu);
-        let params = Params {
-            size: 1,
+
+        for _ in 0..10 {
+            throttler.cache_message(&1, &get_params(1)).await.unwrap();
+        }
+
+        assert!(throttler
+            .can_send_message(&1, &get_params(1))
+            .await
+            .unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_throttle() {
+        throttle(CleanUp::SlidingWindow).await;
+        throttle(CleanUp::FixedWindow).await;
+    }
+    async fn throttle(clean_up: CleanUp) {
+        let lfu = LFUCache::new(clean_up, 1, 5, 10, 100);
+        let throttler = Throttler::new(lfu);
+
+        for _ in 0..10 {
+            throttler.cache_message(&1, &get_params(1)).await.unwrap();
+        }
+        // twin should not be able to send another message
+
+        assert!(!throttler
+            .can_send_message(&1, &get_params(1))
+            .await
+            .unwrap());
+
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        assert!(throttler
+            .can_send_message(&1, &get_params(1))
+            .await
+            .unwrap())
+    }
+
+    fn get_params(size: usize) -> Params {
+        Params {
             timestamp: std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-        };
-
-        for _ in 0..10 {
-            throttler.cache_message(&1, &params).await.unwrap();
+            size,
         }
-
-        assert!(throttler.can_send_message(&1, &params).await.unwrap())
     }
 }
