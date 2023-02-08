@@ -39,10 +39,15 @@ where
         Ok(client)
     }
 
-    pub async fn update_twin(&self, kp: &KeyPair, relay: Option<String>) -> Result<()> {
+    pub async fn update_twin(&self, twin_id: u32, kp: &KeyPair, relay: Option<String>) -> Result<()> {
         let client = self.client.lock().await;
         let hash = client.update_twin(kp, relay, None).await?;
         log::debug!("hash: {:?}", hash);
+        let twin = match client.get_twin_by_id(twin_id, None).await?{
+            Some(twin) => twin,
+            None => return Err(anyhow!("could not get twin {} from chain", twin_id)),
+        };
+        self.cache.set(twin_id, twin).await?;
         Ok(())
     }
 }
