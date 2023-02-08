@@ -268,22 +268,21 @@ fn ttl(now: u64, ts: u64, exp: u64) -> Option<Duration> {
 impl Challengeable for types::Request {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
         write!(hash, "{}", self.command)?;
-        hash.write_all(&self.data)?;
 
         Ok(())
     }
 }
 
 impl Challengeable for types::Response {
+    fn challenge<W: Write>(&self, _hash: &mut W) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl Challengeable for types::Error {
     fn challenge<W: Write>(&self, hash: &mut W) -> Result<()> {
-        if self.has_error() {
-            let err = self.error();
-            write!(hash, "{}", err.code)?;
-            write!(hash, "{}", err.message)?;
-        } else {
-            let reply = self.reply();
-            hash.write_all(&reply.data)?;
-        }
+        write!(hash, "{}", self.code)?;
+        write!(hash, "{}", self.message)?;
 
         Ok(())
     }
@@ -316,7 +315,26 @@ impl Challengeable for Envelope {
             match message {
                 types::envelope::Message::Request(req) => req.challenge(hash)?,
                 types::envelope::Message::Response(resp) => resp.challenge(hash)?,
+                types::envelope::Message::Error(err) => err.challenge(hash)?,
             };
+        }
+
+        if let Some(ref schema) = self.schema {
+            write!(hash, "{}", schema)?;
+        }
+
+        if let Some(ref federation) = self.federation {
+            write!(hash, "{}", federation)?;
+        }
+
+        match self.payload {
+            None => {}
+            Some(types::envelope::Payload::Plain(ref data)) => {
+                hash.write_all(data)?;
+            }
+            Some(types::envelope::Payload::Cipher(ref data)) => {
+                hash.write_all(data)?;
+            }
         }
 
         Ok(())
