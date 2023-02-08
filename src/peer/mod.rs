@@ -1,8 +1,6 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::{
-    Address, Envelope, EnvelopeExt, Error as MessageError, Response, ValidationError,
-};
+use crate::types::{Address, Envelope, EnvelopeExt, Error as MessageError, ValidationError};
 use anyhow::{Context, Result};
 use protobuf::Message as ProtoMessage;
 use std::time::Duration;

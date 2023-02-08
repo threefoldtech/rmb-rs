@@ -23,7 +23,7 @@ pub enum Error {
 
 /// Pair is a secure key (pair) that is used for encryption
 ///
-struct Pair(KeyPair);
+pub struct Pair(KeyPair);
 
 impl FromStr for Pair {
     type Err = Error;
