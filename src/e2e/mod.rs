@@ -117,12 +117,12 @@ impl Pair {
         }
 
         let shared = self.shared(&pk)?;
-        let nonce = Nonce::from_slice(&data[..12]);
+        let nonce = Nonce::from_slice(&data[..NONCE_KEY_SIZE]);
 
         let aes = Aes256Gcm::new_from_slice(&shared).unwrap();
 
         let decrypted = aes
-            .decrypt(nonce, &data[12..])
+            .decrypt(nonce, &data[NONCE_KEY_SIZE..])
             .map_err(|_| Error::InvalidCipher)?;
         Ok(decrypted)
     }
