@@ -42,7 +42,8 @@ subxt = "0.25.0"
 
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }
-workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
+workers = { path = "tokio-worker-pool"}
+#workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
 protobuf = { version = "3.2.0", features = ["with-bytes"]}
 
 hyper = {version = "0.14", features = ["full"]}
@@ -51,6 +52,7 @@ lazy_static = "1.4.0"
 prometheus = {version = "0.13.3", features=["process"]}
 
 tfchain-client = { git = "https://github.com/threefoldtech/grid3_client_rs", rev = "v0.2.0" }
+reqwest = "0.11.14"
 
 # for e2e
 tiny-bip39 = "1.0.0"

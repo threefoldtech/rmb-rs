@@ -57,7 +57,6 @@ impl Federation {
         };
         loop {
             let worker_handler = worker_pool.get().await;
-            worker_pool.get().await;
             let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
                 .arg(FEDERATION_QUEUE)
                 .arg(0.0)

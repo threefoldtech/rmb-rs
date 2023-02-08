@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{builder::ArgAction, Parser};
-use rmb::cache::{NoCache, RedisCache};
+use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
 use rmb::peer::{self, storage::RedisStorage};
@@ -101,9 +101,12 @@ async fn app(args: &Args) -> Result<()> {
 
     // cache is a little bit tricky because while it improves performance it
     // makes changes to twin data takes at least 5 min before they are detected
-    let db = SubstrateTwinDB::<NoCache>::new(&args.substrate, NoCache)
-        .await
-        .context("cannot create substrate twin db object")?;
+    let db = SubstrateTwinDB::<RedisCache>::new(
+        &args.substrate,
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
+    )
+    .await
+    .context("cannot create substrate twin db object")?;
 
     let id = db
         .get_twin_with_account(identity.account())

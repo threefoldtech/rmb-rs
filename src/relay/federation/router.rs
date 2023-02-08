@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use http::{Request, StatusCode};
-use hyper::Client;
-
+use http::StatusCode;
 use protobuf::Message;
 use workers::Work;
 
@@ -30,23 +28,20 @@ impl Work for Router {
                 return;
             }
         };
-        let request = match Request::post(domain).body(hyper::Body::from(msg)) {
-            Ok(request) => request,
-            Err(_) => return,
-        };
-        let client = Client::new();
-        let resp = match client.request(request).await {
+        let url = format!("https://{}/", domain);
+        let client = reqwest::Client::new();
+        let resp = match client.post(&url).body(msg).send().await {
             Ok(resp) => resp,
 
             Err(_) => {
-                log::error!("could not send request to relay: {}", domain);
+                log::error!("could not send request to relay: {}", &url);
                 return;
             }
         };
-        if resp.status() != StatusCode::OK {
+        if resp.status() != StatusCode::OK && resp.status() != StatusCode::ACCEPTED {
             log::error!(
                 "failed to send request to relay: {}, status code: {}",
-                domain,
+                url,
                 resp.status()
             );
         }

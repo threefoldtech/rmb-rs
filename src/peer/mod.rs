@@ -196,13 +196,13 @@ where
     async fn response(&self, response: JsonResponse) -> Result<()> {
         // that's a reply message that is initiated locally and need to be
         // sent to a remote peer
-        self.sender
-            .send(
-                response
-                    .try_into()
-                    .context("failed to build envelope from response")?,
-            )
-            .await
+        let mut env: Envelope = response
+            .try_into()
+            .context("failed to build envelope from response")?;
+        env.federation = self
+            .get_federation_information(env.destination.twin)
+            .await?;
+        self.sender.send(env).await
     }
 
     pub async fn start(self) {

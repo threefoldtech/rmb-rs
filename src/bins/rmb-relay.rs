@@ -106,7 +106,7 @@ async fn app(args: &Args) -> Result<()> {
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(21600)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
     .context("cannot create substrate twin db object")?;
