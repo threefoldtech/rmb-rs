@@ -1,7 +1,9 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
+use relay::limiter::{Limiter, NoLimit};
 use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
@@ -129,12 +131,15 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
+    let max_users = args.workers as usize * args.user_per_worker as usize;
     let opt = relay::SwitchOptions::new(pool.clone())
         .with_workers(args.workers)
-        .with_max_users(args.workers as usize * args.user_per_worker as usize);
+        .with_max_users(max_users);
 
     let federation = relay::FederationOptions::new(pool).with_workers(fed_size as usize);
-    let r = relay::Relay::new(&args.domain, twins, opt, federation)
+    let limiter = Limiter::default();
+
+    let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter)
         .await
         .unwrap();
     r.start(&args.listen).await.unwrap();
