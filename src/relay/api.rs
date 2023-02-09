@@ -228,11 +228,11 @@ pub(crate) struct RelayHook {
 }
 
 impl RelayHook {
-    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Arc<Mutex<Writer>>) -> Self {
         Self {
             peer,
             switch,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
         }
     }
 }
@@ -312,6 +312,7 @@ impl <M:Metrics> Stream <M>{
         let websocket = websocket.await?;
         let (writer, mut reader) = websocket.split();
 
+        let writer_arc = Arc::new(Mutex::new(writer));
         // handler is kept alive to keep the registration alive
         // once dropped (connection closed) registration stops
         log::debug!("got connection from '{}'", self.id);
@@ -319,7 +320,7 @@ impl <M:Metrics> Stream <M>{
             .switch
             .register(
                 self.id.clone(),
-                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer),
+                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer_arc.clone()),
             )
             .await?;
 
@@ -351,11 +352,12 @@ impl <M:Metrics> Stream <M>{
                         }
                         Message::Binary(msg) => {
                             if !self.metrics.feed(msg.len()).await {
-                                // todo: send message back to the sender to tell him
-                                // that i have dropped his message
+                                log::warn!("twin with stream id {} exceeded its request limits, dropping message", self.id);
+                                let mut writer_lock = writer_arc.lock().await;
+                                writer_lock.send(Message::Text(String::from("exceeded request limits. message dropped"))).await?;
+                                drop(writer_lock);
                                 continue
                             }
-    
                             // failure to load the message is fatal hence we disconnect
                             // the client
                             let envelope =
