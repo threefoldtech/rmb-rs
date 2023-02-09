@@ -1,12 +1,12 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
+use relay::limiter::{Limiter, NoLimit};
 use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
-use rmb::relay::throttler;
-use rmb::relay::throttler::lfu_cache::CleanUp;
 use rmb::twin::SubstrateTwinDB;
 
 /// A peer requires only which rely to connect to, and
@@ -117,19 +117,15 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
+    let max_users = args.workers as usize * args.user_per_worker as usize;
+
     let opt = relay::SwitchOptions::new(pool)
         .with_workers(args.workers)
-        .with_max_users(args.workers as usize * args.user_per_worker as usize);
+        .with_max_users(max_users);
 
-    let throttler_cache = throttler::lfu_cache::LFUCache::new(
-        CleanUp::SlidingWindow,
-        args.workers as usize * args.user_per_worker as usize,
-        args.time_window,
-        args.requests_per_window,
-        args.size_per_window,
-    );
-    let throttler = throttler::Throttler::new(throttler_cache);
-    let r = relay::Relay::new(&args.domain, twins, opt, throttler)
+    let limiter = Limiter::default();
+
+    let r = relay::Relay::new(&args.domain, twins, opt, limiter)
         .await
         .unwrap();
 

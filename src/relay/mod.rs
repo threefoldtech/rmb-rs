@@ -7,37 +7,37 @@ use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
 
 mod api;
+pub mod limiter;
 mod switch;
-pub mod throttler;
 
 use api::RelayHook;
+use limiter::{Limiter, Metrics};
 use switch::Switch;
 pub use switch::SwitchOptions;
-use throttler::{Throttler, ThrottlerCache};
-pub struct Relay<D: TwinDB, T: ThrottlerCache> {
+pub struct Relay<D: TwinDB, M: Metrics> {
     switch: Switch<RelayHook>,
     twins: D,
     domain: String,
-    throttler: Throttler<T>,
+    limiter: Limiter<M>,
 }
 
-impl<D, T> Relay<D, T>
+impl<D, M> Relay<D, M>
 where
     D: TwinDB + Clone,
-    T: ThrottlerCache + Clone,
+    M: Metrics,
 {
     pub async fn new<S: Into<String>>(
         domain: S,
         twins: D,
         opt: SwitchOptions,
-        throttler: Throttler<T>,
+        limiter: Limiter<M>,
     ) -> Result<Self> {
         let switch = opt.build().await?;
         Ok(Self {
             switch,
             twins,
             domain: domain.into(),
-            throttler,
+            limiter,
         })
     }
 
@@ -48,7 +48,7 @@ where
             self.domain,
             self.switch,
             self.twins,
-            self.throttler,
+            self.limiter,
         ));
 
         loop {
