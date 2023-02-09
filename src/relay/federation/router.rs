@@ -1,12 +1,52 @@
+use crate::types::Envelope;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::StatusCode;
 use protobuf::Message;
 use workers::Work;
 
-use crate::types::Envelope;
-
 pub struct Router {}
 
+impl Router {
+    async fn process(&self, msg: Vec<u8>) -> Result<()> {
+        let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
+
+        let domain = env
+            .federation
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("federation is not set on envelope"))?;
+
+        let url = if cfg!(test) {
+            format!("http://{}/", domain)
+        } else {
+            format!("https://{}/", domain)
+        };
+
+        log::debug!("federation to: {}", url);
+        let client = reqwest::Client::new();
+        // TODO:
+        // - this need to be tried multiple times, let's say 3 times
+        // - some errors are permanent (for example if u get an error code on submit, u shouldn't try again)
+        // - put failure to connect (the client can't push the message) can be tried because it can be network issue
+        let resp = client
+            .post(&url)
+            .body(msg)
+            .send()
+            .await
+            .context("could not send request to relay")?;
+
+        if resp.status() != StatusCode::ACCEPTED {
+            // TODO: after giving up on retries we MUST send an error message
+            // back to the client (let's discuss how to do that)
+            log::error!(
+                "failed to send request to relay: {}, status code: {}",
+                url,
+                resp.status()
+            );
+        }
+        Ok(())
+    }
+}
 #[async_trait]
 impl Work for Router {
     type Input = Vec<u8>;
@@ -14,36 +54,8 @@ impl Work for Router {
     type Output = ();
 
     async fn run(&self, msg: Self::Input) {
-        let env = match Envelope::parse_from_bytes(&msg) {
-            Ok(env) => env,
-            Err(err) => {
-                log::error!("failed to parse msg to envelop: {}", err);
-                return;
-            }
-        };
-        let domain = match &env.federation {
-            Some(domain) => domain,
-            None => {
-                log::error!("federation information not found in msg");
-                return;
-            }
-        };
-        let url = format!("https://{}/", domain);
-        let client = reqwest::Client::new();
-        let resp = match client.post(&url).body(msg).send().await {
-            Ok(resp) => resp,
-
-            Err(_) => {
-                log::error!("could not send request to relay: {}", &url);
-                return;
-            }
-        };
-        if resp.status() != StatusCode::OK && resp.status() != StatusCode::ACCEPTED {
-            log::error!(
-                "failed to send request to relay: {}, status code: {}",
-                url,
-                resp.status()
-            );
+        if let Err(err) = self.process(msg).await {
+            log::error!("failed to federation message: {:#}", err);
         }
     }
 }
@@ -64,7 +76,7 @@ mod test {
         // Create a mock on the server.
         let federation = server.mock(|when, then| {
             when.method(POST).path("/");
-            then.status(200)
+            then.status(202)
                 .header("content-type", "text/html")
                 .body("ohi");
         });
@@ -75,12 +87,12 @@ mod test {
         env.tags = None;
         env.signature = None;
         env.schema = None;
-        env.federation = Some(server.url("/"));
+        env.federation = Some(server.address().to_string());
         env.stamp();
 
         let worker_handler = worker_pool.get().await;
 
-        worker_handler.send(env).unwrap();
+        worker_handler.send(env.write_to_bytes().unwrap()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         federation.assert()
     }

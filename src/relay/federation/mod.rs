@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use bb8_redis::{bb8::Pool, redis::cmd, RedisConnectionManager};
+use bb8_redis::{
+    bb8::{Pool, RunError},
+    redis::{cmd, RedisError},
+    RedisConnectionManager,
+};
 use workers::WorkerPool;
 
 use self::router::Router;
@@ -12,10 +16,10 @@ pub const FEDERATION_QUEUE: &str = "relay.federation";
 
 #[derive(thiserror::Error, Debug)]
 pub enum FederationError {
-    #[error("could not push federation msg to redis: {0}")]
-    RedisPushError(String),
-    #[error("could not get redis connection from pool: {0}")]
-    RedisConnectionError(String),
+    #[error("pool error: {0}")]
+    PoolError(#[from] RunError<RedisError>),
+    #[error("redis error: {0}")]
+    RedisError(#[from] RedisError),
 }
 
 #[derive(Clone)]
@@ -38,20 +42,14 @@ impl Federation {
     }
     // Sends federation msg to redis on (relay.federation)
     pub async fn send<T: AsRef<[u8]>>(&self, msg: T) -> Result<(), FederationError> {
-        let mut con = self
-            .redis_pool
-            .get()
-            .await
-            .map_err(|err| FederationError::RedisConnectionError(err.to_string()))?;
+        let mut con = self.redis_pool.get().await?;
 
-        if let Err(err) = cmd("LPUSH")
+        cmd("LPUSH")
             .arg(FEDERATION_QUEUE)
             .arg(msg.as_ref())
             .query_async::<_, u32>(&mut *con)
-            .await
-        {
-            return Err(FederationError::RedisPushError(err.to_string()));
-        };
+            .await?;
+
         Ok(())
     }
 
