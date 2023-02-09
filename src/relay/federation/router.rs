@@ -24,27 +24,30 @@ impl Router {
 
         log::debug!("federation to: {}", url);
         let client = reqwest::Client::new();
-        // TODO:
-        // - this need to be tried multiple times, let's say 3 times
-        // - some errors are permanent (for example if u get an error code on submit, u shouldn't try again)
-        // - put failure to connect (the client can't push the message) can be tried because it can be network issue
-        let resp = client
-            .post(&url)
-            .body(msg)
-            .send()
-            .await
-            .context("could not send request to relay")?;
+        for _ in 0..3 {
+            let resp = match client.post(&url).body(msg.clone()).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    if err.is_connect() || err.is_timeout() {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        continue;
+                    }
+                    bail!("could not send request to relay: {}", err)
+                }
+            };
 
-        if resp.status() != StatusCode::ACCEPTED {
-            // TODO: after giving up on retries we MUST send an error message
-            // back to the client (let's discuss how to do that)
-            log::error!(
-                "failed to send request to relay: {}, status code: {}",
-                url,
-                resp.status()
-            );
+            if resp.status() != StatusCode::ACCEPTED {
+                // TODO: after giving up on retries we MUST send an error message
+                // back to the client (let's discuss how to do that)
+                log::error!(
+                    "failed to send request to relay: {}, status code: {}",
+                    url, 
+                    resp.status()
+                );
+            }
+            return Ok(());
         }
-        Ok(())
+        bail!("could not send request to relay: {}", domain)
     }
 }
 #[async_trait]
