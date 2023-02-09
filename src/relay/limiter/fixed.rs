@@ -1,6 +1,6 @@
 use super::Metrics;
-use std::{sync::Arc, time::UNIX_EPOCH};
 use async_trait::async_trait;
+use std::{sync::Arc, time::UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ pub struct FixedWindowOptions {
 
 #[derive(Default)]
 struct Counters {
-    start: u64, 
+    start: u64,
     size: usize,
     count: usize,
 }
@@ -22,7 +22,6 @@ pub struct FixedWindow {
     options: FixedWindowOptions,
     inner: Arc<Mutex<Counters>>,
 }
-
 
 #[async_trait]
 impl Metrics for FixedWindow {
@@ -35,12 +34,15 @@ impl Metrics for FixedWindow {
         }
     }
 
-    async fn feed(&self, size: usize) -> bool{
+    async fn feed(&self, size: usize) -> bool {
         if size > self.options.size {
             return false;
         }
 
-        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let current_window_start = now / (self.options.window as u64);
         let mut counters = self.inner.lock().await;
         if current_window_start != counters.start {
@@ -48,16 +50,14 @@ impl Metrics for FixedWindow {
             counters.count = 0;
             counters.size = 0;
         }
-        
-        if counters.count + 1 > self.options.count ||
-            counters.size + size > self.options.size {
+
+        if counters.count + 1 > self.options.count || counters.size + size > self.options.size {
             return false;
         }
-        
+
         counters.count += 1;
         counters.size += size;
 
         true
     }
-    
 }
