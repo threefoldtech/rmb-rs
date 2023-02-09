@@ -292,7 +292,7 @@ async fn serve_websocket<M: Metrics>(
                         break;
                     }
                     Message::Binary(msg) => {
-                        if !metrics.feed(msg.len()) {
+                        if !metrics.feed(msg.len()).await {
                             // todo: send message back to the sender to tell him
                             // that i have dropped his message
                             continue
