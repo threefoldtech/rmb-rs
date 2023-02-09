@@ -3,7 +3,6 @@ use std::{sync::Arc, time::UNIX_EPOCH};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
 pub struct FixedWindowOptions {
     pub size: usize,
     pub count: usize,
@@ -19,14 +18,14 @@ struct Counters {
 
 #[derive(Clone)]
 pub struct FixedWindow {
-    options: FixedWindowOptions,
+    options: Arc<FixedWindowOptions>,
     inner: Arc<Mutex<Counters>>,
 }
 
 
 #[async_trait]
 impl Metrics for FixedWindow {
-    type Options = FixedWindowOptions;
+    type Options = Arc<FixedWindowOptions>;
 
     fn new(options: Self::Options) -> Self {
         Self {
