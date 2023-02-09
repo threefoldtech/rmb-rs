@@ -49,14 +49,58 @@ impl Metrics for FixedWindow {
             counters.count = 0;
             counters.size = 0;
         }
-
-        if counters.count + 1 > self.options.count || counters.size + size > self.options.size {
-            return false;
-        }
-
         counters.count += 1;
         counters.size += size;
 
+        if counters.count > self.options.count || counters.size > self.options.size {
+            return false;
+        }
+
         true
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{num::NonZeroUsize, sync::Arc};
+
+    use crate::relay::limiter::{FixedWindow, FixedWindowOptions, Limiter, Metrics};
+
+    #[tokio::test]
+    async fn test_exceed_count() {
+        let limiter = Limiter::<FixedWindow>::new(
+            NonZeroUsize::new(10).unwrap(),
+            Arc::new(FixedWindowOptions {
+                count: 10,
+                size: 100,
+                window: 5,
+            }),
+        );
+        let twin_cache = limiter.get(1).await;
+        for _ in 0..10 {
+            assert!(twin_cache.feed(1).await);
+        }
+        assert!(!twin_cache.feed(1).await);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        assert!(twin_cache.feed(1).await);
+    }
+
+    #[tokio::test]
+    async fn test_exceed_size() {
+        let limiter = Limiter::<FixedWindow>::new(
+            NonZeroUsize::new(10).unwrap(),
+            Arc::new(FixedWindowOptions {
+                count: 100,
+                size: 10,
+                window: 5,
+            }),
+        );
+        let twin_cache = limiter.get(1).await;
+        for _ in 0..10 {
+            assert!(twin_cache.feed(1).await);
+        }
+        assert!(!twin_cache.feed(1).await);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        assert!(twin_cache.feed(1).await);
     }
 }

@@ -293,8 +293,10 @@ async fn serve_websocket<M: Metrics>(
                     }
                     Message::Binary(msg) => {
                         if !metrics.feed(msg.len()).await {
-                            // todo: send message back to the sender to tell him
-                            // that i have dropped his message
+                            log::warn!("twin {} exceeded its request limits, dropping message", claim.id);
+                            let mut writer_lock = writer_arc.lock().await;
+                            writer_lock.send(Message::Text(String::from("exceeded request limits. message dropped"))).await?;
+                            drop(writer_lock);
                             continue
                         }
 
