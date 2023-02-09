@@ -138,6 +138,7 @@ async fn entry<D: TwinDB, M: Metrics>(
             data.domain.clone(),
             Arc::clone(&data.switch),
             Arc::clone(&data.federator),
+            metrics
         );
 
         tokio::spawn(async move {
@@ -255,18 +256,20 @@ impl Hook for RelayHook {
     }
 }
 
-struct Stream {
+struct Stream <M:Metrics>{
     id: StreamID,
     domain: String,
     switch: Arc<Switch<RelayHook>>,
     federator: Arc<Federator>,
+    metrics: M,
 }
-impl Stream {
+impl <M:Metrics> Stream <M>{
     fn new(
         claims: Claims,
         domain: String,
         switch: Arc<Switch<RelayHook>>,
         federator: Arc<Federator>,
+        metrics: M,
     ) -> Self {
         let id: StreamID = (claims.id, claims.sid).into();
         Self {
@@ -274,6 +277,7 @@ impl Stream {
             domain,
             switch,
             federator,
+            metrics
         }
     }
 
@@ -335,6 +339,7 @@ impl Stream {
                         Err(err) => {
                             log::debug!("error receiving a message: {}", err);
                             return Ok(());
+
                         }
                     };
 
@@ -345,7 +350,7 @@ impl Stream {
                             break;
                         }
                         Message::Binary(msg) => {
-                            if !metrics.feed(msg.len()) {
+                            if !self.metrics.feed(msg.len()).await {
                                 // todo: send message back to the sender to tell him
                                 // that i have dropped his message
                                 continue

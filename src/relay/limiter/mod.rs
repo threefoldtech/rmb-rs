@@ -2,15 +2,17 @@ use core::num::NonZeroUsize;
 use lru::LruCache;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use async_trait::async_trait;
 
 mod fixed;
 pub use fixed::{FixedWindow, FixedWindowOptions};
 
+#[async_trait]
 pub trait Metrics: Send + Sync + Clone + 'static {
     type Options: Send + Sync + Clone;
 
     fn new(option: Self::Options) -> Self;
-    fn feed(&self, size: usize) -> bool;
+    async fn feed(&self, size: usize) -> bool;
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl Default for Limiter<NoLimit> {
 #[derive(Clone)]
 pub struct NoLimit;
 
+#[async_trait]
 impl Metrics for NoLimit {
     type Options = ();
 
@@ -69,7 +72,7 @@ impl Metrics for NoLimit {
         Self
     }
 
-    fn feed(&self, _size: usize) -> bool {
+    async fn feed(&self, _: usize) -> bool{
         true
     }
 }
