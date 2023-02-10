@@ -7,9 +7,11 @@ use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
 
 mod api;
+mod federation;
 mod switch;
-
 use api::RelayHook;
+use federation::Federation;
+pub use federation::FederationOptions;
 use switch::Switch;
 pub use switch::SwitchOptions;
 
@@ -17,26 +19,38 @@ pub struct Relay<D: TwinDB> {
     switch: Switch<RelayHook>,
     twins: D,
     domain: String,
+    federation: Federation,
 }
 
 impl<D> Relay<D>
 where
     D: TwinDB + Clone,
 {
-    pub async fn new<S: Into<String>>(domain: S, twins: D, opt: SwitchOptions) -> Result<Self> {
+    pub async fn new<S: Into<String>>(
+        domain: S,
+        twins: D,
+        opt: SwitchOptions,
+        federation: FederationOptions,
+    ) -> Result<Self> {
         let switch = opt.build().await?;
+        let federation = federation.build()?;
         Ok(Self {
             switch,
             twins,
             domain: domain.into(),
+            federation,
         })
     }
 
     pub async fn start<A: ToSocketAddrs>(self, address: A) -> Result<()> {
         let tcp_listener = TcpListener::bind(address).await?;
-
-        let http = api::HttpService::new(api::AppData::new(self.domain, self.switch, self.twins));
-
+        let federator = self.federation.start();
+        let http = api::HttpService::new(api::AppData::new(
+            self.domain,
+            self.switch,
+            self.twins,
+            federator,
+        ));
         loop {
             let (tcp_stream, _) = tcp_listener.accept().await?;
             let http = http.clone();

@@ -103,7 +103,7 @@ async fn app(args: &Args) -> Result<()> {
     // makes changes to twin data takes at least 5 min before they are detected
     let db = SubstrateTwinDB::<RedisCache>::new(
         &args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(600)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
     .context("cannot create substrate twin db object")?;

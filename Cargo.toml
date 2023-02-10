@@ -51,6 +51,7 @@ lazy_static = "1.4.0"
 prometheus = {version = "0.13.3", features=["process"]}
 
 tfchain-client = { git = "https://github.com/threefoldtech/grid3_client_rs", rev = "v0.2.0" }
+reqwest = "0.11.14"
 
 # for e2e
 tiny-bip39 = "1.0.0"
@@ -62,3 +63,6 @@ rand_core = "0.6"
 [build-dependencies]
 git-version = "0.3.5"
 protobuf-codegen = "3.2.0"
+
+[dev-dependencies]
+httpmock = "0.6"
