@@ -74,8 +74,14 @@ fn set_limits() -> Result<()> {
 }
 
 async fn app(args: &Args) -> Result<()> {
-    //ed25519 seed.
-    //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
+    if args.workers == 0 {
+        anyhow::bail!("number of workers cannot be zero");
+    }
+
+    if args.user_per_worker == 0 {
+        anyhow::bail!("max number of users can't be zero");
+    }
+
     simple_logger::SimpleLogger::new()
         .with_level({
             match args.debug {
@@ -96,8 +102,20 @@ async fn app(args: &Args) -> Result<()> {
     // to have good preformance. but we also need a connection when a user sends a message to
     // push to the queue that depends on how fast messages are sent but we can assume an extra 10%
     // of number of workers is needed
-    let pool_size = args.workers + std::cmp::max((args.workers * 10) / 100, 1);
-    log::debug!("redis pool size: {}", pool_size);
+
+    // a wiggle is 10% of number of workers with min of 1
+    let wiggle = std::cmp::max((args.workers * 10) / 100, 1);
+    let pool_size = args.workers + wiggle;
+    let fed_size = wiggle * 2;
+
+    log::info!("redis pool size: {}", pool_size);
+    log::info!("switch workers: {}", args.workers);
+    log::info!("federation workers: {}", fed_size);
+    log::info!(
+        "max number of users: {}",
+        args.workers * args.user_per_worker
+    );
+
     let pool = redis::pool(&args.redis, pool_size)
         .await
         .context("failed to initialize redis pool")?;
@@ -115,7 +133,7 @@ async fn app(args: &Args) -> Result<()> {
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
 
-    let federation = relay::Federation::new(pool).with_workers(args.workers as usize);
+    let federation = relay::Federation::new(pool).with_workers(fed_size as usize);
     let r = relay::Relay::new(&args.domain, twins, opt, federation)
         .await
         .unwrap();

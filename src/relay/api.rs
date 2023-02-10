@@ -19,14 +19,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::federation::Federator;
 use super::switch::{Hook, MessageID, StreamID, Switch};
-use super::{Federation, HttpError};
+use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
-    federation: Arc<Federation>,
+    federator: Arc<Federator>,
 }
 
 impl<D> AppData<D>
@@ -37,13 +38,13 @@ where
         domain: S,
         switch: Switch<RelayHook>,
         twins: D,
-        federation: Federation,
+        federator: Federator,
     ) -> Self {
         Self {
             domain: domain.into(),
             switch: Arc::new(switch),
             twins,
-            federation: Arc::new(federation),
+            federator: Arc::new(federator),
         }
     }
 }
@@ -126,7 +127,7 @@ async fn entry<D: TwinDB>(
                 claims,
                 Arc::clone(&data.switch),
                 websocket,
-                Arc::clone(&data.federation),
+                Arc::clone(&data.federator),
             )
             .await
             {
@@ -249,7 +250,7 @@ async fn serve_websocket(
     claim: Claims,
     switch: Arc<Switch<RelayHook>>,
     websocket: HyperWebsocket,
-    federation: Arc<Federation>,
+    federator: Arc<Federator>,
 ) -> Result<()> {
     let websocket = websocket.await?;
     let (writer, mut reader) = websocket.split();
@@ -299,7 +300,7 @@ async fn serve_websocket(
 
                         if matches!(&envelope.federation, Some(fed) if fed != domain) {
                             // push message to the (relay.federation) queue
-                            if let Err(err) = federation.send(&msg).await {
+                            if let Err(err) = federator.send(&msg).await {
                                 log::error!("failed to route message to relay '{}': {}", envelope.federation.unwrap() , err);
                             };
                             continue

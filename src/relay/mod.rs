@@ -42,13 +42,12 @@ where
 
     pub async fn start<A: ToSocketAddrs>(self, address: A) -> Result<()> {
         let tcp_listener = TcpListener::bind(address).await?;
-        let federation_workers = self.federation.clone();
-        tokio::task::spawn(federation_workers.start());
+        let federator = self.federation.start();
         let http = api::HttpService::new(api::AppData::new(
             self.domain,
             self.switch,
             self.twins,
-            self.federation,
+            federator,
         ));
         loop {
             let (tcp_stream, _) = tcp_listener.accept().await?;

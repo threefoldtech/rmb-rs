@@ -22,27 +22,20 @@ pub enum FederationError {
     RedisError(#[from] RedisError),
 }
 
-#[derive(Clone)]
 pub struct Federation {
-    redis_pool: Pool<RedisConnectionManager>,
+    pool: Pool<RedisConnectionManager>,
     workers: usize,
 }
-impl Federation {
-    pub fn new(redis_pool: Pool<RedisConnectionManager>) -> Self {
-        Self {
-            redis_pool,
-            workers: DEFAULT_WORKERS,
-        }
-    }
+
+#[derive(Clone)]
+pub struct Federator {
+    pool: Pool<RedisConnectionManager>,
 }
-impl Federation {
-    pub fn with_workers(mut self, workers: usize) -> Self {
-        self.workers = workers;
-        self
-    }
+
+impl Federator {
     // Sends federation msg to redis on (relay.federation)
     pub async fn send<T: AsRef<[u8]>>(&self, msg: T) -> Result<(), FederationError> {
-        let mut con = self.redis_pool.get().await?;
+        let mut con = self.pool.get().await?;
 
         cmd("LPUSH")
             .arg(FEDERATION_QUEUE)
@@ -52,14 +45,39 @@ impl Federation {
 
         Ok(())
     }
+}
 
-    // start polling from redis and send work to workers
-    pub async fn start(self) {
+impl Federation {
+    /// create a new federation router
+    pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
+        Self {
+            pool,
+            workers: DEFAULT_WORKERS,
+        }
+    }
+
+    /// set number of federation workers
+    pub fn with_workers(mut self, workers: usize) -> Self {
+        self.workers = workers;
+        self
+    }
+
+    /// start the federation router
+    pub fn start(self) -> Federator {
+        let federator = Federator {
+            pool: self.pool.clone(),
+        };
+
+        tokio::spawn(self.run());
+        federator
+    }
+
+    async fn run(self) {
         let work_runner = Router {};
         let mut worker_pool = WorkerPool::new(Arc::new(work_runner), DEFAULT_WORKERS);
 
         loop {
-            let mut con = match self.redis_pool.get().await {
+            let mut con = match self.pool.get().await {
                 Ok(con) => con,
                 Err(err) => {
                     log::error!("could not get redis connection from pool, {}", err);
@@ -100,9 +118,9 @@ mod test {
     async fn test_router() {
         use httpmock::prelude::*;
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
-        let federation_sender = Federation::new(pool.clone()).with_workers(10);
-        let federation_receiver = federation_sender.clone();
-        tokio::spawn(federation_receiver.start());
+        let federation = Federation::new(pool.clone()).with_workers(10);
+        let federator = federation.start();
+
         let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(POST).path("/");
@@ -115,10 +133,10 @@ mod test {
             env.tags = None;
             env.signature = None;
             env.schema = None;
-            env.federation = Some(server.url("/"));
+            env.federation = Some(server.address().to_string());
             env.stamp();
             let msg = env.write_to_bytes().unwrap();
-            federation_sender.send(msg).await.unwrap();
+            federator.send(msg).await.unwrap();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
