@@ -3,11 +3,47 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::StatusCode;
 use protobuf::Message;
+use reqwest::Client;
 use workers::Work;
 
 pub struct Router {}
 
 impl Router {
+    async fn try_send(&self, domain: &str, msg: Vec<u8>) -> Result<()> {
+        let url = if cfg!(test) {
+            format!("http://{}/", domain)
+        } else {
+            format!("https://{}/", domain)
+        };
+
+        log::debug!("federation to: {}", url);
+        let client = Client::new();
+        for _ in 0..3 {
+            let resp = match client.post(&url).body(msg.clone()).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    if err.is_connect() || err.is_timeout() {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        continue;
+                    }
+
+                    bail!("could not send message to relay: {}", err)
+                }
+            };
+
+            if resp.status() != StatusCode::ACCEPTED {
+                bail!(
+                    "received relay did not accept the message: {}",
+                    resp.status()
+                );
+            }
+
+            return Ok(());
+        }
+
+        bail!("relay not reachable");
+    }
+
     async fn process(&self, msg: Vec<u8>) -> Result<()> {
         let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
 
@@ -16,38 +52,16 @@ impl Router {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("federation is not set on envelope"))?;
 
-        let url = if cfg!(test) {
-            format!("http://{}/", domain)
+        let result = self.try_send(domain, msg).await;
+        if result.is_ok() {
+            super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc();
         } else {
-            format!("https://{}/", domain)
-        };
-
-        log::debug!("federation to: {}", url);
-        let client = reqwest::Client::new();
-        for _ in 0..3 {
-            let resp = match client.post(&url).body(msg.clone()).send().await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    if err.is_connect() || err.is_timeout() {
-                        std::thread::sleep(std::time::Duration::from_secs(5));
-                        continue;
-                    }
-                    bail!("could not send request to relay: {}", err)
-                }
-            };
-
-            if resp.status() != StatusCode::ACCEPTED {
-                // TODO: after giving up on retries we MUST send an error message
-                // back to the client (let's discuss how to do that)
-                log::error!(
-                    "failed to send request to relay: {}, status code: {}",
-                    url,
-                    resp.status()
-                );
-            }
-            return Ok(());
+            super::MESSAGE_ERROR.with_label_values(&[domain]).inc();
+            // TODO: send error message back to caller
+            // to let him know the message was failed to deliver
         }
-        bail!("could not send request to relay: {}", domain)
+
+        result
     }
 }
 #[async_trait]

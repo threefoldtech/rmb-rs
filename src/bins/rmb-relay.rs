@@ -133,7 +133,7 @@ async fn app(args: &Args) -> Result<()> {
         .with_workers(args.workers)
         .with_max_users(args.workers as usize * args.user_per_worker as usize);
 
-    let federation = relay::Federation::new(pool).with_workers(fed_size as usize);
+    let federation = relay::FederationOptions::new(pool).with_workers(fed_size as usize);
     let r = relay::Relay::new(&args.domain, twins, opt, federation)
         .await
         .unwrap();

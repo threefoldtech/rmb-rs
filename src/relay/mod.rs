@@ -10,7 +10,8 @@ mod api;
 mod federation;
 mod switch;
 use api::RelayHook;
-pub use federation::Federation;
+use federation::Federation;
+pub use federation::FederationOptions;
 use switch::Switch;
 pub use switch::SwitchOptions;
 
@@ -29,9 +30,10 @@ where
         domain: S,
         twins: D,
         opt: SwitchOptions,
-        federation: Federation,
+        federation: FederationOptions,
     ) -> Result<Self> {
         let switch = opt.build().await?;
+        let federation = federation.build()?;
         Ok(Self {
             switch,
             twins,

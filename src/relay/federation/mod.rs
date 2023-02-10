@@ -1,15 +1,26 @@
-use std::sync::Arc;
-
+use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
     redis::{cmd, RedisError},
     RedisConnectionManager,
 };
+use prometheus::{IntCounterVec, Opts, Registry};
+use std::sync::Arc;
 use workers::WorkerPool;
 
 use self::router::Router;
 
 mod router;
+
+lazy_static::lazy_static! {
+    static ref MESSAGE_SUCCESS: IntCounterVec = IntCounterVec::new(
+        Opts::new("federation_message_success", "number of messages send successfully via federation"),
+        &["relay"]).unwrap();
+
+    static ref MESSAGE_ERROR: IntCounterVec = IntCounterVec::new(
+        Opts::new("federation_message_error", "number of messages that failed to send via federation"),
+        &["relay"]).unwrap();
+}
 
 pub const DEFAULT_WORKERS: usize = 100;
 pub const FEDERATION_QUEUE: &str = "relay.federation";
@@ -20,6 +31,36 @@ pub enum FederationError {
     PoolError(#[from] RunError<RedisError>),
     #[error("redis error: {0}")]
     RedisError(#[from] RedisError),
+}
+
+pub struct FederationOptions {
+    pool: Pool<RedisConnectionManager>,
+    workers: usize,
+    registry: Registry,
+}
+
+impl FederationOptions {
+    pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
+        Self {
+            pool,
+            workers: DEFAULT_WORKERS,
+            registry: prometheus::default_registry().clone(),
+        }
+    }
+
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    pub fn with_workers(mut self, workers: usize) -> Self {
+        self.workers = workers;
+        self
+    }
+
+    pub fn build(self) -> Result<Federation> {
+        Federation::new(self)
+    }
 }
 
 pub struct Federation {
@@ -49,11 +90,14 @@ impl Federator {
 
 impl Federation {
     /// create a new federation router
-    pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
-        Self {
-            pool,
-            workers: DEFAULT_WORKERS,
-        }
+    fn new(opts: FederationOptions) -> Result<Self> {
+        opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
+        opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
+
+        Ok(Self {
+            pool: opts.pool,
+            workers: opts.workers,
+        })
     }
 
     /// set number of federation workers
@@ -118,7 +162,12 @@ mod test {
     async fn test_router() {
         use httpmock::prelude::*;
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
-        let federation = Federation::new(pool.clone()).with_workers(10);
+
+        let federation = FederationOptions::new(pool.clone())
+            .with_workers(10)
+            .build()
+            .unwrap();
+
         let federator = federation.start();
 
         let server = MockServer::start();
