@@ -41,7 +41,7 @@ impl Router {
                 // back to the client (let's discuss how to do that)
                 log::error!(
                     "failed to send request to relay: {}, status code: {}",
-                    url, 
+                    url,
                     resp.status()
                 );
             }
