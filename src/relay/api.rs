@@ -14,7 +14,7 @@ use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use prometheus::Encoder;
 use prometheus::TextEncoder;
-use protobuf::{Message as ProtoMessage, MessageField};
+use protobuf::Message as ProtoMessage;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -374,14 +374,4 @@ impl Stream {
 
         Ok(())
     }
-}
-
-fn make_err_envelope(req: &Envelope, err: anyhow::Error) -> Envelope {
-    let mut resp = Envelope::new();
-    resp.destination = Some(dst.into()).into();
-    let mut e = resp.mut_error();
-    e.message = err.to_string();
-
-    // relay messages has no source or signature
-    resp
 }
