@@ -92,7 +92,7 @@ impl Federation {
     /// create a new federation router
     fn new(opts: FederationOptions) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
-        opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
+        opts.registry.register(Box::new(MESSAGE_ERROR.clone()))?;
 
         Ok(Self {
             pool: opts.pool,
@@ -161,9 +161,11 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_router() {
         use httpmock::prelude::*;
+        let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
 
         let federation = FederationOptions::new(pool.clone())
+            .with_registry(reg)
             .with_workers(10)
             .build()
             .unwrap();
