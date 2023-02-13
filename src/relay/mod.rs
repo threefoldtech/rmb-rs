@@ -12,11 +12,12 @@ mod switch;
 use api::RelayHook;
 use federation::Federation;
 pub use federation::FederationOptions;
+use std::sync::Arc;
 use switch::Switch;
 pub use switch::SwitchOptions;
 
 pub struct Relay<D: TwinDB> {
-    switch: Switch<RelayHook>,
+    switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
     federation: Federation,
@@ -33,9 +34,9 @@ where
         federation: FederationOptions,
     ) -> Result<Self> {
         let switch = opt.build().await?;
-        let federation = federation.build()?;
+        let federation = federation.build(switch.sink())?;
         Ok(Self {
-            switch,
+            switch: Arc::new(switch),
             twins,
             domain: domain.into(),
             federation,

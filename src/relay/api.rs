@@ -36,13 +36,13 @@ where
 {
     pub(crate) fn new<S: Into<String>>(
         domain: S,
-        switch: Switch<RelayHook>,
+        switch: Arc<Switch<RelayHook>>,
         twins: D,
         federator: Federator,
     ) -> Self {
         Self {
             domain: domain.into(),
-            switch: Arc::new(switch),
+            switch,
             twins,
             federator: Arc::new(federator),
         }
