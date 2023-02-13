@@ -37,13 +37,14 @@ impl Router {
                         continue;
                     }
 
-                    bail!("could not send message to relay: {}", err)
+                    bail!("could not send message to relay '{}': {}", domain, err)
                 }
             };
 
             if resp.status() != StatusCode::ACCEPTED {
                 bail!(
-                    "received relay did not accept the message: {}",
+                    "received relay '{}' did not accept the message: {}",
+                    domain,
                     resp.status()
                 );
             }
@@ -51,7 +52,7 @@ impl Router {
             return Ok(());
         }
 
-        bail!("relay not reachable");
+        bail!("relay '{}' was not reachable in time", domain);
     }
 
     async fn process(&self, msg: Vec<u8>) -> Result<()> {
@@ -93,7 +94,7 @@ impl Work for Router {
 
     async fn run(&self, msg: Self::Input) {
         if let Err(err) = self.process(msg).await {
-            log::error!("failed to federation message: {:#}", err);
+            log::debug!("failed to federation message: {:#}", err);
         }
     }
 }
