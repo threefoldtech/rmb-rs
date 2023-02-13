@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::federation::Federator;
 use super::switch::{Hook, MessageID, StreamID, Switch};
 use super::HttpError;
 
@@ -26,17 +27,24 @@ pub(crate) struct AppData<D: TwinDB> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
+    federator: Arc<Federator>,
 }
 
 impl<D> AppData<D>
 where
     D: TwinDB,
 {
-    pub(crate) fn new<S: Into<String>>(domain: S, switch: Switch<RelayHook>, twins: D) -> Self {
+    pub(crate) fn new<S: Into<String>>(
+        domain: S,
+        switch: Arc<Switch<RelayHook>>,
+        twins: D,
+        federator: Federator,
+    ) -> Self {
         Self {
             domain: domain.into(),
-            switch: Arc::new(switch),
+            switch,
             twins,
+            federator: Arc::new(federator),
         }
     }
 }
@@ -113,9 +121,17 @@ async fn entry<D: TwinDB>(
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
         // Spawn a task to handle the websocket connection.
+        let stream = Stream::new(
+            // todo: improve the domain clone
+            claims,
+            data.domain.clone(),
+            Arc::clone(&data.switch),
+            Arc::clone(&data.federator),
+        );
+
         tokio::spawn(async move {
-            if let Err(e) = serve_websocket(claims, Arc::clone(&data.switch), websocket).await {
-                eprintln!("Error in websocket connection: {}", e);
+            if let Err(err) = stream.serve(websocket).await {
+                log::error!("error in websocket connection: {}", err);
             }
         });
 
@@ -228,83 +244,134 @@ impl Hook for RelayHook {
     }
 }
 
-/// Handle a websocket connection.
-async fn serve_websocket(
-    claim: Claims,
+struct Stream {
+    id: StreamID,
+    domain: String,
     switch: Arc<Switch<RelayHook>>,
-    websocket: HyperWebsocket,
-) -> Result<()> {
-    let websocket = websocket.await?;
-    let (writer, mut reader) = websocket.split();
+    federator: Arc<Federator>,
+}
+impl Stream {
+    fn new(
+        claims: Claims,
+        domain: String,
+        switch: Arc<Switch<RelayHook>>,
+        federator: Arc<Federator>,
+    ) -> Self {
+        let id: StreamID = (claims.id, claims.sid).into();
+        Self {
+            id,
+            domain,
+            switch,
+            federator,
+        }
+    }
 
-    // handler is kept alive to keep the registration alive
-    // once dropped (connection closed) registration stops
-    let id: StreamID = (claim.id, claim.sid).into();
-    log::debug!("got connection from '{}'", id);
-    let mut registration = switch
-        .register(id.clone(), RelayHook::new(id, Arc::clone(&switch), writer))
-        .await?;
+    async fn route(&self, envelope: &Envelope, msg: Vec<u8>) -> Result<()> {
+        let dst: StreamID = (&envelope.destination).into();
+        if self.id != envelope.source || dst.zero() {
+            anyhow::bail!("message with missing source or destination");
+        }
 
-    loop {
-        tokio::select! {
-            // registration cancelled. will be triggered
-            // if the same twin with the same sid (session id)
-            // registered again.
-            // we need to drop the connection then
-            _ = registration.cancelled() => {
-                return Ok(());
-            }
-            // received a message from the peer
-            Some(message) = reader.next()=> {
-                let message = match message {
-                    Ok(message) => message,
-                    Err(err) => {
-                        log::debug!("error receiving a message: {}", err);
-                        return Ok(());
-                    }
-                };
+        //  instead of sending the message directly to the switch
+        //  we check federation information attached to the envelope
+        //  if federation is not empty and does not match the domain
+        //  of this server, we need to schedule this message to be
+        //  federated to the right relay (according to specs)
+        if matches!(&envelope.federation, Some(fed) if fed != &self.domain) {
+            // push message to the (relay.federation) queue
+            return Ok(self.federator.send(&msg).await?);
+        }
 
-                // TODO: throttling to avoid sending too many messages in short time!
-                match message {
-                    Message::Text(_) => {
-                        log::trace!("received unsupported (text) message. disconnecting!");
-                        break;
-                    }
-                    Message::Binary(msg) => {
-                        let envelope =
-                            Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+        // we don't return an error because when we return an error
+        // we will send this error back to the sender user. Hence
+        // calling the switch.send again
+        // this is an internal error anyway, and should not happen
+        if let Err(err) = self.switch.send(&dst, &msg).await {
+            log::error!("failed to route message to peer '{}': {}", dst, err);
+        }
 
-                        // TODO: federation
-                        //  instead of sending the message directly to the switch
-                        //  we check federation information attached to the envelope
-                        //  if federation is not empty and does not match the domain
-                        //  of this server, we need to schedule this message to be
-                        //  federated to the right relay (according to specs)
-                        let dst: StreamID = (&envelope.destination).into();
-                        if let Err(err) = switch.send(&dst, &msg).await {
-                            log::error!(
-                                "failed to route message to peer '{}': {}",
-                                dst,
-                                err
-                            );
+        Ok(())
+    }
+
+    async fn serve(self, websocket: HyperWebsocket) -> Result<()> {
+        let websocket = websocket.await?;
+        let (writer, mut reader) = websocket.split();
+
+        // handler is kept alive to keep the registration alive
+        // once dropped (connection closed) registration stops
+        log::debug!("got connection from '{}'", self.id);
+        let mut registration = self
+            .switch
+            .register(
+                self.id.clone(),
+                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer),
+            )
+            .await?;
+
+        loop {
+            tokio::select! {
+                // registration cancelled. will be triggered
+                // if the same twin with the same sid (session id)
+                // registered again.
+                // we need to drop the connection then
+                _ = registration.cancelled() => {
+                    return Ok(());
+                }
+                // received a message from the peer
+                Some(message) = reader.next()=> {
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(err) => {
+                            log::debug!("error receiving a message: {}", err);
+                            return Ok(());
                         }
-                    }
-                    Message::Ping(_) => {
-                        // No need to send a reply: tungstenite takes care of this for you.
-                    }
-                    Message::Pong(_) => {
-                        log::trace!("received pong message");
-                    }
-                    Message::Close(_) => {
-                        break;
-                    }
-                    Message::Frame(_) => {
-                        unreachable!();
+                    };
+
+                    // TODO: throttling to avoid sending too many messages in short time!
+                    match message {
+                        Message::Text(_) => {
+                            log::trace!("received unsupported (text) message. disconnecting!");
+                            break;
+                        }
+                        Message::Binary(msg) => {
+                            // failure to load the message is fatal hence we disconnect
+                            // the client
+                            let envelope =
+                                Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+
+                            // if we failed to route back the message to the user
+                            // for any reason we send an error message back
+                            // server error has no source address set.
+                            if let Err(err) = self.route(&envelope, msg).await {
+                                let mut resp = Envelope::new();
+                                resp.uid = envelope.uid;
+                                resp.destination = Some((&self.id).into()).into();
+                                let mut e = resp.mut_error();
+                                e.message = err.to_string();
+
+                                if let Err(err) = self.switch.send(&self.id, resp.write_to_bytes()?).await {
+                                    // just log then
+                                    log::error!("failed to send error message back to caller: {}", err);
+                                }
+                            }
+                        }
+                        Message::Ping(_) => {
+                            // No need to send a reply: tungstenite takes care of this for you.
+                        }
+                        Message::Pong(_) => {
+                            log::trace!("received pong message");
+                        }
+                        Message::Close(_) => {
+                            break;
+                        }
+                        Message::Frame(_) => {
+                            unreachable!();
+                        }
                     }
                 }
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }

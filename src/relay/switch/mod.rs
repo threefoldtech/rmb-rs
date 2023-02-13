@@ -416,36 +416,68 @@ where
         Ok(())
     }
 
+    /// sink returns a clone-able sender if access to the entire switch
+    /// need to be limited
+    pub fn sink(&self) -> Sink {
+        Sink::new(self.pool.clone())
+    }
+
+    /// send a message to given ID
     pub async fn send<ID: AsRef<StreamID>, T: AsRef<[u8]>>(
         &self,
         id: ID,
         msg: T,
     ) -> Result<MessageID> {
-        let stream_id = id.as_ref();
-        let mut con = self.pool.get().await?;
-        let msg_id: MessageID = cmd("XADD")
-            .arg(stream_id)
-            .arg("MAXLEN")
-            .arg("~")
-            .arg(QUEUE_MAXLEN)
-            .arg("*")
-            .arg("_")
-            .arg(msg.as_ref())
-            .query_async(&mut *con)
-            .await?;
-
-        cmd("EXPIRE")
-            .arg(stream_id)
-            .arg(QUEUE_EXPIRE)
-            .query_async(&mut *con)
-            .await?;
-
-        MESSAGE_RX.inc();
-
-        Ok(msg_id)
+        send(id.as_ref(), &self.pool, msg.as_ref()).await
     }
 }
 
+#[derive(Clone)]
+pub struct Sink {
+    pool: Pool<RedisConnectionManager>,
+}
+
+impl Sink {
+    pub(crate) fn new(pool: Pool<RedisConnectionManager>) -> Self {
+        Self { pool }
+    }
+
+    pub async fn send<ID: AsRef<StreamID>, T: AsRef<[u8]>>(
+        &self,
+        id: ID,
+        msg: T,
+    ) -> Result<MessageID> {
+        send(id.as_ref(), &self.pool, msg.as_ref()).await
+    }
+}
+
+async fn send<'a>(
+    stream_id: &StreamID,
+    pool: &Pool<RedisConnectionManager>,
+    msg: &[u8],
+) -> Result<MessageID> {
+    let mut con = pool.get().await?;
+    let msg_id: MessageID = cmd("XADD")
+        .arg(stream_id)
+        .arg("MAXLEN")
+        .arg("~")
+        .arg(QUEUE_MAXLEN)
+        .arg("*")
+        .arg("_")
+        .arg(msg.as_ref())
+        .query_async(&mut *con)
+        .await?;
+
+    cmd("EXPIRE")
+        .arg(stream_id)
+        .arg(QUEUE_EXPIRE)
+        .query_async(&mut *con)
+        .await?;
+
+    MESSAGE_RX.inc();
+
+    Ok(msg_id)
+}
 pub struct Registration<H>
 where
     H: Hook,
