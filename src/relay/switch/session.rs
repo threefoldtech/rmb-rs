@@ -20,6 +20,12 @@ pub enum ParseError {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct StreamID(u32, Option<String>);
 
+impl StreamID {
+    pub fn zero(&self) -> bool {
+        self.0 == 0
+    }
+}
+
 impl Display for StreamID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.1 {
@@ -55,6 +61,25 @@ impl FromStr for StreamID {
 impl From<&Address> for StreamID {
     fn from(value: &Address) -> Self {
         Self(value.twin, value.connection.clone())
+    }
+}
+
+impl From<&StreamID> for Address {
+    fn from(value: &StreamID) -> Self {
+        let mut address = Address::new();
+        address.twin = value.0;
+        address.connection = value.1.clone();
+
+        address
+    }
+}
+
+impl PartialEq<protobuf::MessageField<Address>> for StreamID {
+    fn eq(&self, other: &protobuf::MessageField<Address>) -> bool {
+        match other.0 {
+            None => false,
+            Some(ref addr) => addr.twin == self.0 && addr.connection == self.1,
+        }
     }
 }
 

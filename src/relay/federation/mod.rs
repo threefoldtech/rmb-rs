@@ -5,10 +5,10 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 use prometheus::{IntCounterVec, Opts, Registry};
-use std::sync::Arc;
 use workers::WorkerPool;
 
 use self::router::Router;
+use super::switch::Sink;
 
 mod router;
 
@@ -58,14 +58,14 @@ impl FederationOptions {
         self
     }
 
-    pub fn build(self) -> Result<Federation> {
-        Federation::new(self)
+    pub(crate) fn build(self, sink: Sink) -> Result<Federation> {
+        Federation::new(self, sink)
     }
 }
 
 pub struct Federation {
     pool: Pool<RedisConnectionManager>,
-    workers: usize,
+    workers: WorkerPool<Router>,
 }
 
 #[derive(Clone)]
@@ -90,20 +90,17 @@ impl Federator {
 
 impl Federation {
     /// create a new federation router
-    fn new(opts: FederationOptions) -> Result<Self> {
+    fn new(opts: FederationOptions, sink: Sink) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
         opts.registry.register(Box::new(MESSAGE_ERROR.clone()))?;
 
+        let runner = Router::new(sink);
+        let workers = WorkerPool::new(runner, opts.workers);
+
         Ok(Self {
             pool: opts.pool,
-            workers: opts.workers,
+            workers,
         })
-    }
-
-    /// set number of federation workers
-    pub fn with_workers(mut self, workers: usize) -> Self {
-        self.workers = workers;
-        self
     }
 
     /// start the federation router
@@ -117,8 +114,7 @@ impl Federation {
     }
 
     async fn run(self) {
-        let work_runner = Router {};
-        let mut worker_pool = WorkerPool::new(Arc::new(work_runner), DEFAULT_WORKERS);
+        let mut workers = self.workers;
 
         loop {
             let mut con = match self.pool.get().await {
@@ -128,7 +124,7 @@ impl Federation {
                     continue;
                 }
             };
-            let worker_handler = worker_pool.get().await;
+            let worker_handler = workers.get().await;
             let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
                 .arg(FEDERATION_QUEUE)
                 .arg(0.0)
@@ -150,6 +146,7 @@ impl Federation {
 
 #[cfg(test)]
 mod test {
+    use crate::relay::switch::Sink;
     use protobuf::Message;
 
     use super::*;
@@ -163,11 +160,12 @@ mod test {
         use httpmock::prelude::*;
         let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
+        let sink = Sink::new(pool.clone());
 
-        let federation = FederationOptions::new(pool.clone())
+        let federation = FederationOptions::new(pool)
             .with_registry(reg)
             .with_workers(10)
-            .build()
+            .build(sink)
             .unwrap();
 
         let federator = federation.start();
@@ -179,6 +177,7 @@ mod test {
                 .header("content-type", "text/html")
                 .body("ohi");
         });
+
         for _ in 0..10 {
             let mut env = Envelope::new();
             env.tags = None;
@@ -188,7 +187,7 @@ mod test {
             env.stamp();
             let msg = env.write_to_bytes().unwrap();
             federator.send(msg).await.unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         mock.assert_hits(10);

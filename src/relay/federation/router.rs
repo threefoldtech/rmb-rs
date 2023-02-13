@@ -1,4 +1,7 @@
-use crate::types::Envelope;
+use crate::{
+    relay::switch::{Sink, StreamID},
+    types::Envelope,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::StatusCode;
@@ -6,9 +9,16 @@ use protobuf::Message;
 use reqwest::Client;
 use workers::Work;
 
-pub struct Router {}
+#[derive(Clone)]
+pub(crate) struct Router {
+    sink: Option<Sink>,
+}
 
 impl Router {
+    pub fn new(sink: Sink) -> Self {
+        Self { sink: Some(sink) }
+    }
+
     async fn try_send(&self, domain: &str, msg: Vec<u8>) -> Result<()> {
         let url = if cfg!(test) {
             format!("http://{}/", domain)
@@ -27,13 +37,14 @@ impl Router {
                         continue;
                     }
 
-                    bail!("could not send message to relay: {}", err)
+                    bail!("could not send message to relay '{}': {}", domain, err)
                 }
             };
 
             if resp.status() != StatusCode::ACCEPTED {
                 bail!(
-                    "received relay did not accept the message: {}",
+                    "received relay '{}' did not accept the message: {}",
+                    domain,
                     resp.status()
                 );
             }
@@ -41,7 +52,7 @@ impl Router {
             return Ok(());
         }
 
-        bail!("relay not reachable");
+        bail!("relay '{}' was not reachable in time", domain);
     }
 
     async fn process(&self, msg: Vec<u8>) -> Result<()> {
@@ -53,17 +64,28 @@ impl Router {
             .ok_or_else(|| anyhow::anyhow!("federation is not set on envelope"))?;
 
         let result = self.try_send(domain, msg).await;
-        if result.is_ok() {
-            super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc();
-        } else {
-            super::MESSAGE_ERROR.with_label_values(&[domain]).inc();
-            // TODO: send error message back to caller
-            // to let him know the message was failed to deliver
+        match result {
+            Ok(_) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
+            Err(ref err) => {
+                super::MESSAGE_ERROR.with_label_values(&[domain]).inc();
+
+                if let Some(ref sink) = self.sink {
+                    let mut msg = Envelope::new();
+                    msg.uid = env.uid;
+                    let e = msg.mut_error();
+                    e.message = err.to_string();
+                    let dst: StreamID = (&env.source).into();
+
+                    let _ = sink.send(&dst, msg.write_to_bytes()?).await;
+                    // after this point we don't care if the error was not reported back
+                }
+            }
         }
 
         result
     }
 }
+
 #[async_trait]
 impl Work for Router {
     type Input = Vec<u8>;
@@ -72,7 +94,7 @@ impl Work for Router {
 
     async fn run(&self, msg: Self::Input) {
         if let Err(err) = self.process(msg).await {
-            log::error!("failed to federation message: {:#}", err);
+            log::debug!("failed to federation message: {:#}", err);
         }
     }
 }
@@ -97,7 +119,7 @@ mod test {
                 .header("content-type", "text/html")
                 .body("ohi");
         });
-        let work_runner = Router {};
+        let work_runner = Router { sink: None };
         let mut worker_pool = WorkerPool::new(Arc::new(work_runner), 2);
         let mut env = Envelope::new();
 
@@ -110,7 +132,7 @@ mod test {
         let worker_handler = worker_pool.get().await;
 
         worker_handler.send(env.write_to_bytes().unwrap()).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(50));
         federation.assert()
     }
 }
