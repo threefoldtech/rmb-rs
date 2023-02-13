@@ -39,9 +39,14 @@ where
         Ok(client)
     }
 
-    pub async fn update_twin(&self, kp: &KeyPair, relay: Option<String>) -> Result<()> {
+    pub async fn update_twin(
+        &self,
+        kp: &KeyPair,
+        relay: Option<String>,
+        pk: Option<&[u8]>,
+    ) -> Result<()> {
         let client = self.client.lock().await;
-        let hash = client.update_twin(kp, relay, None).await?;
+        let hash = client.update_twin(kp, relay, pk).await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
     }

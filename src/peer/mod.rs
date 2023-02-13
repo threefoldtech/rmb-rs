@@ -10,7 +10,10 @@ use url::Url;
 
 mod con;
 
+pub mod e2e;
 pub mod storage;
+pub use e2e::Pair;
+
 use con::{Connection, Writer};
 use storage::{JsonIncomingRequest, JsonOutgoingRequest, JsonResponse};
 
@@ -166,10 +169,16 @@ where
             .context("failed to store message tracking information")?;
 
         for mut envelope in envelopes {
+            let twin = match self.db.get_twin(envelope.destination.twin).await {
+                Ok(Some(twin)) => twin,
+                _ => {
+                    log::error!("failed to get twin {}", envelope.destination.twin);
+                    continue;
+                }
+            };
+
             envelope.uid = uid.clone();
-            envelope.federation = self
-                .get_federation_information(envelope.destination.twin)
-                .await?;
+            envelope.federation = twin.relay;
             self.sender.send(envelope).await?;
         }
 

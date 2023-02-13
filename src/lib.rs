@@ -3,7 +3,6 @@ extern crate anyhow;
 extern crate mime;
 
 pub mod cache;
-pub mod e2e;
 pub mod identity;
 pub mod peer;
 pub mod redis;
