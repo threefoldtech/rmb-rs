@@ -154,7 +154,7 @@ async fn app(args: &Args) -> Result<()> {
     log::info!("twin: {}", id);
 
     let u = url::Url::parse(&args.relay)?;
-    peer::start(u, id, identity, storage, db).await
+    peer::start(u, id, sk, identity, storage, db).await
 }
 
 #[tokio::main]

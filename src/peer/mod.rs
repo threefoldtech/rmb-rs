@@ -68,8 +68,17 @@ enum PeerError {
     #[error("envelope error {0}")]
     Envelope(#[from] EnvelopeErrorKind),
 
+    #[error("twin {0} not found")]
+    TwinNotFound(u32),
+
+    #[error("e2e encryption error: {0}")]
+    E2E(#[from] e2e::Error),
+
     #[error("{0}")]
     Other(#[from] anyhow::Error),
+
+    #[error("multiple errors")]
+    MultiError(Vec<PeerError>),
 }
 
 impl PeerError {
@@ -81,8 +90,14 @@ impl PeerError {
             Self::InvalidPayload(_) => 200,
             // range 300
             Self::Envelope(k) => k.code(),
+            // range 400
+            Self::TwinNotFound(_) => 404,
+            Self::E2E(_) => 401,
             // range 500
             Self::Other(_) => 500,
+            // not coded
+            // this will be return to user one by one
+            Self::MultiError(_) => 0,
         }
     }
 }
@@ -103,7 +118,14 @@ impl From<PeerError> for JsonError {
 /// - sign all outgoing messages
 /// - verify all incoming messages
 /// - restore relay connection if lost
-pub async fn start<S, G, DB>(relay: Url, twin: u32, signer: G, storage: S, db: DB) -> Result<()>
+pub async fn start<S, G, DB>(
+    relay: Url,
+    twin: u32,
+    sk: Pair,
+    signer: G,
+    storage: S,
+    db: DB,
+) -> Result<()>
 where
     S: Storage,
     G: Signer + Clone + Send + Sync + 'static,
@@ -116,9 +138,9 @@ where
     let sender = Sender::new(con.writer(), address, signer);
 
     // handle all received messages from the relay
-    let downstream = Downstream::new(db.clone(), storage.clone(), sender.clone());
+    let downstream = Downstream::new(sk.clone(), db.clone(), storage.clone(), sender.clone());
     // handle all local generate traffic and push it to relay
-    let upstream = Upstream::new(db, storage, sender);
+    let upstream = Upstream::new(sk, db, storage, sender);
 
     //let upstream = Upstream::
     // start a processor for incoming message
@@ -139,6 +161,7 @@ where
     S: Storage,
     G: Signer,
 {
+    sk: Pair,
     db: DB,
     storage: S,
     sender: Sender<G>,
@@ -150,8 +173,9 @@ where
     S: Storage,
     G: Signer,
 {
-    pub fn new(db: DB, storage: S, sender: Sender<G>) -> Self {
+    pub fn new(sk: Pair, db: DB, storage: S, sender: Sender<G>) -> Self {
         Self {
+            sk,
             db,
             storage,
             sender,
@@ -168,29 +192,23 @@ where
             .await
             .context("failed to store message tracking information")?;
 
+        let mut errors: Vec<PeerError> = Vec::default();
         for mut envelope in envelopes {
-            let twin = match self.db.get_twin(envelope.destination.twin).await {
-                Ok(Some(twin)) => twin,
-                _ => {
-                    log::error!("failed to get twin {}", envelope.destination.twin);
-                    continue;
-                }
-            };
-
             envelope.uid = uid.clone();
-            envelope.federation = twin.relay;
+
+            if let Err(err) = self.tweaks(&mut envelope).await {
+                errors.push(err);
+                continue;
+            }
+
             self.sender.send(envelope).await?;
         }
 
-        Ok(())
-    }
-
-    async fn get_federation_information(&self, twin_id: u32) -> Result<Option<String>, PeerError> {
-        let twin = match self.db.get_twin(twin_id).await? {
-            Some(twin) => twin,
-            None => return Ok(None),
-        };
-        Ok(twin.relay)
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(PeerError::MultiError(errors))
+        }
     }
 
     // handle outgoing requests (so sent by a client to the peer) but command is prefixed
@@ -204,13 +222,70 @@ where
     async fn response(&self, response: JsonResponse) -> Result<()> {
         // that's a reply message that is initiated locally and need to be
         // sent to a remote peer
-        let mut env: Envelope = response
+        let mut envelope: Envelope = response
             .try_into()
             .context("failed to build envelope from response")?;
-        env.federation = self
-            .get_federation_information(env.destination.twin)
-            .await?;
-        self.sender.send(env).await
+
+        self.tweaks(&mut envelope).await?;
+
+        self.sender.send(envelope).await
+    }
+
+    async fn tweaks(&self, envelope: &mut Envelope) -> Result<(), PeerError> {
+        let twin = self
+            .db
+            .get_twin(envelope.destination.twin)
+            .await?
+            .ok_or_else(|| PeerError::TwinNotFound(envelope.destination.twin))?;
+
+        envelope.federation = twin.relay;
+        // if the other peer supports e2e we
+        // also encrypt the message
+        if let Some(ref pk) = twin.pk {
+            log::debug!("encrypt message for: {}", twin.id);
+            let cipher = self
+                .sk
+                .encrypt(pk, envelope.plain())
+                .map_err(PeerError::E2E)?;
+
+            envelope.set_cipher(cipher);
+        }
+
+        Ok(())
+    }
+
+    async fn reply_err(
+        &self,
+        err: PeerError,
+        reply_to: &str,
+        reference: Option<String>,
+    ) -> Result<()> {
+        // error here can be a "multi-error"
+        // in that case we need to send a full message
+        // for each error in that list
+        let errors = match err {
+            PeerError::MultiError(errors) => errors,
+            _ => vec![err],
+        };
+
+        for err in errors {
+            self.storage
+                .reply(
+                    &reply_to,
+                    JsonResponse {
+                        version: 1,
+                        reference: reference.clone(),
+                        data: String::default(),
+                        destination: String::default(),
+                        schema: None,
+                        timestamp: 0,
+                        error: Some(err.into()),
+                    },
+                )
+                .await?;
+        }
+
+        Ok(())
     }
 
     pub async fn start(self) {
@@ -236,28 +311,12 @@ where
                     } else {
                         self.request(request).await
                     };
+
                     // failure to process the request then we can simply
                     // push a response back directly to the client
                     match result {
                         Ok(_) => Ok(()),
-                        Err(err) => {
-                            // we have enough information to send an erro
-                            // response back to the local caller
-                            self.storage
-                                .reply(
-                                    &reply_to,
-                                    JsonResponse {
-                                        version: 1,
-                                        reference,
-                                        data: String::default(),
-                                        destination: String::default(),
-                                        schema: None,
-                                        timestamp: 0,
-                                        error: Some(err.into()),
-                                    },
-                                )
-                                .await
-                        }
+                        Err(err) => self.reply_err(err, &reply_to, reference).await,
                     }
                 }
             };
@@ -278,6 +337,7 @@ where
     S: Storage,
     G: Signer,
 {
+    sk: Pair,
     db: DB,
     storage: S,
     sender: Sender<G>,
@@ -289,8 +349,9 @@ where
     S: Storage,
     G: Signer,
 {
-    pub fn new(db: DB, storage: S, sender: Sender<G>) -> Self {
+    pub fn new(sk: Pair, db: DB, storage: S, sender: Sender<G>) -> Self {
         Self {
+            sk,
             db,
             storage,
             sender,
@@ -308,7 +369,7 @@ where
         Ok(Some(envelope))
     }
 
-    async fn handle_envelope(&self, envelope: Envelope) -> Result<(), PeerError> {
+    async fn handle_envelope(&self, mut envelope: Envelope) -> Result<(), PeerError> {
         envelope.valid().map_err(EnvelopeErrorKind::Validation)?;
 
         let twin = self
@@ -321,6 +382,14 @@ where
         envelope
             .verify(&twin.account)
             .map_err(EnvelopeErrorKind::InvalidSignature)?;
+
+        if let Some(ref pk) = twin.pk {
+            if envelope.has_cipher() {
+                log::debug!("decrypt message from: {}", twin.id);
+                let plain = self.sk.decrypt(pk, envelope.cipher())?;
+                envelope.set_plain(plain);
+            }
+        }
 
         if envelope.has_request() {
             let request: JsonIncomingRequest = envelope
