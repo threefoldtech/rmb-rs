@@ -242,7 +242,7 @@ where
         // if the other peer supports e2e we
         // also encrypt the message
         if let Some(ref pk) = twin.pk {
-            log::debug!("encrypt message for: {}", twin.id);
+            log::trace!("encrypt message for: {}", twin.id);
             let cipher = self
                 .sk
                 .encrypt(pk, envelope.plain())
@@ -385,7 +385,7 @@ where
 
         if let Some(ref pk) = twin.pk {
             if envelope.has_cipher() {
-                log::debug!("decrypt message from: {}", twin.id);
+                log::trace!("decrypt message from: {}", twin.id);
                 let plain = self.sk.decrypt(pk, envelope.cipher())?;
                 envelope.set_plain(plain);
             }
