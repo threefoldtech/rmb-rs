@@ -141,3 +141,25 @@ pub struct JsonIncomingRequest {
 ```
 
 Services that receive this needs to make sure their responses `destination` to have the same value as the incoming request `source`
+
+# End2End Encryption
+Relay is totally opaque to the messages. Our implementation of the relay does not poke into messages except for the routing attributes (source, and destinations addresses, and federation information). But since the relay is designed to be hosted by other 3rd parties (hence federation) you should
+not fully trust the relay or whoever is hosting it. Hence e2e was needed
+
+As you already understand e2e is completely up to the peers to implement, and even other implementations of the peers can agree on a completely different encryption algorithm and key sharing algorithm (again, relay does not care). But in our implementation of the e2e (rmb-peer) things goes like this
+
+- Each twin has a `pk` field on tfchain. when rmb-peer start, it generates an `secp256k1` key from the same seed as the user tfchain mnemonics. Note that this will not make the encryption key and the signing key any related, they just are driven from the same seed.
+- On start, if the key is not already set on the twin object, the key is updated.
+- If a peer A is trying to send a message to peer B. but peer B does not has his `pk` set, peer A will send the message in plain-text format (please check the protobuf envelope type for details)
+- If peer B has public key set, peer A will prefer e2e encryption and will does the following:
+ - Drive a shared secret point with `ecdh` algorithm, the key is the `sha256` of that point
+  - `shared = ecdh(A.sk, B.pk)`
+ - create a 12 bytes random nonce
+ - encrypt data as `encrypted = aes-gcm.encrypt(shared-key, nonce, plain-data)`
+ - create cipher as `cipher nonce + encrypted`
+ - fill `envelope.cipher = cipher`
+- on receiving a message peer B does the same in the opposite direction
+ - split data and nonce (nonce is always first 12 bytes)
+ - derive the same shared key
+  - `shared = ecdh(B.sk, A.pk)`
+ - `plain-data = aes-gcm.decrypt(shared-key, nonce, encrypted)`
