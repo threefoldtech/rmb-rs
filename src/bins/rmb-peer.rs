@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -6,6 +7,7 @@ use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
+use rmb::peer::Pair;
 use rmb::peer::{self, storage::RedisStorage};
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
@@ -82,6 +84,8 @@ async fn app(args: &Args) -> Result<()> {
         },
     };
 
+    let sk = Pair::from_str(secret).context("failed to initialize encryption key")?;
+
     let identity = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret.as_str())
@@ -127,16 +131,22 @@ async fn app(args: &Args) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
 
         log::debug!("twin relay domain: {:?}", twin.relay);
-        if twin.relay.as_deref() != relay_url.domain() {
+        // if twin relay or his pk don't match the ones that
+        // should be there, we need to set the value on chain
+        if twin.relay.as_deref() != relay_url.domain()
+            || !matches!(twin.pk, Some(ref pk) if pk == &sk.public())
+        {
             // remote relay is not the same as configure one. update is needed
-            log::info!(
-                "update twin details on the chain with relay address: {:?}",
-                relay_url.domain()
-            );
+            log::info!("update twin details on the chain");
 
-            db.update_twin(&identity.pair(), relay_url.domain().map(|d| d.to_owned()))
-                .await
-                .context("failed to update twin information")?;
+            let pk = sk.public();
+            db.update_twin(
+                &identity.pair(),
+                relay_url.domain().map(|d| d.to_owned()),
+                Some(&pk),
+            )
+            .await
+            .context("failed to update twin information")?;
         }
     }
 
@@ -144,7 +154,7 @@ async fn app(args: &Args) -> Result<()> {
     log::info!("twin: {}", id);
 
     let u = url::Url::parse(&args.relay)?;
-    peer::start(u, id, identity, storage, db).await
+    peer::start(u, id, sk, identity, storage, db).await
 }
 
 #[tokio::main]
