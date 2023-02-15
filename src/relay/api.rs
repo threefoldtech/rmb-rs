@@ -15,6 +15,7 @@ use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use prometheus::Encoder;
 use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
+use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -355,14 +356,15 @@ impl<M: Metrics> Stream<M> {
 
                             if !self.metrics.feed(msg.len()).await {
                                 log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
-                                self.send_error(envelope, String::from("exceeded rate limits, dropping message")).await?;
+                                self.send_error(envelope, "exceeded rate limits, dropping message").await;
                                 continue
                             }
+
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&envelope, msg).await {
-                                self.send_error(envelope, err.to_string()).await?;
+                                self.send_error(envelope, err).await;
                             }
                         }
                         Message::Ping(_) => {
@@ -386,17 +388,25 @@ impl<M: Metrics> Stream<M> {
         Ok(())
     }
 
-    async fn send_error(&self, envelope: Envelope, err: String) -> Result<()> {
+    async fn send_error<E: Display>(&self, envelope: Envelope, err: E) {
         let mut resp = Envelope::new();
         resp.uid = envelope.uid;
         resp.destination = Some((&self.id).into()).into();
         let mut e = resp.mut_error();
-        e.message = err;
+        e.message = err.to_string();
 
-        if let Err(err) = self.switch.send(&self.id, resp.write_to_bytes()?).await {
+        let bytes = match resp.write_to_bytes() {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                // this should never happen, hence let's print this as an error
+                log::error!("failed to serialize envelope: {}", err);
+                return;
+            }
+        };
+
+        if let Err(err) = self.switch.send(&self.id, bytes).await {
             // just log then
             log::error!("failed to send error message back to caller: {}", err);
         }
-        Ok(())
     }
 }
