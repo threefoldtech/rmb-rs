@@ -76,3 +76,67 @@ impl Metrics for NoLimit {
         true
     }
 }
+
+#[derive(Clone)]
+pub enum LimitersOptions {
+    NoLimit,
+    FixedWindow(Arc<FixedWindowOptions>),
+}
+
+impl LimitersOptions {
+    pub fn no_limit() -> Self {
+        Self::NoLimit
+    }
+
+    pub fn fixed_window(fixed: FixedWindowOptions) -> Self {
+        Self::FixedWindow(Arc::new(fixed))
+    }
+}
+
+#[derive(Clone)]
+enum Limiters {
+    NoLimit,
+    FixedWindow(FixedWindow),
+}
+
+#[async_trait]
+impl Metrics for Limiters {
+    type Options = LimitersOptions;
+
+    fn new(options: Self::Options) -> Self {
+        match options {
+            LimitersOptions::NoLimit => Self::NoLimit,
+            LimitersOptions::FixedWindow(options) => Self::FixedWindow(FixedWindow::new(options)),
+        }
+    }
+
+    async fn feed(&self, size: usize) -> bool {
+        match self {
+            Self::NoLimit => true,
+            Self::FixedWindow(ref window) => window.feed(size).await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use core::num::NonZeroUsize;
+
+    #[test]
+    fn static_dispatch() {
+        let count = NonZeroUsize::new(10).unwrap();
+        let limiter = if true {
+            Limiter::<Limiters>::new(count, LimitersOptions::no_limit())
+        } else {
+            Limiter::<Limiters>::new(
+                count,
+                LimitersOptions::fixed_window(FixedWindowOptions {
+                    count: 1000,
+                    size: 1000,
+                    window: 60,
+                }),
+            )
+        };
+    }
+}
