@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use core::num::NonZeroUsize;
 use lru::LruCache;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use async_trait::async_trait;
 
 mod fixed;
 pub use fixed::{FixedWindow, FixedWindowOptions};
@@ -72,7 +72,7 @@ impl Metrics for NoLimit {
         Self
     }
 
-    async fn feed(&self, _: usize) -> bool{
+    async fn feed(&self, _: usize) -> bool {
         true
     }
 }

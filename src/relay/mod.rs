@@ -23,14 +23,13 @@ pub struct Relay<D: TwinDB, M: Metrics> {
     twins: D,
     domain: String,
     federation: Federation,
-    limiter: Limiter<M>
+    limiter: Limiter<M>,
 }
 
 impl<D, M> Relay<D, M>
 where
     D: TwinDB + Clone,
     M: Metrics,
-
 {
     pub async fn new<S: Into<String>>(
         domain: S,

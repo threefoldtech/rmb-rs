@@ -20,10 +20,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::federation::Federator;
+use super::limiter::{Limiter, Metrics};
 use super::switch::{Hook, MessageID, StreamID, Switch};
 use super::HttpError;
-use super::limiter::{Limiter, Metrics};
-
 
 pub(crate) struct AppData<D: TwinDB, M: Metrics> {
     switch: Arc<Switch<RelayHook>>,
@@ -71,7 +70,6 @@ where
         }
     }
 }
-
 
 impl<D, M> Service<Request<Body>> for HttpService<D, M>
 where
@@ -138,7 +136,7 @@ async fn entry<D: TwinDB, M: Metrics>(
             data.domain.clone(),
             Arc::clone(&data.switch),
             Arc::clone(&data.federator),
-            metrics
+            metrics,
         );
 
         tokio::spawn(async move {
@@ -228,11 +226,11 @@ pub(crate) struct RelayHook {
 }
 
 impl RelayHook {
-    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Arc<Mutex<Writer>>) -> Self {
+    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
         Self {
             peer,
             switch,
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
         }
     }
 }
@@ -256,14 +254,14 @@ impl Hook for RelayHook {
     }
 }
 
-struct Stream <M:Metrics>{
+struct Stream<M: Metrics> {
     id: StreamID,
     domain: String,
     switch: Arc<Switch<RelayHook>>,
     federator: Arc<Federator>,
     metrics: M,
 }
-impl <M:Metrics> Stream <M>{
+impl<M: Metrics> Stream<M> {
     fn new(
         claims: Claims,
         domain: String,
@@ -277,7 +275,7 @@ impl <M:Metrics> Stream <M>{
             domain,
             switch,
             federator,
-            metrics
+            metrics,
         }
     }
 
@@ -312,7 +310,6 @@ impl <M:Metrics> Stream <M>{
         let websocket = websocket.await?;
         let (writer, mut reader) = websocket.split();
 
-        let writer_arc = Arc::new(Mutex::new(writer));
         // handler is kept alive to keep the registration alive
         // once dropped (connection closed) registration stops
         log::debug!("got connection from '{}'", self.id);
@@ -320,7 +317,7 @@ impl <M:Metrics> Stream <M>{
             .switch
             .register(
                 self.id.clone(),
-                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer_arc.clone()),
+                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer),
             )
             .await?;
 
@@ -351,32 +348,21 @@ impl <M:Metrics> Stream <M>{
                             break;
                         }
                         Message::Binary(msg) => {
-                            if !self.metrics.feed(msg.len()).await {
-                                log::warn!("twin with stream id {} exceeded its request limits, dropping message", self.id);
-                                let mut writer_lock = writer_arc.lock().await;
-                                writer_lock.send(Message::Text(String::from("exceeded request limits. message dropped"))).await?;
-                                drop(writer_lock);
-                                continue
-                            }
                             // failure to load the message is fatal hence we disconnect
                             // the client
                             let envelope =
-                                Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+                            Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
+                            if !self.metrics.feed(msg.len()).await {
+                                log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
+                                self.send_error(envelope, String::from("exceeded rate limits, dropping message")).await?;
+                                continue
+                            }
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&envelope, msg).await {
-                                let mut resp = Envelope::new();
-                                resp.uid = envelope.uid;
-                                resp.destination = Some((&self.id).into()).into();
-                                let mut e = resp.mut_error();
-                                e.message = err.to_string();
-
-                                if let Err(err) = self.switch.send(&self.id, resp.write_to_bytes()?).await {
-                                    // just log then
-                                    log::error!("failed to send error message back to caller: {}", err);
-                                }
+                                self.send_error(envelope, err.to_string()).await?;
                             }
                         }
                         Message::Ping(_) => {
@@ -397,6 +383,20 @@ impl <M:Metrics> Stream <M>{
             }
         }
 
+        Ok(())
+    }
+
+    async fn send_error(&self, envelope: Envelope, err: String) -> Result<()> {
+        let mut resp = Envelope::new();
+        resp.uid = envelope.uid;
+        resp.destination = Some((&self.id).into()).into();
+        let mut e = resp.mut_error();
+        e.message = err;
+
+        if let Err(err) = self.switch.send(&self.id, resp.write_to_bytes()?).await {
+            // just log then
+            log::error!("failed to send error message back to caller: {}", err);
+        }
         Ok(())
     }
 }

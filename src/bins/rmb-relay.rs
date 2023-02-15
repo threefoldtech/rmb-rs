@@ -1,9 +1,8 @@
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
-use relay::limiter::{Limiter, NoLimit};
+use relay::limiter::Limiter;
 use rmb::cache::RedisCache;
 use rmb::redis;
 use rmb::relay;
@@ -48,6 +47,10 @@ struct Args {
     /// enable debugging logs
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
+
+    /// number of messages a user is permited to send every time window.
+    #[clap(long, default_value_t = 1000)]
+    limit_messages: usize,
 }
 
 fn set_limits() -> Result<()> {
