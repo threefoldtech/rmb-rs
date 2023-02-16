@@ -31,12 +31,12 @@ use prometheus::{IntCounter, IntGaugeVec, Opts, Registry};
 
 lazy_static::lazy_static! {
     static ref CON_PER_WORKER: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("rely_worker_connections", "number of connections handled by this worker"),
+        Opts::new("relay_worker_connections", "number of connections handled by this worker"),
         &["worker"]).unwrap();
 
-    static ref MESSAGE_RX: IntCounter = IntCounter::new("rely_message_rx", "number of messages received by rely").unwrap();
+    static ref MESSAGE_RX: IntCounter = IntCounter::new("relay_message_rx", "number of messages received by relay").unwrap();
 
-    static ref MESSAGE_TX: IntCounter = IntCounter::new("rely_message_tx", "number of messages forwarded by rely").unwrap();
+    static ref MESSAGE_TX: IntCounter = IntCounter::new("relay_message_tx", "number of messages forwarded by relay").unwrap();
 }
 
 pub const DEFAULT_WORKERS: u32 = 100;
