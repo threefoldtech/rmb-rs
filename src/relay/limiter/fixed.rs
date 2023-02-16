@@ -1,5 +1,7 @@
-use super::Metrics;
+use super::{Metrics, RateLimiter};
 use async_trait::async_trait;
+use core::num::NonZeroUsize;
+use lru::LruCache;
 use std::{sync::Arc, time::UNIX_EPOCH};
 use tokio::sync::Mutex;
 
@@ -22,17 +24,17 @@ pub struct FixedWindow {
     inner: Arc<Mutex<Counters>>,
 }
 
-#[async_trait]
-impl Metrics for FixedWindow {
-    type Options = Arc<FixedWindowOptions>;
-
-    fn new(options: Self::Options) -> Self {
+impl FixedWindow {
+    fn new(options: Arc<FixedWindowOptions>) -> Self {
         Self {
             options,
             inner: Arc::new(Mutex::new(Counters::default())),
         }
     }
+}
 
+#[async_trait]
+impl Metrics for FixedWindow {
     async fn feed(&self, size: usize) -> bool {
         if size > self.options.size {
             return false;
@@ -60,24 +62,62 @@ impl Metrics for FixedWindow {
     }
 }
 
+#[derive(Clone)]
+pub struct FixedWindowLimiter {
+    // TODO: lru might not be the best option here
+    // because it's only "promoted" when a user connects
+    // hence a twin holds a connection for a long time
+    // might still get dropped out of the cache.
+    // suggestion: replace this with a map
+    // with a periodic check to delete any metrics
+    // that didn't get any updates in a long time.
+    cache: Arc<Mutex<LruCache<u32, FixedWindow>>>,
+    options: Arc<FixedWindowOptions>,
+}
+
+impl FixedWindowLimiter {
+    pub fn new(cap: NonZeroUsize, options: FixedWindowOptions) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(LruCache::new(cap))),
+            options: Arc::new(options),
+        }
+    }
+}
+
+#[async_trait]
+impl RateLimiter for FixedWindowLimiter {
+    type Metrics = FixedWindow;
+
+    async fn get(&self, twin: u32) -> Self::Metrics {
+        let mut cache = self.cache.lock().await;
+        if let Some(metrics) = cache.get(&twin) {
+            return metrics.clone();
+        }
+
+        let metrics = FixedWindow::new(Arc::clone(&self.options));
+        cache.push(twin, metrics.clone());
+        metrics
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use std::{num::NonZeroUsize, sync::Arc};
+    use std::num::NonZeroUsize;
 
+    use super::{FixedWindowLimiter, FixedWindowOptions, Metrics};
     use crate::relay::limiter::RateLimiter;
-    use crate::relay::limiter::{FixedWindow, FixedWindowOptions, Limiter, Metrics};
 
     #[tokio::test]
     async fn test_exceed_count() {
-        let limiter = Limiter::<FixedWindow>::new(
+        let limiter = FixedWindowLimiter::new(
             NonZeroUsize::new(10).unwrap(),
-            Arc::new(FixedWindowOptions {
+            FixedWindowOptions {
                 count: 10,
                 size: 100,
                 window: 5,
-            }),
+            },
         );
-        let twin_cache = limiter.get_metrics(1).await;
+        let twin_cache = limiter.get(1).await;
         for _ in 0..10 {
             assert!(twin_cache.feed(1).await);
         }
@@ -88,15 +128,16 @@ mod test {
 
     #[tokio::test]
     async fn test_exceed_size() {
-        let limiter = Limiter::<FixedWindow>::new(
+        let limiter = FixedWindowLimiter::new(
             NonZeroUsize::new(10).unwrap(),
-            Arc::new(FixedWindowOptions {
+            FixedWindowOptions {
                 count: 100,
                 size: 10,
                 window: 5,
-            }),
+            },
         );
-        let twin_cache = limiter.get_metrics(1).await;
+
+        let twin_cache = limiter.get(1).await;
         for _ in 0..10 {
             assert!(twin_cache.feed(1).await);
         }

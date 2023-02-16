@@ -129,7 +129,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
 
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
-        let metrics = data.limiter.get_metrics(twin.id).await;
+        let metrics = data.limiter.get(twin.id).await;
         // Spawn a task to handle the websocket connection.
         let stream = Stream::new(
             // todo: improve the domain clone

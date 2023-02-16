@@ -271,7 +271,7 @@ where
         for err in errors {
             self.storage
                 .reply(
-                    &reply_to,
+                    reply_to,
                     JsonResponse {
                         version: 1,
                         reference: reference.clone(),

@@ -3,13 +3,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
-use relay::limiter::Limiter;
 use rmb::cache::RedisCache;
 use rmb::redis;
-use rmb::relay;
-use rmb::relay::limiter::FixedWindowOptions;
-use rmb::relay::limiter::Limiters;
-use rmb::relay::limiter::LimitersOptions;
+use rmb::relay::{
+    self,
+    limiter::{FixedWindowOptions, Limiters},
+};
 use rmb::twin::SubstrateTwinDB;
 
 /// A peer requires only which rely to connect to, and
@@ -147,15 +146,15 @@ async fn app(args: &Args) -> Result<()> {
 
     let cache_capacity = NonZeroUsize::new(max_users * 2).unwrap();
     let limiter = if args.limit.is_empty() {
-        Limiter::<Limiters>::new(cache_capacity, LimitersOptions::no_limit())
+        Limiters::no_limit()
     } else {
-        Limiter::<Limiters>::new(
+        Limiters::fixed_window(
             cache_capacity,
-            LimitersOptions::fixed_window(FixedWindowOptions {
+            FixedWindowOptions {
                 count: args.limit[0],
                 size: args.limit[1],
                 window: 60,
-            }),
+            },
         )
     };
 
