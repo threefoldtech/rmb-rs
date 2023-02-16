@@ -64,6 +64,7 @@ impl Metrics for FixedWindow {
 mod test {
     use std::{num::NonZeroUsize, sync::Arc};
 
+    use crate::relay::limiter::RateLimiter;
     use crate::relay::limiter::{FixedWindow, FixedWindowOptions, Limiter, Metrics};
 
     #[tokio::test]
@@ -76,7 +77,7 @@ mod test {
                 window: 5,
             }),
         );
-        let twin_cache = limiter.get(1).await;
+        let twin_cache = limiter.get_metrics(1).await;
         for _ in 0..10 {
             assert!(twin_cache.feed(1).await);
         }
@@ -95,7 +96,7 @@ mod test {
                 window: 5,
             }),
         );
-        let twin_cache = limiter.get(1).await;
+        let twin_cache = limiter.get_metrics(1).await;
         for _ in 0..10 {
             assert!(twin_cache.feed(1).await);
         }

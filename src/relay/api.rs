@@ -21,29 +21,29 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::federation::Federator;
-use super::limiter::{Limiter, Metrics};
+use super::limiter::{Metrics, RateLimiter};
 use super::switch::{Hook, MessageID, StreamID, Switch};
 use super::HttpError;
 
-pub(crate) struct AppData<D: TwinDB, M: Metrics> {
+pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
     federator: Arc<Federator>,
-    limiter: Limiter<M>,
+    limiter: R,
 }
 
-impl<D, M> AppData<D, M>
+impl<D, R> AppData<D, R>
 where
     D: TwinDB,
-    M: Metrics,
+    R: RateLimiter,
 {
     pub(crate) fn new<S: Into<String>>(
         domain: S,
         switch: Arc<Switch<RelayHook>>,
         twins: D,
         federator: Federator,
-        limiter: Limiter<M>,
+        limiter: R,
     ) -> Self {
         Self {
             domain: domain.into(),
@@ -56,26 +56,26 @@ where
 }
 #[derive(Clone)]
 
-pub(crate) struct HttpService<D: TwinDB, M: Metrics> {
-    data: Arc<AppData<D, M>>,
+pub(crate) struct HttpService<D: TwinDB, R: RateLimiter> {
+    data: Arc<AppData<D, R>>,
 }
 
-impl<D, M> HttpService<D, M>
+impl<D, R> HttpService<D, R>
 where
     D: TwinDB,
-    M: Metrics,
+    R: RateLimiter,
 {
-    pub(crate) fn new(data: AppData<D, M>) -> Self {
+    pub(crate) fn new(data: AppData<D, R>) -> Self {
         Self {
             data: Arc::new(data),
         }
     }
 }
 
-impl<D, M> Service<Request<Body>> for HttpService<D, M>
+impl<D, R> Service<Request<Body>> for HttpService<D, R>
 where
     D: TwinDB,
-    M: Metrics,
+    R: RateLimiter,
 {
     type Response = Response<Body>;
     type Error = HttpError;
@@ -108,8 +108,8 @@ where
     }
 }
 
-async fn entry<D: TwinDB, M: Metrics>(
-    data: Arc<AppData<D, M>>,
+async fn entry<D: TwinDB, R: RateLimiter>(
+    data: Arc<AppData<D, R>>,
     mut request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // Check if the request is a websocket upgrade request.
@@ -129,7 +129,7 @@ async fn entry<D: TwinDB, M: Metrics>(
 
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
-        let metrics = data.limiter.get(twin.id).await;
+        let metrics = data.limiter.get_metrics(twin.id).await;
         // Spawn a task to handle the websocket connection.
         let stream = Stream::new(
             // todo: improve the domain clone
@@ -179,8 +179,8 @@ fn metrics() -> Result<Response<Body>, HttpError> {
         .map_err(HttpError::Http)
 }
 
-async fn federation<D: TwinDB, M: Metrics>(
-    data: &AppData<D, M>,
+async fn federation<D: TwinDB, R: RateLimiter>(
+    data: &AppData<D, R>,
     request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // TODO:

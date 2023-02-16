@@ -15,6 +15,12 @@ pub trait Metrics: Send + Sync + Clone + 'static {
     async fn feed(&self, size: usize) -> bool;
 }
 
+#[async_trait]
+pub trait RateLimiter: Send + Sync + Clone + 'static {
+    type Feeder: Metrics;
+    async fn get_metrics(&self, twin: u32) -> Self::Feeder;
+}
+
 #[derive(Clone)]
 pub struct Limiter<T>
 where
@@ -41,16 +47,22 @@ where
             options,
         }
     }
+}
 
-    pub async fn get(&self, twin: u32) -> T {
+#[async_trait]
+impl<T> RateLimiter for Limiter<T>
+where
+    T: Metrics + Clone,
+{
+    type Feeder = T;
+    async fn get_metrics(&self, twin: u32) -> Self::Feeder {
         let mut cache = self.cache.lock().await;
         if let Some(metrics) = cache.get(&twin) {
             return metrics.clone();
         }
 
         let metrics = T::new(self.options.clone());
-        cache.put(twin, metrics.clone());
-
+        cache.push(twin, metrics.clone());
         metrics
     }
 }
@@ -63,6 +75,14 @@ impl Default for Limiter<NoLimit> {
 
 #[derive(Clone)]
 pub struct NoLimit;
+
+#[async_trait]
+impl RateLimiter for NoLimit {
+    type Feeder = NoLimit;
+    async fn get_metrics(&self, _: u32) -> Self::Feeder {
+        NoLimit {}
+    }
+}
 
 #[async_trait]
 impl Metrics for NoLimit {
@@ -94,7 +114,7 @@ impl LimitersOptions {
 }
 
 #[derive(Clone)]
-enum Limiters {
+pub enum Limiters {
     NoLimit,
     FixedWindow(FixedWindow),
 }
@@ -126,7 +146,7 @@ mod test {
     #[test]
     fn static_dispatch() {
         let count = NonZeroUsize::new(10).unwrap();
-        let limiter = if true {
+        let _ = if true {
             Limiter::<Limiters>::new(count, LimitersOptions::no_limit())
         } else {
             Limiter::<Limiters>::new(
