@@ -8,7 +8,9 @@ use tokio::net::ToSocketAddrs;
 
 mod api;
 mod federation;
+pub mod limiter;
 mod switch;
+use self::limiter::RateLimiter;
 use api::RelayHook;
 use federation::Federation;
 pub use federation::FederationOptions;
@@ -16,22 +18,25 @@ use std::sync::Arc;
 use switch::Switch;
 pub use switch::SwitchOptions;
 
-pub struct Relay<D: TwinDB> {
+pub struct Relay<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
     federation: Federation,
+    limiter: R,
 }
 
-impl<D> Relay<D>
+impl<D, R> Relay<D, R>
 where
     D: TwinDB + Clone,
+    R: RateLimiter,
 {
     pub async fn new<S: Into<String>>(
         domain: S,
         twins: D,
         opt: SwitchOptions,
         federation: FederationOptions,
+        limiter: R,
     ) -> Result<Self> {
         let switch = opt.build().await?;
         let federation = federation.build(switch.sink())?;
@@ -40,6 +45,7 @@ where
             twins,
             domain: domain.into(),
             federation,
+            limiter,
         })
     }
 
@@ -51,6 +57,7 @@ where
             self.switch,
             self.twins,
             federator,
+            self.limiter,
         ));
         loop {
             let (tcp_stream, _) = tcp_listener.accept().await?;

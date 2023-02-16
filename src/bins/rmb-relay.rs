@@ -1,10 +1,14 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
 use rmb::redis;
-use rmb::relay;
+use rmb::relay::{
+    self,
+    limiter::{FixedWindowOptions, Limiters},
+};
 use rmb::twin::SubstrateTwinDB;
 
 /// A peer requires only which rely to connect to, and
@@ -46,6 +50,10 @@ struct Args {
     /// enable debugging logs
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
+
+    /// limits used by the rate limiter. basically a user will be only permited to send <count> messages with size <size> in a time window (usually a minute).
+    #[clap(long, num_args=2, value_names=["count", "size"])]
+    limit: Vec<usize>,
 }
 
 fn set_limits() -> Result<()> {
@@ -129,12 +137,28 @@ async fn app(args: &Args) -> Result<()> {
     .await
     .context("cannot create substrate twin db object")?;
 
+    let max_users = args.workers as usize * args.user_per_worker as usize;
     let opt = relay::SwitchOptions::new(pool.clone())
         .with_workers(args.workers)
-        .with_max_users(args.workers as usize * args.user_per_worker as usize);
+        .with_max_users(max_users);
 
     let federation = relay::FederationOptions::new(pool).with_workers(fed_size as usize);
-    let r = relay::Relay::new(&args.domain, twins, opt, federation)
+
+    let cache_capacity = NonZeroUsize::new(max_users * 2).unwrap();
+    let limiter = if args.limit.is_empty() {
+        Limiters::no_limit()
+    } else {
+        Limiters::fixed_window(
+            cache_capacity,
+            FixedWindowOptions {
+                count: args.limit[0],
+                size: args.limit[1],
+                window: 60,
+            },
+        )
+    };
+
+    let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter)
         .await
         .unwrap();
     r.start(&args.listen).await.unwrap();

@@ -15,58 +15,67 @@ use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use prometheus::Encoder;
 use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
+use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::federation::Federator;
+use super::limiter::{Metrics, RateLimiter};
 use super::switch::{Hook, MessageID, StreamID, Switch};
 use super::HttpError;
 
-pub(crate) struct AppData<D: TwinDB> {
+pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
     federator: Arc<Federator>,
+    limiter: R,
 }
 
-impl<D> AppData<D>
+impl<D, R> AppData<D, R>
 where
     D: TwinDB,
+    R: RateLimiter,
 {
     pub(crate) fn new<S: Into<String>>(
         domain: S,
         switch: Arc<Switch<RelayHook>>,
         twins: D,
         federator: Federator,
+        limiter: R,
     ) -> Self {
         Self {
             domain: domain.into(),
             switch,
             twins,
             federator: Arc::new(federator),
+            limiter,
         }
     }
 }
 #[derive(Clone)]
-pub(crate) struct HttpService<D: TwinDB> {
-    data: Arc<AppData<D>>,
+
+pub(crate) struct HttpService<D: TwinDB, R: RateLimiter> {
+    data: Arc<AppData<D, R>>,
 }
 
-impl<D> HttpService<D>
+impl<D, R> HttpService<D, R>
 where
     D: TwinDB,
+    R: RateLimiter,
 {
-    pub(crate) fn new(data: AppData<D>) -> Self {
+    pub(crate) fn new(data: AppData<D, R>) -> Self {
         Self {
             data: Arc::new(data),
         }
     }
 }
 
-impl<D> Service<Request<Body>> for HttpService<D>
+impl<D, R> Service<Request<Body>> for HttpService<D, R>
 where
     D: TwinDB,
+    R: RateLimiter,
 {
     type Response = Response<Body>;
     type Error = HttpError;
@@ -99,8 +108,8 @@ where
     }
 }
 
-async fn entry<D: TwinDB>(
-    data: Arc<AppData<D>>,
+async fn entry<D: TwinDB, R: RateLimiter>(
+    data: Arc<AppData<D, R>>,
     mut request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // Check if the request is a websocket upgrade request.
@@ -120,6 +129,7 @@ async fn entry<D: TwinDB>(
 
         let (response, websocket) = hyper_tungstenite::upgrade(&mut request, None)?;
 
+        let metrics = data.limiter.get(twin.id).await;
         // Spawn a task to handle the websocket connection.
         let stream = Stream::new(
             // todo: improve the domain clone
@@ -127,6 +137,7 @@ async fn entry<D: TwinDB>(
             data.domain.clone(),
             Arc::clone(&data.switch),
             Arc::clone(&data.federator),
+            metrics,
         );
 
         tokio::spawn(async move {
@@ -168,8 +179,8 @@ fn metrics() -> Result<Response<Body>, HttpError> {
         .map_err(HttpError::Http)
 }
 
-async fn federation<D: TwinDB>(
-    data: &AppData<D>,
+async fn federation<D: TwinDB, R: RateLimiter>(
+    data: &AppData<D, R>,
     request: Request<Body>,
 ) -> Result<Response<Body>, HttpError> {
     // TODO:
@@ -244,18 +255,20 @@ impl Hook for RelayHook {
     }
 }
 
-struct Stream {
+struct Stream<M: Metrics> {
     id: StreamID,
     domain: String,
     switch: Arc<Switch<RelayHook>>,
     federator: Arc<Federator>,
+    metrics: M,
 }
-impl Stream {
+impl<M: Metrics> Stream<M> {
     fn new(
         claims: Claims,
         domain: String,
         switch: Arc<Switch<RelayHook>>,
         federator: Arc<Federator>,
+        metrics: M,
     ) -> Self {
         let id: StreamID = (claims.id, claims.sid).into();
         Self {
@@ -263,6 +276,7 @@ impl Stream {
             domain,
             switch,
             federator,
+            metrics,
         }
     }
 
@@ -324,6 +338,7 @@ impl Stream {
                         Err(err) => {
                             log::debug!("error receiving a message: {}", err);
                             return Ok(());
+
                         }
                     };
 
@@ -337,22 +352,19 @@ impl Stream {
                             // failure to load the message is fatal hence we disconnect
                             // the client
                             let envelope =
-                                Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+                            Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
+
+                            if !self.metrics.feed(msg.len()).await {
+                                log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
+                                self.send_error(envelope, "exceeded rate limits, dropping message").await;
+                                continue
+                            }
 
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&envelope, msg).await {
-                                let mut resp = Envelope::new();
-                                resp.uid = envelope.uid;
-                                resp.destination = Some((&self.id).into()).into();
-                                let mut e = resp.mut_error();
-                                e.message = err.to_string();
-
-                                if let Err(err) = self.switch.send(&self.id, resp.write_to_bytes()?).await {
-                                    // just log then
-                                    log::error!("failed to send error message back to caller: {}", err);
-                                }
+                                self.send_error(envelope, err).await;
                             }
                         }
                         Message::Ping(_) => {
@@ -366,6 +378,7 @@ impl Stream {
                         }
                         Message::Frame(_) => {
                             unreachable!();
+
                         }
                     }
                 }
@@ -373,5 +386,27 @@ impl Stream {
         }
 
         Ok(())
+    }
+
+    async fn send_error<E: Display>(&self, envelope: Envelope, err: E) {
+        let mut resp = Envelope::new();
+        resp.uid = envelope.uid;
+        resp.destination = Some((&self.id).into()).into();
+        let mut e = resp.mut_error();
+        e.message = err.to_string();
+
+        let bytes = match resp.write_to_bytes() {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                // this should never happen, hence let's print this as an error
+                log::error!("failed to serialize envelope: {}", err);
+                return;
+            }
+        };
+
+        if let Err(err) = self.switch.send(&self.id, bytes).await {
+            // just log then
+            log::error!("failed to send error message back to caller: {}", err);
+        }
     }
 }
