@@ -8,6 +8,7 @@ pub use fixed::FixedWindowOptions;
 
 #[async_trait]
 pub trait Metrics: Send + Sync + Clone + 'static {
+    /// feed returns `true` if a user hasn't exceeded his consumption limits, `false` otherwise.
     async fn feed(&self, size: usize) -> bool;
 }
 
@@ -18,6 +19,7 @@ pub trait RateLimiter: Send + Sync + Clone + 'static {
     async fn get(&self, twin: u32) -> Self::Metrics;
 }
 
+/// Limiters enum combines different implementations of rate limiters.
 #[derive(Clone)]
 pub enum Limiters {
     NoLimit,
@@ -34,6 +36,7 @@ impl Limiters {
     }
 }
 
+/// LimitersMetrics enum combined different implementations of metrics.
 #[derive(Clone)]
 pub enum LimitersMetrics {
     NoLimit,
