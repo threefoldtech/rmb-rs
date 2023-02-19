@@ -12,7 +12,7 @@ pub struct FixedWindowOptions {
     pub window: usize, // window in seconds
 }
 
-/// Counters are used to determine the consumption of some user at some time window started at `start`. 
+/// Counters are used to determine the consumption of some user at some time window started at `start`.
 #[derive(Default)]
 struct Counters {
     start: u64,
