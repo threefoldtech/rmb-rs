@@ -163,3 +163,13 @@ As you already understand e2e is completely up to the peers to implement, and ev
  - derive the same shared key
   - `shared = ecdh(B.sk, A.pk)`
  - `plain-data = aes-gcm.decrypt(shared-key, nonce, encrypted)`
+
+## Rate Limiting
+
+To avoid abuse of the server, and prevent DoS attacks on the relay, a rate limiter is used to limit the consumption for each twin.\
+It was decided that the rate limiter should only watch websocket connections with users, since all other requests/connections with users consume little resources, and since the relay handles the max number of users inherently.\
+The limiter's configurations are passed as a command line argument `--limit <count>, <size>`.\
+Currently there are two implementations of the rate limiter:
+
+- `NoLimit` which imposes no cosumption limits on users.
+- `FixedWindowLimiter` which basically allows a twin to send some number of messages, with some size, in a time window. If a twin exceeded their limits, their message is dropped, an error message is sent back to the user, and the relay dumps a log about this twin.
