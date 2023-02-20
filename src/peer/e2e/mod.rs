@@ -71,7 +71,8 @@ impl Pair {
     pub(crate) fn shared<K: AsRef<[u8]>>(&self, pk: K) -> Result<[u8; SHARED_KEY_SIZE], Error> {
         let pk = PublicKey::from_slice(pk.as_ref())?;
 
-        let point = secp256k1::ecdh::shared_secret_point(&pk, &self.0.secret_key());
+        // we take the x coordinate of the secret point.
+        let point = &secp256k1::ecdh::shared_secret_point(&pk, &self.0.secret_key())[..32];
         use sha2::{Digest, Sha256};
 
         let mut sh = Sha256::new();
