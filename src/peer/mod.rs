@@ -15,7 +15,9 @@ pub mod storage;
 pub use e2e::Pair;
 
 use con::{Connection, Writer};
-use storage::{JsonIncomingRequest, JsonOutgoingRequest, JsonResponse};
+use storage::{
+    JsonIncomingRequest, JsonIncomingResponse, JsonOutgoingRequest, JsonOutgoingResponse,
+};
 
 use self::storage::JsonError;
 
@@ -219,7 +221,7 @@ where
     }
 
     // handle outgoing responses
-    async fn response(&self, response: JsonResponse) -> Result<()> {
+    async fn response(&self, response: JsonOutgoingResponse) -> Result<()> {
         // that's a reply message that is initiated locally and need to be
         // sent to a remote peer
         let mut envelope: Envelope = response
@@ -272,11 +274,11 @@ where
             self.storage
                 .reply(
                     reply_to,
-                    JsonResponse {
+                    JsonIncomingResponse {
                         version: 1,
                         reference: reference.clone(),
                         data: String::default(),
-                        destination: String::default(),
+                        source: String::default(),
                         schema: None,
                         timestamp: 0,
                         error: Some(err.into()),
@@ -421,7 +423,7 @@ where
             }
         };
 
-        let mut response: JsonResponse = envelope.try_into()?;
+        let mut response: JsonIncomingResponse = envelope.try_into()?;
         // set the reference back to original value
         response.reference = backlog.reference;
         log::trace!("pushing response to reply queue: {}", backlog.reply_to);

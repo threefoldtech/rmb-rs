@@ -39,7 +39,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
 
     // pushed a json response back to the caller according to his
     // reply queue.
-    async fn reply(&self, queue: &str, response: JsonResponse) -> Result<()>;
+    async fn reply(&self, queue: &str, response: JsonIncomingResponse) -> Result<()>;
 
     // messages waits on either "requests" or "replies" that are available to
     // be send to remote twin.
@@ -48,7 +48,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
 
 pub enum JsonMessage {
     Request(JsonOutgoingRequest),
-    Response(JsonResponse),
+    Response(JsonOutgoingResponse),
 }
 
 impl From<JsonOutgoingRequest> for JsonMessage {
@@ -57,8 +57,8 @@ impl From<JsonOutgoingRequest> for JsonMessage {
     }
 }
 
-impl From<JsonResponse> for JsonMessage {
-    fn from(value: JsonResponse) -> Self {
+impl From<JsonOutgoingResponse> for JsonMessage {
+    fn from(value: JsonOutgoingResponse) -> Self {
         Self::Response(value)
     }
 }
@@ -271,7 +271,7 @@ impl TryFrom<Envelope> for JsonIncomingRequest {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonResponse {
+pub struct JsonOutgoingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
@@ -288,7 +288,7 @@ pub struct JsonResponse {
     pub error: Option<JsonError>,
 }
 
-impl redis::ToRedisArgs for JsonResponse {
+impl redis::ToRedisArgs for JsonOutgoingResponse {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + redis::RedisWrite,
@@ -298,7 +298,7 @@ impl redis::ToRedisArgs for JsonResponse {
     }
 }
 
-impl redis::FromRedisValue for JsonResponse {
+impl redis::FromRedisValue for JsonOutgoingResponse {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         if let redis::Value::Data(data) = v {
             serde_json::from_slice(data).map_err(|e| {
@@ -317,7 +317,7 @@ impl redis::FromRedisValue for JsonResponse {
     }
 }
 
-impl TryFrom<Envelope> for JsonResponse {
+impl TryFrom<Envelope> for JsonOutgoingResponse {
     type Error = anyhow::Error;
     fn try_from(env: Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
@@ -331,7 +331,7 @@ impl TryFrom<Envelope> for JsonResponse {
 
         let data = base64::encode(env.plain());
 
-        let response = JsonResponse {
+        let response = JsonOutgoingResponse {
             version: 1,
             reference: None,
             data,
@@ -352,10 +352,10 @@ impl TryFrom<Envelope> for JsonResponse {
     }
 }
 
-impl TryFrom<JsonResponse> for Envelope {
+impl TryFrom<JsonOutgoingResponse> for Envelope {
     type Error = anyhow::Error;
 
-    fn try_from(value: JsonResponse) -> Result<Self, Self::Error> {
+    fn try_from(value: JsonOutgoingResponse) -> Result<Self, Self::Error> {
         let mut env = Envelope::new();
 
         match value.error {
@@ -382,5 +382,87 @@ impl TryFrom<JsonResponse> for Envelope {
         env.schema = value.schema;
 
         Ok(env)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonIncomingResponse {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "src")]
+    pub source: String,
+    #[serde(rename = "shm")]
+    pub schema: Option<String>,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+    #[serde(rename = "err")]
+    pub error: Option<JsonError>,
+}
+
+impl redis::ToRedisArgs for JsonIncomingResponse {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let bytes = serde_json::to_vec(self).expect("failed to json encode message");
+        out.write_arg(&bytes);
+    }
+}
+
+impl redis::FromRedisValue for JsonIncomingResponse {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        if let redis::Value::Data(data) = v {
+            serde_json::from_slice(data).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "cannot decode a message from json {}",
+                    e.to_string(),
+                ))
+            })
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "expected a data type from redis",
+            )))
+        }
+    }
+}
+
+impl TryFrom<Envelope> for JsonIncomingResponse {
+    type Error = anyhow::Error;
+    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+        use types::envelope::Message;
+
+        // message can be only a response or error
+        match env.message {
+            None => anyhow::bail!("invalid envelope has no message"),
+            Some(Message::Request(_)) => anyhow::bail!("invalid envelope has request message"),
+            _ => {} //Some(Message::Response(response)) => response,
+        };
+
+        let data = base64::encode(env.plain());
+
+        let response = JsonIncomingResponse {
+            version: 1,
+            reference: None,
+            data,
+            source: env.source.stringify(),
+            timestamp: env.timestamp,
+            schema: env.schema,
+            error: if let Some(Message::Error(err)) = env.message {
+                Some(JsonError {
+                    code: err.code,
+                    message: err.message,
+                })
+            } else {
+                None
+            },
+        };
+
+        Ok(response)
     }
 }
