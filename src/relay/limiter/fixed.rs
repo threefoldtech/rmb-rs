@@ -5,14 +5,16 @@ use lru::LruCache;
 use std::{sync::Arc, time::UNIX_EPOCH};
 use tokio::sync::Mutex;
 
-/// FixedWindowOptions are used to determine user limits for each time window, and the size of that window.
+/// FixedWindowOptions are used to determine how many messages a twin is allowed to send in a time window, this is assigned to `count`, 
+/// and the total size of the messages in bytes a twin is allowed to send in a time window, this is assigned to `size`, 
+/// and the size of that window in seconds, this is assigned to `window`.
 pub struct FixedWindowOptions {
     pub size: usize,
     pub count: usize,
     pub window: usize, // window in seconds
 }
 
-/// Counters are used to determine the consumption of some user at some time window started at `start`.
+/// Counters are used to determine the usage (`size` and `count` of messages) of some user during a time window started at a timestamp equal to `start`.
 #[derive(Default)]
 struct Counters {
     start: u64,

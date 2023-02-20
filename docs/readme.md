@@ -166,10 +166,10 @@ As you already understand e2e is completely up to the peers to implement, and ev
 
 ## Rate Limiting
 
-To avoid abuse of the server, and prevent DoS attacks on the relay, a rate limiter is used to limit the consumption for each twin.\
-It was decided that the rate limiter should only watch websocket connections with users, since all other requests/connections with users consume little resources, and since the relay handles the max number of users inherently.\
-The limiter's configurations are passed as a command line argument `--limit <count>, <size>`.\
+To avoid abuse of the server, and prevent DoS attacks on the relay, a rate limiter is used to limit the number of clients' requests.\
+It was decided that the rate limiter should only watch websocket connections of users, since all other requests/connections with users consume little resources, and since the relay handles the max number of users inherently.\
+The limiter's configurations are passed as a command line argument `--limit <count>, <size>`. `<count>` represents the number of messages a twin is allowed to send in each time window, `<size>` represents the total size of messages in bytes a twin is allowed to send in each time window.\
 Currently there are two implementations of the rate limiter:
 
-- `NoLimit` which imposes no cosumption limits on users.
-- `FixedWindowLimiter` which basically allows a twin to send some number of messages, with some size, in a time window. If a twin exceeded their limits, their message is dropped, an error message is sent back to the user, and the relay dumps a log about this twin.
+- `NoLimit` which imposes no limits on users.
+- `FixedWindowLimiter` which breaks the timeline into fixed time windows, and allows a twin to send a fixed number of messages, with a fixed total size, in each time window. If a twin exceeded their limits in some time window, their message is dropped, an error message is sent back to the user, the relay dumps a log about this twin, and the user gets to keep their connection with the relay.
