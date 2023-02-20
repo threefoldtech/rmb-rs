@@ -40,10 +40,10 @@ impl FixedWindow {
 
 #[async_trait]
 impl Metrics for FixedWindow {
-    /// feed returns `true` if a user hasn't exceeded his consumption limits, `false` otherwise.
+    /// measure returns `true` if a user hasn't exceeded his consumption limits, `false` otherwise.
     /// if the current timestamp is different from the current counter start, the counter is reset to zero values, with the start equal to the current timestamp.
     /// then, after incrementing the counters, the limits are checked, and a boolean value is returned accordingly.
-    async fn feed(&self, size: usize) -> bool {
+    async fn measure(&self, size: usize) -> bool {
         if size > self.options.size {
             return false;
         }
@@ -128,11 +128,11 @@ mod test {
         );
         let twin_cache = limiter.get(1).await;
         for _ in 0..10 {
-            assert!(twin_cache.feed(1).await);
+            assert!(twin_cache.measure(1).await);
         }
-        assert!(!twin_cache.feed(1).await);
+        assert!(!twin_cache.measure(1).await);
         std::thread::sleep(std::time::Duration::from_secs(5));
-        assert!(twin_cache.feed(1).await);
+        assert!(twin_cache.measure(1).await);
     }
 
     #[tokio::test]
@@ -148,10 +148,10 @@ mod test {
 
         let twin_cache = limiter.get(1).await;
         for _ in 0..10 {
-            assert!(twin_cache.feed(1).await);
+            assert!(twin_cache.measure(1).await);
         }
-        assert!(!twin_cache.feed(1).await);
+        assert!(!twin_cache.measure(1).await);
         std::thread::sleep(std::time::Duration::from_secs(5));
-        assert!(twin_cache.feed(1).await);
+        assert!(twin_cache.measure(1).await);
     }
 }

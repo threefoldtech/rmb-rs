@@ -354,7 +354,7 @@ impl<M: Metrics> Stream<M> {
                             let envelope =
                             Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
-                            if !self.metrics.feed(msg.len()).await {
+                            if !self.metrics.measure(msg.len()).await {
                                 log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
                                 self.send_error(envelope, "exceeded rate limits, dropping message").await;
                                 continue
