@@ -5,8 +5,8 @@ use lru::LruCache;
 use std::{sync::Arc, time::UNIX_EPOCH};
 use tokio::sync::Mutex;
 
-/// FixedWindowOptions are used to determine how many messages a twin is allowed to send in a time window, this is assigned to `count`, 
-/// and the total size of the messages in bytes a twin is allowed to send in a time window, this is assigned to `size`, 
+/// FixedWindowOptions are used to determine how many messages a twin is allowed to send in a time window, this is assigned to `count`,
+/// and the total size of the messages in bytes a twin is allowed to send in a time window, this is assigned to `size`,
 /// and the size of that window in seconds, this is assigned to `window`.
 pub struct FixedWindowOptions {
     pub size: usize,
