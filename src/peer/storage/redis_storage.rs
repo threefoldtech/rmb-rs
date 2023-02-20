@@ -2,7 +2,10 @@ use std::fmt::Display;
 
 use crate::types::Backlog;
 
-use super::{JsonIncomingRequest, JsonMessage, JsonOutgoingRequest, JsonResponse, Storage};
+use super::{
+    JsonIncomingRequest, JsonIncomingResponse, JsonMessage, JsonOutgoingRequest,
+    JsonOutgoingResponse, Storage,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{
@@ -167,7 +170,7 @@ impl Storage for RedisStorage {
         Ok(())
     }
 
-    async fn reply(&self, queue: &str, response: JsonResponse) -> Result<()> {
+    async fn reply(&self, queue: &str, response: JsonIncomingResponse) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
 
@@ -192,7 +195,7 @@ impl Storage for RedisStorage {
         } else {
             // reply queue had the message itself
             // decode it directly
-            JsonResponse::from_redis_value(&value)
+            JsonOutgoingResponse::from_redis_value(&value)
                 .context("failed to load json response")?
                 .into()
         };
