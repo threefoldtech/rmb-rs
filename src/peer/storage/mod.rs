@@ -35,11 +35,11 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // SUGGESTED FIX: instead of setting TTL on the $cmd queue we can limit the length
     // of the queue. So for example, we allow maximum of 500 message to be on this queue
     // after that we need to trim the queue to specific length after push (so drop older messages)
-    async fn run(&self, msg: JsonIncomingRequest) -> Result<()>;
+    async fn request(&self, msg: JsonIncomingRequest) -> Result<()>;
 
     // pushed a json response back to the caller according to his
     // reply queue.
-    async fn reply(&self, queue: &str, response: JsonIncomingResponse) -> Result<()>;
+    async fn response(&self, queue: &str, response: JsonIncomingResponse) -> Result<()>;
 
     // messages waits on either "requests" or "replies" that are available to
     // be send to remote twin.

@@ -245,12 +245,25 @@ where
         // also encrypt the message
         if let Some(ref pk) = twin.pk {
             log::trace!("encrypt message for: {}", twin.id);
-            let cipher = self
+            match self
                 .sk
                 .encrypt(pk, envelope.plain())
-                .map_err(PeerError::E2E)?;
-
-            envelope.set_cipher(cipher);
+                .map_err(PeerError::E2E)
+            {
+                Ok(cipher) => {
+                    // if we managed to cipher the message
+                    // we set it as payload
+                    envelope.set_cipher(cipher);
+                }
+                Err(err) => {
+                    // otherwise, we clear up the payload
+                    // and set the error instead
+                    envelope.payload = None;
+                    let mut e = envelope.mut_error();
+                    e.code = err.code();
+                    e.message = err.to_string();
+                }
+            };
         }
 
         Ok(())
@@ -272,7 +285,7 @@ where
 
         for err in errors {
             self.storage
-                .reply(
+                .response(
                     reply_to,
                     JsonIncomingResponse {
                         version: 1,
@@ -399,7 +412,7 @@ where
                 .context("failed to get request from envelope")?;
             return self
                 .storage
-                .run(request)
+                .request(request)
                 .await
                 .map_err(EnvelopeErrorKind::Other)
                 .map_err(PeerError::Envelope);
@@ -428,7 +441,7 @@ where
         response.reference = backlog.reference;
         log::trace!("pushing response to reply queue: {}", backlog.reply_to);
         self.storage
-            .reply(&backlog.reply_to, response)
+            .response(&backlog.reply_to, response)
             .await
             .context("failed to push received reply")?;
         Ok(())
