@@ -158,7 +158,7 @@ impl Storage for RedisStorage {
         self.get_from(BacklogKey(uid)).await
     }
 
-    async fn run(&self, mut request: JsonIncomingRequest) -> Result<()> {
+    async fn request(&self, mut request: JsonIncomingRequest) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
         request.reply_to = Queue::Response.to_string();
@@ -170,7 +170,7 @@ impl Storage for RedisStorage {
         Ok(())
     }
 
-    async fn reply(&self, queue: &str, response: JsonIncomingResponse) -> Result<()> {
+    async fn response(&self, queue: &str, response: JsonIncomingResponse) -> Result<()> {
         let mut conn = self.get_connection().await?;
         // set reply queue
 
