@@ -37,6 +37,10 @@ lazy_static::lazy_static! {
     static ref MESSAGE_RX: IntCounter = IntCounter::new("relay_message_rx", "number of messages received by relay").unwrap();
 
     static ref MESSAGE_TX: IntCounter = IntCounter::new("relay_message_tx", "number of messages forwarded by relay").unwrap();
+
+    static ref MESSAGE_RX_BYTES: IntCounter = IntCounter::new("relay_message_rx_bytes", "size of messages received by relay in bytes").unwrap();
+
+    static ref MESSAGE_TX_BYTES: IntCounter = IntCounter::new("relay_message_tx_bytes", "size of messages forwarded by relay in bytes").unwrap();
 }
 
 pub const DEFAULT_WORKERS: u32 = 100;
@@ -214,6 +218,8 @@ where
         opts.registry.register(Box::new(CON_PER_WORKER.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX.clone()))?;
         opts.registry.register(Box::new(MESSAGE_TX.clone()))?;
+        opts.registry.register(Box::new(MESSAGE_RX_BYTES.clone()))?;
+        opts.registry.register(Box::new(MESSAGE_TX_BYTES.clone()))?;
 
         for id in 0..workers {
             // TODO: while workers are mostly ideal may be it's better in the
@@ -291,9 +297,11 @@ where
                     continue;
                 }
 
-                user.hook.received(msg_id, &tags[1]).await;
+                let msg = &tags[1];
+                user.hook.received(msg_id, msg).await;
 
                 MESSAGE_TX.inc();
+                MESSAGE_TX_BYTES.inc_by(msg.len() as u64);
 
                 session.set_last(msg_id);
             }
@@ -475,6 +483,7 @@ async fn send<'a>(
         .await?;
 
     MESSAGE_RX.inc();
+    MESSAGE_RX_BYTES.inc_by(msg.len() as u64);
 
     Ok(msg_id)
 }
