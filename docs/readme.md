@@ -59,6 +59,7 @@ A request message is defined as follows
 ##### Output requests
 This is created by a client who wants to request make a request to a remote service
 
+> this message is pushed to `msgbus.system.local` to be picked up by the peer
 ```rust
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonOutgoingRequest {
@@ -84,9 +85,11 @@ pub struct JsonOutgoingRequest {
     pub timestamp: u64,
 }
 ```
-##### Response
-A response message is defined as follows this is what is generated as a response by a service and also what is received
-by the client as a response to the Outgoing Request
+
+##### Incoming Response
+A response message is defined as follows this is what is received as a response by a client in response to his outgoing request.
+
+> this response is what is pushed to `$ret` queue defined by the outgoing request, hence the client need to wait on this queue until the response is received or it times out
 ```rust
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonError {
@@ -95,15 +98,15 @@ pub struct JsonError {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonResponse {
+pub struct JsonIncomingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
     pub reference: String,
     #[serde(rename = "dat")]
     pub data: String,
-    #[serde(rename = "dst")]
-    pub destination: String,
+    #[serde(rename = "src")]
+    pub source: String,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
@@ -113,8 +116,8 @@ pub struct JsonResponse {
 
 ##### Incoming Request
 An incoming request is a modified version of the request that is received by a service running behind RMB peer
+> this request is received on `msgbus.${request.cmd}` (always prefixed with `msgbus`)
 ```rust
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonIncomingRequest {
     #[serde(rename = "ver")]
@@ -141,6 +144,32 @@ pub struct JsonIncomingRequest {
 ```
 
 Services that receive this needs to make sure their responses `destination` to have the same value as the incoming request `source`
+
+
+##### Outgoing Response
+A response message is defined as follows this is what is sent as a response by a service in response to an incoming request.
+
+Your bot (server) need to make sure to set `destination` to the same value as the incoming request `source`
+
+The
+> this response is what is pushed to `msgbus.system.reply`
+```rust
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsonIncomingResponse {
+    #[serde(rename = "ver")]
+    pub version: usize,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(rename = "dat")]
+    pub data: String,
+    #[serde(rename = "dst")]
+    pub destination: String,
+    #[serde(rename = "now")]
+    pub timestamp: u64,
+    #[serde(rename = "err")]
+    pub error: Option<JsonError>,
+}
+```
 
 # End2End Encryption
 Relay is totally opaque to the messages. Our implementation of the relay does not poke into messages except for the routing attributes (source, and destinations addresses, and federation information). But since the relay is designed to be hosted by other 3rd parties (hence federation) you should

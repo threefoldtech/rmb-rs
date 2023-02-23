@@ -1,236 +1,71 @@
-<div id="top"></div>
+[![Rust](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml/badge.svg)](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml)
 
-<!-- PROJECT SHIELDS -->
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
+# Reliable Message Bus
+Reliable message bus is a secure communication panel that allows `bots` to communicate together in a `chat` like way. It makes it very easy to host a service or a set of functions to be used by anyone, even if your service is running behind NAT.
 
+Out of the box RMB provides the following:
+- Grantee authenticity of the messages. You are always sure that the received message is from whoever is pretending to be
+- End to End encryption
+- Support for 3rd party hosted relays. Anyone can host a relay and people can use it safely since there is noway messages can be inspected while using e2e. That's similar to `home` servers by `matrix`
 
+## Why
+RMB is developed by ThreefoldTech to create a global network of nodes that are available to host capacity. Each node will act like a single bot where you can ask to host your capacity. This enforced a unique set of requirements:
+- Communication needed to be reliable
+  - Minimize and completely eliminate message loss
+  - Reduce downtime
+- Node need to authenticate and authorize calls
+  - Grantee identity of the other peer so only owners of data can see it
+- Fast request response time
 
-<!-- PROJECT LOGO -->
-<!-- <br />
-<div align="center">
-  <a href="https://github.com/threefoldtech/rmb-rs">
-    <img src="images/logo.jpeg" alt="Logo" width="80" height="80">
-  </a> -->
+Starting from this we came up with a more detailed requirements:
+- User (or rather bots) need their identity maintained by `tfchain` (a blockchain) hence each bot needs an account on tfchain to be able to use `rmb`
+- Then each message then can be signed by the `bot` keys, hence make it easy to verify the identity of the sender of a message. This is done both ways.
+- To support federation (using 3rd party relays) we needed to add e2e encryption to make sure messages that are surfing the public internet can't be sniffed
+- e2e encryption is done by deriving an encryption key from the same identity seed, and share the public key on `tfchain` hence it's available to everyone to use
 
-<h3 align="center">RMB-RS</h3>
+# Specification
+For details about protocol itself please check the [docs](docs/readme.md)
 
-  <p align="center">
-    RMB implementation in rust
-    <br />
-    <a href="https://github.com/threefoldtech/rmb-rs/tree/development/docs"><strong>Explore more docs »</strong></a>
-    <br />
-    <br />
-    <a href="https://github.com/threefoldtech/rmb-rs/issues">Report Bug</a>
-    ·
-    <a href="https://github.com/threefoldtech/rmb-rs/issues">Request Feature</a>
-  </p>
-</div>
+# How to use
+There are many ways to use `rmb` because it was built for `bots` and software to communicate. Hence, there is no mobile app for it for example, but instead a set of libraries where you can use to connect to the network, make chitchats with other bots then exit.
 
+Or you can keep the connection forever to answer other bots requests if you are providing a service.
 
+## If there is a library in your preferred language
+Then you are in luck, follow the library documentations to implement a service bot, or to make requests to other bots.
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-      <ul>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
-    </li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
-  </ol>
-</details>
+### known libraries
+- Golang [rmb-sdk-go](https://github.com/threefoldtech/rmb-sdk-go)
+- Typescript [rmb-sdk-ts](https://github.com/threefoldtech/rmb-sdk-ts)
 
+## Well, I am not that lucky
+In that case:
+- Implement a library in your preferred language
+- If it's too much to do all the signing, verification, e2e in your language then use `rmb-peer`
 
+## What is rmb-peer
+think of `rmb-peer` as a gateway that stands between you and the `relay`. `rmb-peer` uses your mnemonics (your identity secret key) to assume your identity and it connects to the relay on your behalf, it maintains the connection forever and takes care of
+- reconnecting if connection was lost
+- verifying received messages
+- decrypting received messages
+- sending requests on your behalf, taking care of all crypto heavy lifting.
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
+Then it provide a simple (plain-text) api over `redis`. means to send messages (or handle requests) you just need to be able to push and pop messages from some redis queues. Messages are simple plain text json.
 
-RMB (reliable message bus) is a set of tools (client and daemon) that aims to abstract inter-process communication between multiple processes running over multiple nodes. see the [design document](https://github.com/threefoldtech/rmb-rs/blob/development/docs/readme.md).
+> More details about the structure of the messages are also in the [docs](docs/readme.md) page
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+# Download
+Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/releases) normally you only need the `rmb-peer` binary, unless you want to host your own relay.
 
-
-
-### Built With
-
-* [Rust](https://www.rust-lang.org/)
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- GETTING STARTED -->
-## Getting Started
-
-To get a local RMB up and running follow these simple steps.
-
-### Prerequisites
-
-* Rust
-
-**note**: only needed to Build a binary from source. it is recommended to use the released binaries, in this case you can skip rust installation.
-  ```sh
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
-* Redis
-
-  you can install Redis
-  ```sh
-  curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-  echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
-  sudo apt-get update
-  sudo apt-get install redis
-  ```
-  or you can start a redis instance in a container.
-  ```sh
-  docker run --name test-redis -d -p 6379:6379 redis
-  ```
-  see [here](https://hub.docker.com/_/redis) for more info
-* yggdrasil
-
-  **note:** though not required to run fully functionally RMB, it needed if you are going to communicate with other nodes on our planetary network ).
-  see the [installation instructions](https://yggdrasil-network.github.io/installation-linux-deb.html)
-### Installation from source
-
-1. Register a twin at [tfchain](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/accounts). for more info see [Grid3 Get Started](https://library.threefold.me/info/manual#/getstarted/manual__tfgrid3_getstarted) guide.
-2. make sure your yggdrasil service is up and that your ygg address was added to your twin either from [polkadot.js UI](https://polkadot.js.org/apps/?rpc=wss://tfchain.grid.tf/ws#/extrinsics) or from the [grid portal](https://portal.grid.tf/).
-3. Clone the repo.
-   ```sh
-   git clone https://github.com/threefoldtech/rmb-rs.git
-   ```
-3. Build and install the Daemon binary.
-   ```sh
-   cargo install --path .
-   ```
-
-in case of any build issues, things to try:
-- switch to the stable channel if you are on a nightly channel.
-
-  ```sh
-  rustup default stable
-  ```
-
-- rustup can be used to update the installed version to the latest release.
-
-  ```sh
-  rustup update
-  ```
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- USAGE EXAMPLES -->
-## Usage
-
-Example of using sr25519 key on dev network
-
-```sh
-rmb-rs --key-type sr25519 -s "wss://tfchain.dev.grid.tf:443" -m "<YOUR-MNEMONICS>"
+# Building
+```bash
+git clone git@github.com:threefoldtech/rmb-rs.git
+cd rmb-rs
+cargo build --release --target=x86_64-unknown-linux-musl
 ```
 
-**Debug logs** can be enabled by `-d` option.
-
-use `-h` for **help**.
-
-```sh
-rmb-rs -h
+# Running tests
+While inside the repository
+```bash
+cargo test
 ```
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- ROADMAP -->
-## Roadmap
-
-- [ ] implement proxy feature according to specs
-- [ ] Build integration tests
-
-See the [open issues](https://github.com/github_username/repo_name/issues) for a full list of proposed features (and known issues).
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- CONTRIBUTING -->
-## Contributing
-
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
-
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-Don't forget to give the project a star! Thanks again!
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- LICENSE -->
-## License
-
-Distributed under the Apache License. See `LICENSE` for more information.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- CONTACT -->
-## Contact
-
-THREEFOLD - [@threefold_io](https://twitter.com/threefold_io)
-
-Project Link: [https://github.com/threefoldtech/rmb-rs](https://github.com/threefoldtech/rmb-rs)
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- ACKNOWLEDGMENTS -->
-## Acknowledgments
-
-* [TO BE ADDED]()
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- MARKDOWN LINKS & IMAGES -->
-<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/threefoldtech/rmb-rs.svg?style=for-the-badge
-[contributors-url]: https://github.com/threefoldtech/rmb-rs/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/threefoldtech/rmb-rs.svg?style=for-the-badge
-[forks-url]: https://github.com/threefoldtech/rmb-rs/network/members
-[stars-shield]: https://img.shields.io/github/stars/threefoldtech/rmb-rs.svg?style=for-the-badge
-[stars-url]: https://github.com/threefoldtech/rmb-rs/stargazers
-[issues-shield]: https://img.shields.io/github/issues/threefoldtech/rmb-rs.svg?style=for-the-badge
-[issues-url]: https://github.com/threefoldtech/rmb-rs/issues
-[license-shield]: https://img.shields.io/github/license/threefoldtech/rmb-rs.svg?style=for-the-badge
-[license-url]: https://github.com/threefoldtech/rmb-rs/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/company/threefold-tech/
-[product-screenshot]: images/screenshot.png
