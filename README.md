@@ -6,7 +6,7 @@ Reliable message bus is a secure communication panel that allows `bots` to commu
 Out of the box RMB provides the following:
 - Guarantee authenticity of the messages. You are always sure that the received message is from whoever is pretending to be
 - End to End encryption
-- Support for 3rd party hosted relays. Anyone can host a relay and people can use it safely since there is noway messages can be inspected while using e2e. That's similar to `home` servers by `matrix`
+- Support for 3rd party hosted relays. Anyone can host a relay and people can use it safely since there is no way messages can be inspected while using e2e. That's similar to `home` servers by `matrix`
 
 ## Why
 RMB is developed by ThreefoldTech to create a global network of nodes that are available to host capacity. Each node will act like a single bot where you can ask to host your capacity. This enforced a unique set of requirements:
@@ -14,7 +14,7 @@ RMB is developed by ThreefoldTech to create a global network of nodes that are a
   - Minimize and completely eliminate message loss
   - Reduce downtime
 - Node need to authenticate and authorize calls
-  - Grantee identity of the other peer so only owners of data can see it
+  - Guarantee identity of the other peer so only owners of data can see it
 - Fast request response time
 
 Starting from this we came up with a more detailed requirements:
