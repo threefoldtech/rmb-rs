@@ -29,10 +29,14 @@ use tokio::time::{sleep, Duration};
 
 use prometheus::{IntCounter, IntGaugeVec, Opts, Registry};
 
+#[cfg(feature = "tracker")]
+use prometheus::IntCounterVec;
+
 lazy_static::lazy_static! {
     static ref CON_PER_WORKER: IntGaugeVec = IntGaugeVec::new(
         Opts::new("relay_worker_connections", "number of connections handled by this worker"),
         &["worker"]).unwrap();
+
 
     static ref MESSAGE_RX: IntCounter = IntCounter::new("relay_message_rx", "number of messages received by relay").unwrap();
 
@@ -43,6 +47,13 @@ lazy_static::lazy_static! {
     static ref MESSAGE_TX_BYTES: IntCounter = IntCounter::new("relay_message_tx_bytes", "size of messages forwarded by relay in bytes").unwrap();
 }
 
+#[cfg(feature = "tracker")]
+lazy_static::lazy_static! {
+    pub static ref MESSAGE_RX_TWIN: IntCounterVec = IntCounterVec::new(
+        Opts::new("relay_message_rx_twin", "number of messages received by relay per twin"),
+        &["twin"]).unwrap();
+
+}
 pub const DEFAULT_WORKERS: u32 = 100;
 pub const DEFAULT_USERS: usize = 100_1000;
 
@@ -220,6 +231,8 @@ where
         opts.registry.register(Box::new(MESSAGE_TX.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX_BYTES.clone()))?;
         opts.registry.register(Box::new(MESSAGE_TX_BYTES.clone()))?;
+        #[cfg(feature = "tracker")]
+        opts.registry.register(Box::new(MESSAGE_RX_TWIN.clone()))?;
 
         for id in 0..workers {
             // TODO: while workers are mostly ideal may be it's better in the
