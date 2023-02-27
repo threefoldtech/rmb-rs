@@ -155,7 +155,7 @@ The
 > this response is what is pushed to `msgbus.system.reply`
 ```rust
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsonIncomingResponse {
+pub struct JsonOutgoingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
