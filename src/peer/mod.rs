@@ -463,6 +463,7 @@ where
             };
 
             // we track these here in case we need to send an error
+            let is_request = envelope.has_request();
             let uid = envelope.uid.clone();
             let source = envelope.source.clone();
             match self.handle_envelope(envelope).await {
@@ -472,18 +473,24 @@ where
                     // but this error happened after the envelope has been
                     // decoded, so we have enough information to actually send
                     // back an error response.
-                    let mut e = MessageError::new();
-                    e.code = kind.code();
-                    e.message = kind.to_string();
+                    log::debug!("error while handling incoming message ({}): {}", uid, kind);
+                    if is_request {
+                        // only send handling error back in case of request
+                        // if this a response message or itself is an error
+                        // message do nothing.
+                        let mut e = MessageError::new();
+                        e.code = kind.code();
+                        e.message = kind.to_string();
 
-                    let mut response = Envelope::new();
-                    response.set_error(e);
-                    response.uid = uid;
-                    response.destination = source;
-                    response.expiration = 300;
+                        let mut response = Envelope::new();
+                        response.set_error(e);
+                        response.uid = uid;
+                        response.destination = source;
+                        response.expiration = 300;
 
-                    if let Err(err) = self.sender.send(response).await {
-                        log::error!("failed to push error response back to caller: {:#}", err);
+                        if let Err(err) = self.sender.send(response).await {
+                            log::error!("failed to push error response back to caller: {:#}", err);
+                        }
                     }
                 }
                 Err(err) => log::error!("error while handling received message: {:#}", err),
