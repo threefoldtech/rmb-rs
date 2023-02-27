@@ -102,11 +102,13 @@ pub struct JsonIncomingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
-    pub reference: String,
+    pub reference: Option<String>,
     #[serde(rename = "dat")]
     pub data: String,
     #[serde(rename = "src")]
     pub source: String,
+    #[serde(rename = "shm")]
+    pub schema: Option<String>,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
@@ -159,11 +161,13 @@ pub struct JsonOutgoingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
     #[serde(rename = "ref")]
-    pub reference: String,
+    pub reference: Option<String>,
     #[serde(rename = "dat")]
     pub data: String,
     #[serde(rename = "dst")]
     pub destination: String,
+    #[serde(rename = "shm")]
+    pub schema: Option<String>,
     #[serde(rename = "now")]
     pub timestamp: u64,
     #[serde(rename = "err")]
