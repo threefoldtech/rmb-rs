@@ -1,6 +1,6 @@
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
-use crate::types::Envelope;
+use crate::types::{Envelope, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
 use futures::Future;
@@ -280,10 +280,26 @@ impl<M: Metrics> Stream<M> {
         }
     }
 
-    async fn route(&self, envelope: &Envelope, msg: Vec<u8>) -> Result<()> {
+    async fn route(&self, envelope: &mut Envelope, mut msg: Vec<u8>) -> Result<()> {
+        if self.id != envelope.source {
+            anyhow::bail!("message wrong source");
+        }
+
+        if envelope.has_ping() {
+            log::debug!("got an envelope ping message");
+            // if ping just change it to pong and send back
+            envelope.set_pong(Pong::default());
+            std::mem::swap(&mut envelope.source, &mut envelope.destination);
+            envelope.federation = None;
+            let plain = envelope.mut_plain();
+            plain.extend_from_slice("hello world".as_bytes());
+            // override the serialized data
+            msg = envelope.write_to_bytes()?;
+        }
+
         let dst: StreamID = (&envelope.destination).into();
-        if self.id != envelope.source || dst.zero() {
-            anyhow::bail!("message with missing source or destination");
+        if dst.zero() {
+            anyhow::bail!("message with missing destination");
         }
 
         //  instead of sending the message directly to the switch
@@ -351,7 +367,7 @@ impl<M: Metrics> Stream<M> {
                         Message::Binary(msg) => {
                             // failure to load the message is fatal hence we disconnect
                             // the client
-                            let envelope =
+                            let mut envelope =
                             Envelope::parse_from_bytes(&msg).context("failed to load input message")?;
 
                             #[cfg(feature = "tracker")]
@@ -366,7 +382,7 @@ impl<M: Metrics> Stream<M> {
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
-                            if let Err(err) = self.route(&envelope, msg).await {
+                            if let Err(err) = self.route(&mut envelope, msg).await {
                                 self.send_error(envelope, err).await;
                             }
                         }
