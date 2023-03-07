@@ -286,7 +286,7 @@ impl<M: Metrics> Stream<M> {
         }
 
         if envelope.has_ping() {
-            log::debug!("got an envelope ping message");
+            log::trace!("got an envelope ping message");
             // if ping just change it to pong and send back
             envelope.set_pong(Pong::default());
             std::mem::swap(&mut envelope.source, &mut envelope.destination);
