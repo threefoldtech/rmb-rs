@@ -316,6 +316,8 @@ impl Challengeable for Envelope {
                 types::envelope::Message::Request(req) => req.challenge(hash)?,
                 types::envelope::Message::Response(resp) => resp.challenge(hash)?,
                 types::envelope::Message::Error(err) => err.challenge(hash)?,
+                types::envelope::Message::Ping(_) => (),
+                types::envelope::Message::Pong(_) => (),
             };
         }
 
