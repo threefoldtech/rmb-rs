@@ -2,13 +2,11 @@ use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::Result;
 
 use std::convert::From;
-use subxt::ext::{
-    sp_core::{
-        sr25519::{Pair as SrPair, Public},
-        Pair,
-    },
-    sp_runtime::AccountId32,
+use subxt::ext::sp_core::{
+    sr25519::{Pair as SrPair, Public},
+    Pair,
 };
+use subxt::utils::AccountId32;
 use tfchain_client::client::KeyPair;
 
 pub const PREFIX: u8 = 0x73; // ascii s for sr

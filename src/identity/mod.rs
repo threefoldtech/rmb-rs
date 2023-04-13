@@ -10,7 +10,7 @@ use jwt::algorithm::{AlgorithmType, SigningAlgorithm, VerifyingAlgorithm};
 
 use anyhow::Result;
 
-use subxt::ext::sp_runtime::AccountId32;
+use subxt::utils::AccountId32;
 use tfchain_client::client::KeyPair;
 pub const SIGNATURE_LENGTH: usize = 65;
 
