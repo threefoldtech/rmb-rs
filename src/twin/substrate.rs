@@ -4,7 +4,7 @@ use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
-use subxt::ext::sp_core::crypto::AccountId32;
+use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
 use tokio::sync::Mutex;
 
@@ -35,7 +35,7 @@ where
     }
 
     async fn connect(url: &str) -> Result<Client> {
-        let client = Client::new(&url, tfchain_client::client::Runtime::Devnet).await?;
+        let client = Client::new(&url).await?;
         Ok(client)
     }
 
@@ -66,14 +66,15 @@ where
         let mut client = self.client.lock().await;
 
         let twin = loop {
-            match client.get_twin_by_id(twin_id, None).await {
+            match client.get_twin_by_id(twin_id).await {
                 Ok(twin) => break twin,
                 Err(ClientError::Rpc(_)) => {
                     *client = Self::connect(&self.url).await?;
                 }
                 Err(err) => return Err(err.into()),
             }
-        };
+        }
+        .map(Twin::from);
 
         // but if we wanna hit the grid we get throttled by the workers pool
         // the pool has a limited size so only X queries can be in flight.
@@ -89,10 +90,7 @@ where
         let mut client = self.client.lock().await;
 
         let id = loop {
-            match client
-                .get_twin_id_by_account(account_id.clone(), None)
-                .await
-            {
+            match client.get_twin_id_by_account(account_id.clone()).await {
                 Ok(twin) => break twin,
                 Err(ClientError::Rpc(_)) => {
                     *client = Self::connect(&self.url).await?;

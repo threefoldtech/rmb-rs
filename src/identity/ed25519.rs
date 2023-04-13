@@ -6,15 +6,12 @@ use anyhow::Result;
 //     Pair,
 // };
 
-use subxt::ext::{
-    sp_core::{
-        ed25519::{Pair as EdPair, Public},
-        Pair,
-    },
-    sp_runtime::AccountId32,
-};
-
 use std::convert::From;
+use subxt::ext::sp_core::{
+    ed25519::{Pair as EdPair, Public},
+    Pair,
+};
+use subxt::utils::AccountId32;
 use tfchain_client::client::KeyPair;
 
 pub const PREFIX: u8 = 0x65; // ascii e for ed
