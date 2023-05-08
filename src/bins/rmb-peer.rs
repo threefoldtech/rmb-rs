@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use clap::{builder::ArgAction, Parser};
+use anyhow::{Context, Result};
+use clap::{builder::ArgAction, Args, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
@@ -15,21 +15,32 @@ use rmb::{identity, redis};
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
 
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false)]
+struct Secret {
+    /// mnemonic, as words, or hex seed if prefixed with 0x
+    #[clap(short, long)]
+    mnemonic: Option<String>,
+
+    /// [deprecated] please use `mnemonic` instead
+    #[clap(long)]
+    mnemonics: Option<String>,
+
+    /// [deprecated] please use `mnemonic` instead
+    #[clap(long)]
+    seed: Option<String>,
+}
+
 /// the reliable message bus
 #[derive(Parser, Debug)]
 #[clap(name ="rmb", author, version = env!("GIT_VERSION"), about, long_about = None)]
-struct Args {
+struct Params {
     /// key type
     #[clap(short, long, default_value_t = KeyType::Sr25519)]
     key_type: KeyType,
 
-    /// key mnemonics
-    #[clap(short, long)]
-    mnemonics: Option<String>,
-
-    /// seed as hex (must start with 0x)
-    #[clap(long, conflicts_with = "mnemonics")]
-    seed: Option<String>,
+    #[command(flatten)]
+    secret: Secret,
 
     /// wither to accept uploads or not
     #[clap(short, long)]
@@ -56,7 +67,7 @@ struct Args {
     no_update: bool,
 }
 
-async fn app(args: &Args) -> Result<()> {
+async fn app(args: &Params) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
     simple_logger::SimpleLogger::new()
@@ -74,13 +85,16 @@ async fn app(args: &Args) -> Result<()> {
         .with_module_level("jsonrpsee_core", log::LevelFilter::Off)
         .init()?;
 
-    let secret = match args.mnemonics {
-        Some(ref m) => m,
-        None => match args.seed {
-            Some(ref s) => s,
-            None => {
-                bail!("either mnemonics or seed must be provided");
-            }
+    let secret = &args.secret;
+    log::info!("secret: {:?}", secret);
+    let secret: &str = match secret.mnemonic.as_deref() {
+        Some(m) => m,
+        None => match secret.mnemonics.as_deref() {
+            Some(m) => m,
+            None => match secret.seed.as_deref() {
+                Some(m) => m,
+                None => anyhow::bail!("mnemonic is required"),
+            },
         },
     };
 
@@ -88,12 +102,12 @@ async fn app(args: &Args) -> Result<()> {
 
     let identity = match args.key_type {
         KeyType::Ed25519 => {
-            let sk = identity::Ed25519Signer::try_from(secret.as_str())
+            let sk = identity::Ed25519Signer::try_from(secret)
                 .context("failed to load ed25519 key from mnemonics or seed")?;
             identity::Signers::Ed25519(sk)
         }
         KeyType::Sr25519 => {
-            let sk = identity::Sr25519Signer::try_from(secret.as_str())
+            let sk = identity::Sr25519Signer::try_from(secret)
                 .context("failed to load sr25519 key from mnemonics or seed")?;
             identity::Signers::Sr25519(sk)
         }
@@ -159,7 +173,7 @@ async fn app(args: &Args) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
-    let args = Args::parse();
+    let args = Params::parse();
     if let Err(e) = app(&args).await {
         eprintln!("{:#}", e);
         std::process::exit(1);
