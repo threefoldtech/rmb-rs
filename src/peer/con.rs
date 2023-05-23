@@ -72,6 +72,7 @@ impl Connection {
         let pinger = connection.writer();
         tokio::spawn(async move {
             loop {
+                log::debug!("sending a ping");
                 if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
                     log::error!("ping error: {}", err);
                 }
@@ -133,6 +134,10 @@ async fn retainer<S: Signer>(
                     last = Instant::now();
                     log::trace!("received a message from relay");
                     let message = match message {
+                        Ok(Message::Pong(_)) => {
+                            log::debug!("received a pong");
+                            continue 'receive;
+                        }
                         Ok(message) => message,
                         Err(err) => {
                             // todo: those errors probably mean we need to re-connect
