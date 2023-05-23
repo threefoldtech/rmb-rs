@@ -78,6 +78,9 @@ where
 /// socket connection and implement Envelope protocol
 /// it takes care of serialization/deserialization of messages
 /// signing and verification of messages.
+///
+/// it also takes care of filling up source address, and destination federation
+/// information, and timestamps
 pub struct Connection<DB, S>
 where
     DB: TwinDB,
@@ -85,7 +88,7 @@ where
 {
     inner: Socket,
     twins: DB,
-    identity: Peer<S>,
+    peer: Peer<S>,
 
     writer: Writer<DB, S>,
 }
@@ -95,22 +98,32 @@ where
     DB: TwinDB + Clone,
     S: Signer,
 {
-    pub fn new(socket: Socket, identity: Peer<S>, twins: DB) -> Self {
+    pub fn new(socket: Socket, peer: Peer<S>, twins: DB) -> Self {
         let writer = socket.writer();
         let writer = Writer {
             inner: writer,
-            identity: identity.clone(),
+            identity: peer.clone(),
             twins: twins.clone(),
         };
 
         Self {
             inner: socket,
             twins,
-            identity,
+            peer,
             writer,
         }
     }
 
+    pub fn writer(&self) -> Writer<DB, S> {
+        self.writer.clone()
+    }
+}
+
+impl<DB, S> Connection<DB, S>
+where
+    DB: TwinDB,
+    S: Signer,
+{
     fn parse(&self, msg: Message) -> Result<Envelope, ProtocolError> {
         let bytes = match msg {
             Message::Binary(bytes) => bytes,
@@ -139,7 +152,7 @@ where
             match twin.pk {
                 Some(ref pk) => {
                     log::trace!("decrypt message from: {}", twin.id);
-                    let plain = self.identity.crypto.decrypt(pk, envelope.cipher())?;
+                    let plain = self.peer.crypto.decrypt(pk, envelope.cipher())?;
                     envelope.set_plain(plain);
                 }
                 None => {

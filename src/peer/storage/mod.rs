@@ -63,6 +63,21 @@ impl From<JsonOutgoingResponse> for JsonMessage {
     }
 }
 
+struct EnvIter {
+    base: Envelope,
+    destinations: std::vec::IntoIter<u32>,
+}
+
+impl Iterator for EnvIter {
+    type Item = Envelope;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.destinations.next().map(|id| {
+            let mut env = self.base.clone();
+            env.destination = Some(id.into()).into();
+            env
+        })
+    }
+}
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonError {
     pub code: u32,
@@ -100,7 +115,7 @@ impl JsonOutgoingRequest {
     /// stamps, but missing source, and signature information
     /// return (backlog, envelopes, ttl) where ttl is time to live
     /// for the request
-    pub fn parts(self) -> Result<(Backlog, Vec<Envelope>, u64)> {
+    pub fn parts(self) -> Result<(Backlog, impl Iterator<Item = Envelope>, u64)> {
         // create a backlog tracker.
         // that's the part of the request that stays locally
         let mut backlog = types::Backlog::new();
@@ -124,19 +139,11 @@ impl JsonOutgoingRequest {
         env.stamp();
         let ttl = env.ttl().context("request has expired")?.as_secs();
 
-        let mut envs: Vec<Envelope>;
-        if self.destinations.len() == 1 {
-            env.destination = Some(self.destinations[0].into()).into();
-            envs = vec![env]
-        } else {
-            envs = Vec::default();
-            for dest in self.destinations {
-                env.destination = Some(dest.into()).into();
-                envs.push(env.clone());
-            }
-        }
-
-        Ok((backlog, envs, ttl))
+        let iter = EnvIter {
+            base: env,
+            destinations: self.destinations.into_iter(),
+        };
+        Ok((backlog, iter, ttl))
     }
 }
 
@@ -169,25 +176,25 @@ impl redis::FromRedisValue for JsonOutgoingRequest {
     }
 }
 
-impl TryFrom<Envelope> for JsonOutgoingRequest {
+impl TryFrom<&Envelope> for JsonOutgoingRequest {
     type Error = anyhow::Error;
-    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
         if !value.has_request() {
             anyhow::bail!("envelope doesn't hold a request");
         }
-        let req = value.take_request();
+        let req = value.request();
 
         let data = base64::encode(value.plain());
         Ok(JsonOutgoingRequest {
             version: 1,
-            reference: Some(value.uid),
-            command: req.command,
+            reference: Some(value.uid.clone()),
+            command: req.command.clone(),
             expiration: value.expiration,
             data,
-            tags: value.tags,
+            tags: value.tags.clone(),
             destinations: vec![value.destination.twin],
             reply_to: String::default(),
-            schema: value.schema,
+            schema: value.schema.clone(),
             timestamp: value.timestamp,
         })
     }
@@ -246,25 +253,25 @@ impl redis::FromRedisValue for JsonIncomingRequest {
     }
 }
 
-impl TryFrom<Envelope> for JsonIncomingRequest {
+impl TryFrom<&Envelope> for JsonIncomingRequest {
     type Error = anyhow::Error;
-    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
         if !value.has_request() {
             anyhow::bail!("envelope doesn't hold a request");
         }
-        let req = value.take_request();
+        let req = value.request();
         let data = base64::encode(value.plain());
 
         Ok(JsonIncomingRequest {
             version: 1,
-            reference: Some(value.uid),
-            command: req.command,
+            reference: Some(value.uid.clone()),
+            command: req.command.clone(),
             expiration: value.expiration,
             data,
-            tags: value.tags,
+            tags: value.tags.clone(),
             source: value.source.stringify(),
             reply_to: String::default(),
-            schema: value.schema,
+            schema: value.schema.clone(),
             timestamp: value.timestamp,
         })
     }
@@ -317,9 +324,9 @@ impl redis::FromRedisValue for JsonOutgoingResponse {
     }
 }
 
-impl TryFrom<Envelope> for JsonOutgoingResponse {
+impl TryFrom<&Envelope> for JsonOutgoingResponse {
     type Error = anyhow::Error;
-    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(env: &Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
 
         // message can be only a response or error
@@ -337,11 +344,11 @@ impl TryFrom<Envelope> for JsonOutgoingResponse {
             data,
             destination: env.destination.stringify(),
             timestamp: env.timestamp,
-            schema: env.schema,
-            error: if let Some(Message::Error(err)) = env.message {
+            schema: env.schema.clone(),
+            error: if let Some(Message::Error(ref err)) = env.message {
                 Some(JsonError {
                     code: err.code,
-                    message: err.message,
+                    message: err.message.clone(),
                 })
             } else {
                 None
@@ -432,9 +439,9 @@ impl redis::FromRedisValue for JsonIncomingResponse {
     }
 }
 
-impl TryFrom<Envelope> for JsonIncomingResponse {
+impl TryFrom<&Envelope> for JsonIncomingResponse {
     type Error = anyhow::Error;
-    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(env: &Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
 
         // message can be only a response or error
@@ -452,11 +459,11 @@ impl TryFrom<Envelope> for JsonIncomingResponse {
             data,
             source: env.source.stringify(),
             timestamp: env.timestamp,
-            schema: env.schema,
-            error: if let Some(Message::Error(err)) = env.message {
+            schema: env.schema.clone(),
+            error: if let Some(Message::Error(ref err)) = env.message {
                 Some(JsonError {
                     code: err.code,
-                    message: err.message,
+                    message: err.message.clone(),
                 })
             } else {
                 None

@@ -98,9 +98,9 @@ async fn app(args: &Params) -> Result<()> {
         },
     };
 
-    let sk = Pair::from_str(secret).context("failed to initialize encryption key")?;
+    let pair = Pair::from_str(secret).context("failed to initialize encryption key")?;
 
-    let identity = match args.key_type {
+    let signer = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret)
                 .context("failed to load ed25519 key from mnemonics or seed")?;
@@ -127,7 +127,7 @@ async fn app(args: &Params) -> Result<()> {
     .context("cannot create substrate twin db object")?;
 
     let id = db
-        .get_twin_with_account(identity.account())
+        .get_twin_with_account(signer.account())
         .await
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
@@ -148,14 +148,14 @@ async fn app(args: &Params) -> Result<()> {
         // if twin relay or his pk don't match the ones that
         // should be there, we need to set the value on chain
         if twin.relay.as_deref() != relay_url.domain()
-            || !matches!(twin.pk, Some(ref pk) if pk == &sk.public())
+            || !matches!(twin.pk, Some(ref pk) if pk == &pair.public())
         {
             // remote relay is not the same as configure one. update is needed
             log::info!("update twin details on the chain");
 
-            let pk = sk.public();
+            let pk = pair.public();
             db.update_twin(
-                &identity.pair(),
+                &signer.pair(),
                 relay_url.domain().map(|d| d.to_owned()),
                 Some(&pk),
             )
@@ -168,7 +168,9 @@ async fn app(args: &Params) -> Result<()> {
     log::info!("twin: {}", id);
 
     let u = url::Url::parse(&args.relay)?;
-    peer::start(u, id, sk, identity, storage, db).await
+    let peer = peer::Peer::new(id, signer, pair);
+
+    peer::start(u, peer, storage, db).await
 }
 
 #[tokio::main]
