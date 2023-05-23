@@ -373,15 +373,14 @@ where
         }
     }
 
-    fn parse(&self, msg: Message) -> Result<Option<Envelope>, PeerError> {
+    fn parse(&self, msg: Message) -> Result<Envelope, PeerError> {
         let bytes = match msg {
-            Message::Pong(_) => return Ok(None),
             Message::Binary(bytes) => bytes,
             _ => return Err(PeerError::InvalidMessage),
         };
 
         let envelope = Envelope::parse_from_bytes(&bytes)?;
-        Ok(Some(envelope))
+        Ok(envelope)
     }
 
     async fn handle_envelope(&self, mut envelope: Envelope) -> Result<(), PeerError> {
@@ -451,11 +450,7 @@ where
     pub async fn start(self, mut reader: Connection) {
         while let Some(input) = reader.read().await {
             let envelope = match self.parse(input) {
-                Ok(Some(env)) => env,
-                Ok(_) => {
-                    log::trace!("received a pong message");
-                    continue;
-                }
+                Ok(env) => env,
                 Err(err) => {
                     log::error!("error while loading received message: {:#}", err);
                     continue;
