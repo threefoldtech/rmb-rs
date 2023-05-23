@@ -8,13 +8,13 @@ use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
-mod con;
+mod socket;
 
 pub mod e2e;
 pub mod storage;
 pub use e2e::Pair;
 
-use con::{Connection, Writer};
+use socket::{Socket, SocketWriter};
 use storage::{
     JsonIncomingRequest, JsonIncomingResponse, JsonOutgoingRequest, JsonOutgoingResponse,
 };
@@ -133,7 +133,7 @@ where
     G: Signer + Clone + Send + Sync + 'static,
     DB: TwinDB + Clone,
 {
-    let con = Connection::connect(relay, twin, signer.clone());
+    let con = Socket::connect(relay, twin, signer.clone());
     let mut address = Address::new();
     address.twin = twin;
     // a high level sender that can stamp and sign the message before sending automatically
@@ -447,7 +447,7 @@ where
     }
 
     // handler for incoming envelopes from the relay
-    pub async fn start(self, mut reader: Connection) {
+    pub async fn start(self, mut reader: Socket) {
         while let Some(input) = reader.read().await {
             let envelope = match self.parse(input) {
                 Ok(env) => env,
@@ -499,7 +499,7 @@ struct Sender<S>
 where
     S: Signer,
 {
-    writer: Writer,
+    writer: SocketWriter,
     source: Address,
     signer: S,
 }
@@ -508,7 +508,7 @@ impl<S> Sender<S>
 where
     S: Signer + Clone,
 {
-    pub fn new(writer: Writer, source: Address, signer: S) -> Self {
+    pub fn new(writer: SocketWriter, source: Address, signer: S) -> Self {
         Self {
             writer,
             source,
