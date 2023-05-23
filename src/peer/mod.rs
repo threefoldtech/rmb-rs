@@ -8,6 +8,7 @@ use storage::Storage;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
+mod con;
 mod socket;
 
 pub mod e2e;
