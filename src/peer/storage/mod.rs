@@ -9,13 +9,15 @@ pub use redis::*;
 pub use redis_storage::RedisStorage;
 use serde::{Deserialize, Serialize};
 
+use super::protocol::ProtocolError;
+
 // operation against backlog
 #[async_trait]
 pub trait Storage: Clone + Send + Sync + 'static {
     // track stores some information about the envelope
     // in a backlog used to track replies received related to this
     // envelope. The envelope has to be a request envelope.
-    async fn track(&self, uid: &str, ttl: u64, backlog: Backlog) -> Result<()>;
+    async fn track(&self, uid: &str, ttl: u64, backlog: &Backlog) -> Result<()>;
 
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
@@ -82,6 +84,15 @@ impl Iterator for EnvIter {
 pub struct JsonError {
     pub code: u32,
     pub message: String,
+}
+
+impl From<ProtocolError> for JsonError {
+    fn from(value: ProtocolError) -> Self {
+        Self {
+            code: value.code(),
+            message: value.to_string(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

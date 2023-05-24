@@ -1,12 +1,9 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::{Address, Envelope, EnvelopeExt, Error as MessageError, ValidationError};
+use crate::types::Envelope;
 use anyhow::{Context, Result};
-use protobuf::well_known_types::any;
-use protobuf::Message as ProtoMessage;
 use std::time::Duration;
 use storage::Storage;
-use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
 mod protocol;
@@ -18,105 +15,12 @@ pub use e2e::Pair;
 
 pub use protocol::Peer;
 
-use socket::{Socket, SocketWriter};
+use socket::Socket;
 use storage::{
     JsonIncomingRequest, JsonIncomingResponse, JsonOutgoingRequest, JsonOutgoingResponse,
 };
 
 use self::protocol::{Connection, ProtocolError, Writer};
-use self::storage::JsonError;
-
-#[derive(thiserror::Error, Debug)]
-enum EnvelopeErrorKind {
-    #[error("failed to validate envelope: {0}")]
-    Validation(ValidationError),
-    #[error("invalid signature: {0}")]
-    InvalidSignature(anyhow::Error),
-    #[error("failed to get twin information: {0}")]
-    GetTwin(anyhow::Error),
-    #[error("twin not found")]
-    UnknownTwin,
-    #[error("unknown built-in command '{0}'")]
-    UnknownCommand(String),
-    #[error("{0}")]
-    Other(anyhow::Error),
-}
-
-impl EnvelopeErrorKind {
-    fn code(&self) -> u32 {
-        match self {
-            Self::Validation(_) => 300,
-            Self::InvalidSignature(_) => 301,
-            Self::GetTwin(_) => 302,
-            Self::UnknownTwin => 303,
-            Self::UnknownCommand(_) => 304,
-            Self::Other(_) => 305,
-        }
-    }
-}
-
-impl From<EnvelopeErrorKind> for JsonError {
-    fn from(value: EnvelopeErrorKind) -> Self {
-        Self {
-            code: value.code(),
-            message: value.to_string(),
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum PeerError {
-    #[error("received invalid message type")]
-    InvalidMessage,
-
-    #[error("received invalid message format: {0}")]
-    InvalidPayload(#[from] protobuf::Error),
-
-    #[error("envelope error {0}")]
-    Envelope(#[from] EnvelopeErrorKind),
-
-    #[error("twin {0} not found")]
-    TwinNotFound(u32),
-
-    #[error("e2e encryption error: {0}")]
-    E2E(#[from] e2e::Error),
-
-    #[error("{0}")]
-    Other(#[from] anyhow::Error),
-
-    #[error("multiple errors")]
-    MultiError(Vec<PeerError>),
-}
-
-impl PeerError {
-    fn code(&self) -> u32 {
-        match self {
-            // range 100
-            Self::InvalidMessage => 100,
-            // range 200
-            Self::InvalidPayload(_) => 200,
-            // range 300
-            Self::Envelope(k) => k.code(),
-            // range 400
-            Self::TwinNotFound(_) => 404,
-            Self::E2E(_) => 401,
-            // range 500
-            Self::Other(_) => 500,
-            // not coded
-            // this will be return to user one by one
-            Self::MultiError(_) => 0,
-        }
-    }
-}
-
-impl From<PeerError> for JsonError {
-    fn from(value: PeerError) -> Self {
-        Self {
-            code: value.code(),
-            message: value.to_string(),
-        }
-    }
-}
 
 /// entry point for peer, it initializes connection to the relay and handle both up stream
 /// and down stream
@@ -177,7 +81,7 @@ where
         let uid = uuid::Uuid::new_v4().to_string();
         let (backlog, envelopes, ttl) = request.parts()?;
         self.storage
-            .track(&uid, ttl, backlog)
+            .track(&uid, ttl, &backlog)
             .await
             .context("failed to store message tracking information")?;
 
@@ -186,6 +90,12 @@ where
 
             if let Err(err) = self.writer.write(envelope).await {
                 //TODO: push error back as local response to this message
+                if let Err(err) = self
+                    .reply_err(err, &backlog.reply_to, &backlog.reference)
+                    .await
+                {
+                    log::error!("failed to report send error to local caller: {}", err);
+                }
             }
         }
 
@@ -195,7 +105,7 @@ where
     // handle outgoing requests (so sent by a client to the peer) but command is prefixed
     // with `rmb.` which makes it internal command. rmb can then process this differently
     // and send a reply back to caller.
-    async fn request_builtin(&self, request: JsonOutgoingRequest) -> Result<(), ProtocolError> {
+    async fn request_builtin(&self, _request: JsonOutgoingRequest) -> Result<(), ProtocolError> {
         Err(ProtocolError::Other(anyhow::anyhow!("unknown command")))
     }
 
@@ -212,34 +122,27 @@ where
 
     async fn reply_err(
         &self,
-        err: PeerError,
+        err: ProtocolError,
         reply_to: &str,
-        reference: Option<String>,
+        reference: &Option<String>,
     ) -> Result<()> {
         // error here can be a "multi-error"
         // in that case we need to send a full message
         // for each error in that list
-        let errors = match err {
-            PeerError::MultiError(errors) => errors,
-            _ => vec![err],
-        };
-
-        for err in errors {
-            self.storage
-                .response(
-                    reply_to,
-                    JsonIncomingResponse {
-                        version: 1,
-                        reference: reference.clone(),
-                        data: String::default(),
-                        source: String::default(),
-                        schema: None,
-                        timestamp: 0,
-                        error: Some(err.into()),
-                    },
-                )
-                .await?;
-        }
+        self.storage
+            .response(
+                reply_to,
+                JsonIncomingResponse {
+                    version: 1,
+                    reference: reference.clone(),
+                    data: String::default(),
+                    source: String::default(),
+                    schema: None,
+                    timestamp: 0,
+                    error: Some(err.into()),
+                },
+            )
+            .await?;
 
         Ok(())
     }
@@ -259,9 +162,6 @@ where
             let result = match msg {
                 storage::JsonMessage::Response(response) => self.response(response).await,
                 storage::JsonMessage::Request(request) => {
-                    let reply_to = request.reply_to.clone();
-                    let reference = request.reference.clone();
-
                     if request.command.starts_with("rmb.") {
                         self.request_builtin(request).await
                     } else {
@@ -300,7 +200,7 @@ where
         Self { reader, storage }
     }
 
-    async fn handle_envelope(&self, envelope: &Envelope) -> Result<(), PeerError> {
+    async fn handle_envelope(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
         if envelope.has_request() {
             let request: JsonIncomingRequest = envelope
                 .try_into()
@@ -309,8 +209,7 @@ where
                 .storage
                 .request(request)
                 .await
-                .map_err(EnvelopeErrorKind::Other)
-                .map_err(PeerError::Envelope);
+                .map_err(ProtocolError::Other);
         }
 
         log::trace!("received a response: {}", envelope.uid);
@@ -361,7 +260,7 @@ where
                     e.message = err.to_string();
 
                     if let Err(err) = writer.write(reply).await {
-                        log::error!("failed to send error response to caller");
+                        log::error!("failed to send error response to caller: {}", err);
                     }
                 }
             };

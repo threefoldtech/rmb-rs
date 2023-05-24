@@ -144,7 +144,7 @@ impl RedisStorage {
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn track(&self, uid: &str, ttl: u64, backlog: Backlog) -> Result<()> {
+    async fn track(&self, uid: &str, ttl: u64, backlog: &Backlog) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let key = BacklogKey(uid);
         conn.set_ex(&key, backlog, ttl as usize)
