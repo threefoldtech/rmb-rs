@@ -40,13 +40,13 @@ pub enum ProtocolError {
 impl ProtocolError {
     pub fn code(&self) -> u32 {
         match self {
-            ProtocolError::InvalidMessage => 300,
-            ProtocolError::InvalidPayload(_) => 301,
-            ProtocolError::Validation(_) => 302,
-            ProtocolError::UnknownTwin(_) => 303,
-            ProtocolError::InvalidSignature(_) => 304,
-            ProtocolError::NoPublicKey => 305,
-            ProtocolError::Crypto(_) => 306,
+            ProtocolError::InvalidMessage => 100,
+            ProtocolError::InvalidPayload(_) => 101,
+            ProtocolError::Validation(_) => 102,
+            ProtocolError::UnknownTwin(_) => 103,
+            ProtocolError::InvalidSignature(_) => 104,
+            ProtocolError::NoPublicKey => 105,
+            ProtocolError::Crypto(_) => 106,
             ProtocolError::Other(_) => 500,
         }
     }
