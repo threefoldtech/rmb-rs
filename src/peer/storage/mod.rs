@@ -16,7 +16,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // track stores some information about the envelope
     // in a backlog used to track replies received related to this
     // envelope. The envelope has to be a request envelope.
-    async fn track(&self, uid: &str, ttl: u64, backlog: &Backlog) -> Result<()>;
+    async fn track(&self, backlog: &Backlog) -> Result<()>;
 
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
@@ -125,14 +125,18 @@ impl JsonOutgoingRequest {
     /// stamps, but missing source, and signature information
     /// return (backlog, envelopes, ttl) where ttl is time to live
     /// for the request
-    pub fn parts(self) -> Result<(Backlog, impl Iterator<Item = Envelope>, u64)> {
+    pub fn parts(self) -> Result<(Backlog, impl Iterator<Item = Envelope>)> {
         // create a backlog tracker.
         // that's the part of the request that stays locally
+        let uid = uuid::Uuid::new_v4().to_string();
+
         let mut backlog = types::Backlog::new();
+        backlog.uid = uid;
         backlog.reply_to = self.reply_to;
         backlog.reference = self.reference;
 
         let mut env = Envelope::new();
+        env.uid = backlog.uid.clone();
         env.set_plain(base64::decode(self.data).context("invalid data base64 encoding")?);
         env.tags = self.tags;
         env.timestamp = self.timestamp;
@@ -143,13 +147,13 @@ impl JsonOutgoingRequest {
         request.command = self.command;
 
         env.stamp();
-        let ttl = env.ttl().context("request has expired")?.as_secs();
+        backlog.ttl = env.ttl().context("request has expired")?.as_secs();
 
         let iter = EnvIter {
             base: env,
             destinations: self.destinations.into_iter(),
         };
-        Ok((backlog, iter, ttl))
+        Ok((backlog, iter))
     }
 }
 

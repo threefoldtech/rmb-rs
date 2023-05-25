@@ -7,4 +7,5 @@ message Backlog {
   optional string reference = 2;
   string reply_to = 3;
   string modulee = 4;
+  uint64 ttl = 5;
 }

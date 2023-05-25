@@ -170,7 +170,10 @@ async fn app(args: &Params) -> Result<()> {
     let u = url::Url::parse(&args.relay)?;
     let peer = peer::Peer::new(id, signer, pair);
 
-    peer::start(u, peer, storage, db).await
+    let app = peer::App::new(u, peer, db, storage);
+    app.start().await;
+
+    Ok(())
 }
 
 #[tokio::main]

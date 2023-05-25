@@ -1,9 +1,10 @@
-use crate::identity::Signer;
 use crate::twin::TwinDB;
 use crate::types::Envelope;
+use crate::{identity::Signer, types::Backlog};
 use anyhow::{Context, Result};
 use std::time::Duration;
 use storage::Storage;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use url::Url;
 
 mod protocol;
@@ -22,77 +23,113 @@ use storage::{
 
 use self::protocol::{Connection, ProtocolError, Writer};
 
-/// entry point for peer, it initializes connection to the relay and handle both up stream
-/// and down stream
-/// - it uses the storage to get local generated requests or responses, and forward it to the relay
-/// - it handle all received messages and dispatch it to local clients or services.
-/// - sign all outgoing messages
-/// - verify all incoming messages
-/// - restore relay connection if lost
-pub async fn start<S, G, DB>(relay: Url, peer: Peer<G>, storage: S, db: DB) -> Result<()>
+pub struct App<DB, S, R>
 where
-    S: Storage,
-    G: Signer + Clone + Send + Sync + 'static,
+    DB: TwinDB,
+    S: Signer,
+    R: Storage,
+{
+    connection: Connection<DB, S>,
+    storage: R,
+}
+
+impl<DB, S, R> App<DB, S, R>
+where
     DB: TwinDB + Clone,
+    S: Signer,
+    R: Storage,
 {
-    let socket = Socket::connect(relay, peer.id, peer.signer.clone());
-    let connection = Connection::new(socket, peer, db);
+    pub fn new(relay: Url, peer: Peer<S>, twins: DB, storage: R) -> Self {
+        let socket = Socket::connect(relay, peer.id, peer.signer.clone());
+        let connection = Connection::new(socket, peer, twins);
 
-    // handle all local generate traffic and push it to relay
-    let upstream = Upstream::new(connection.writer(), storage.clone());
-    // handle all received messages from the relay
-    let downstream = Downstream::new(connection, storage);
+        Self {
+            connection,
+            storage,
+        }
+    }
 
-    // start a processor for incoming message
-    tokio::spawn(downstream.start());
+    pub async fn start(self) {
+        let (sender, receiver) = channel(1);
 
-    // we start this in this current routine to block the peer from exiting
-    // no need to spawn it in the back
-    upstream.start().await;
-    // shouldn't be reachable
-    Ok(())
+        let postman = Postman::new(self.connection.writer(), self.storage.clone());
+        tokio::spawn(postman.push(receiver));
+
+        // handle all local generate traffic and push it to relay
+        let upstream = Upstream::new(sender.clone(), self.storage.clone());
+        // handle all received messages from the relay
+        let downstream = Downstream::new(self.connection, self.storage);
+
+        // start a processor for incoming message
+        tokio::spawn(downstream.start());
+
+        // we start this in this current routine to block the peer from exiting
+        // no need to spawn it in the back
+        upstream.start().await;
+    }
 }
 
-/// Upstream handle all local traffic and making sure to push
-/// it to server (relay)
-struct Upstream<DB, S, G>
-where
-    DB: TwinDB,
-    S: Storage,
-    G: Signer,
-{
-    writer: Writer<DB, G>,
-    storage: S,
+/// A Bag is a set of envelops that need to be sent out with an optional backlog (tracker)
+/// the tracker tell us who the sender is and where we need to respond back in case of an
+/// error or a response
+struct Bag {
+    backlog: Option<Backlog>,
+    envelops: Box<dyn Iterator<Item = Envelope> + Send + Sync + 'static>,
 }
 
-impl<DB, S, G> Upstream<DB, S, G>
+impl Bag {
+    pub fn new<I>(envelops: I) -> Self
+    where
+        I: Iterator<Item = Envelope> + Send + Sync + 'static,
+    {
+        Bag {
+            backlog: None,
+            envelops: Box::new(envelops),
+        }
+    }
+
+    pub fn backlog(mut self, backlog: Backlog) -> Self {
+        self.backlog = Some(backlog);
+        self
+    }
+}
+
+/// Postman is responsible of receiving all envelops that need to be sent remotely
+/// and actually send them. If a message is failed to deliver a response is send
+/// back locally for the caller (over storage) to explain why
+struct Postman<DB, S, R>
 where
     DB: TwinDB,
-    S: Storage,
-    G: Signer,
+    S: Signer,
+    R: Storage,
 {
-    pub fn new(writer: Writer<DB, G>, storage: S) -> Self {
+    writer: Writer<DB, S>,
+    storage: R,
+}
+
+impl<DB, S, R> Postman<DB, S, R>
+where
+    DB: TwinDB,
+    S: Signer,
+    R: Storage,
+{
+    fn new(writer: Writer<DB, S>, storage: R) -> Self {
         Self { writer, storage }
     }
 
-    // handle outgoing requests
-    async fn request(&self, request: JsonOutgoingRequest) -> Result<(), ProtocolError> {
-        // generate an id?
-        let uid = uuid::Uuid::new_v4().to_string();
-        let (backlog, envelopes, ttl) = request.parts()?;
-        self.storage
-            .track(&uid, ttl, &backlog)
-            .await
-            .context("failed to store message tracking information")?;
+    async fn push_one(&self, bag: Bag) -> Result<()> {
+        if let Some(ref backlog) = bag.backlog {
+            self.storage
+                .track(&backlog)
+                .await
+                .context("failed to store message tracking information")?;
+        }
 
-        for mut envelope in envelopes {
-            envelope.uid = uid.clone();
-
+        // TODO: validate that ALL envelope has the same id as the backlog
+        // if backlog is set.
+        for envelope in bag.envelops {
             if let Err(err) = self.writer.write(envelope).await {
-                if let Err(err) = self
-                    .reply_err(err, &backlog.reply_to, &backlog.reference)
-                    .await
-                {
+                if let Err(err) = self.undeliverable(err, bag.backlog.as_ref()).await {
                     log::error!("failed to report send error to local caller: {}", err);
                 }
             }
@@ -101,39 +138,19 @@ where
         Ok(())
     }
 
-    // handle outgoing requests (so sent by a client to the peer) but command is prefixed
-    // with `rmb.` which makes it internal command. rmb can then process this differently
-    // and send a reply back to caller.
-    async fn request_builtin(&self, _request: JsonOutgoingRequest) -> Result<(), ProtocolError> {
-        Err(ProtocolError::Other(anyhow::anyhow!("unknown command")))
-    }
+    ///sends an error back to the caller if any only if the message is tracked via a backlog
+    async fn undeliverable(&self, err: ProtocolError, backlog: Option<&Backlog>) -> Result<()> {
+        let backlog = match backlog {
+            Some(backlog) => backlog,
+            None => return Ok(()),
+        };
 
-    // handle outgoing responses
-    async fn response(&self, response: JsonOutgoingResponse) -> Result<(), ProtocolError> {
-        // that's a reply message that is initiated locally and need to be
-        // sent to a remote peer
-        let envelope: Envelope = response
-            .try_into()
-            .context("failed to build envelope from response")?;
-
-        self.writer.write(envelope).await
-    }
-
-    async fn reply_err(
-        &self,
-        err: ProtocolError,
-        reply_to: &str,
-        reference: &Option<String>,
-    ) -> Result<()> {
-        // error here can be a "multi-error"
-        // in that case we need to send a full message
-        // for each error in that list
         self.storage
             .response(
-                reply_to,
+                &backlog.reply_to,
                 JsonIncomingResponse {
                     version: 1,
-                    reference: reference.clone(),
+                    reference: backlog.reference.clone(),
                     data: String::default(),
                     source: String::default(),
                     schema: None,
@@ -144,6 +161,58 @@ where
             .await?;
 
         Ok(())
+    }
+
+    async fn push(self, mut rx: Receiver<Bag>) {
+        while let Some(sent) = rx.recv().await {
+            if let Err(err) = self.push_one(sent).await {
+                log::error!("failed to push message: {}", err);
+            }
+        }
+    }
+}
+
+/// Upstream handle all local traffic and making sure to push
+/// it to server (relay)
+struct Upstream<R>
+where
+    R: Storage,
+{
+    up: Sender<Bag>,
+    storage: R,
+}
+
+impl<R> Upstream<R>
+where
+    R: Storage,
+{
+    pub fn new(up: Sender<Bag>, storage: R) -> Self {
+        Self { up, storage }
+    }
+
+    // handle outgoing requests
+    async fn request(&self, request: JsonOutgoingRequest) -> Result<()> {
+        // generate an id?
+        let (backlog, envelopes) = request.parts()?;
+
+        self.up
+            .send(Bag::new(envelopes).backlog(backlog))
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to deliver request message(s) to the postman"))
+    }
+
+    // handle outgoing responses
+    async fn response(&self, response: JsonOutgoingResponse) -> Result<()> {
+        // that's a reply message that is initiated locally and need to be
+        // sent to a remote peer
+        let envelope: Envelope = response
+            .try_into()
+            .context("failed to build envelope from response")?;
+
+        self.up
+            .send(Bag::new(std::iter::once(envelope)))
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to deliver response message to the postman"))
     }
 
     pub async fn start(self) {
@@ -160,13 +229,7 @@ where
 
             let result = match msg {
                 storage::JsonMessage::Response(response) => self.response(response).await,
-                storage::JsonMessage::Request(request) => {
-                    if request.command.starts_with("rmb.") {
-                        self.request_builtin(request).await
-                    } else {
-                        self.request(request).await
-                    }
-                }
+                storage::JsonMessage::Request(request) => self.request(request).await,
             };
 
             if let Err(err) = result {
