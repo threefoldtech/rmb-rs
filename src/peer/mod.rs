@@ -89,7 +89,6 @@ where
             envelope.uid = uid.clone();
 
             if let Err(err) = self.writer.write(envelope).await {
-                //TODO: push error back as local response to this message
                 if let Err(err) = self
                     .reply_err(err, &backlog.reply_to, &backlog.reference)
                     .await
@@ -251,6 +250,7 @@ where
                 if envelope.has_request() {
                     let mut reply = Envelope {
                         uid: envelope.uid,
+                        tags: envelope.tags,
                         destination: envelope.source,
                         expiration: 300,
                         ..Default::default()

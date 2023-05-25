@@ -47,7 +47,7 @@ impl Socket {
     // by checking the logs. this is not very good
     pub fn connect<U: Into<Url>, S>(u: U, id: u32, signer: S) -> Socket
     where
-        S: Signer + Send + Sync + 'static,
+        S: Signer,
     {
         // to support auto reconnect we will run a connection loop in the
         // background. but we will return only reader and writer channels

@@ -1,5 +1,6 @@
 mod redis_storage;
 
+use super::protocol::ProtocolError;
 use crate::types::{self, Address, AddressExt, EnvelopeExt};
 use crate::types::{Backlog, Envelope};
 use anyhow::{Context, Result};
@@ -8,8 +9,6 @@ use bb8_redis::redis;
 pub use redis::*;
 pub use redis_storage::RedisStorage;
 use serde::{Deserialize, Serialize};
-
-use super::protocol::ProtocolError;
 
 // operation against backlog
 #[async_trait]
@@ -133,11 +132,6 @@ impl JsonOutgoingRequest {
         backlog.reply_to = self.reply_to;
         backlog.reference = self.reference;
 
-        // create an (incomplete) envelope
-        let mut request = types::Request::new();
-
-        request.command = self.command;
-
         let mut env = Envelope::new();
         env.set_plain(base64::decode(self.data).context("invalid data base64 encoding")?);
         env.tags = self.tags;
@@ -145,7 +139,8 @@ impl JsonOutgoingRequest {
         env.expiration = self.expiration;
         env.signature = None;
         env.schema = self.schema;
-        env.set_request(request);
+        let request = env.mut_request();
+        request.command = self.command;
 
         env.stamp();
         let ttl = env.ttl().context("request has expired")?.as_secs();
