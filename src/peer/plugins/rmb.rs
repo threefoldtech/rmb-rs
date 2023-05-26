@@ -1,8 +1,11 @@
+use std::fmt::Display;
+
+use serde::Serialize;
 use tokio::sync::mpsc::Sender;
 
-use crate::types::Envelope;
-
 use super::{Bag, Plugin};
+use crate::types::Envelope;
+use anyhow::{Context, Result};
 
 #[derive(Default)]
 pub struct Rmb {
@@ -11,7 +14,24 @@ pub struct Rmb {
 
 impl Rmb {
     async fn version(&self, request: &Envelope) {
-        log::debug!("got version request");
+        log::trace!("got version request");
+
+        let response = match self.response(request, Ok::<_, &str>(env!("GIT_VERSION"))) {
+            Ok(response) => response,
+            Err(err) => {
+                log::error!("failed to create a response message: {}", err);
+                return;
+            }
+        };
+
+        let _ = self.ch.as_ref().unwrap().send(Bag::one(response)).await;
+    }
+
+    fn response<O: Serialize, E: Display>(
+        &self,
+        request: &Envelope,
+        msg: Result<O, E>,
+    ) -> Result<Envelope> {
         let mut response = Envelope {
             uid: request.uid.clone(),
             destination: request.source.clone(),
@@ -20,10 +40,20 @@ impl Rmb {
             ..Default::default()
         };
 
-        response.mut_response();
-        response.set_plain(format!("\"{}\"", env!("GIT_VERSION")).as_bytes().into());
+        match msg {
+            Ok(data) => {
+                response.mut_response();
+                let bytes = serde_json::to_vec(&data).context("failed to serialize response")?;
 
-        let _ = self.ch.as_ref().unwrap().send(Bag::one(response)).await;
+                response.set_plain(bytes);
+            }
+            Err(err) => {
+                let e = response.mut_error();
+                e.message = err.to_string();
+            }
+        };
+
+        Ok(response)
     }
 }
 
