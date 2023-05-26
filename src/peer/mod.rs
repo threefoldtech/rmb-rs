@@ -74,11 +74,12 @@ where
         let sender = postman.start();
 
         // start all modules
-        for plugin in self.plugins.values() {
+        let mut plugins = self.plugins;
+        for plugin in plugins.values_mut() {
             plugin.start(sender.clone());
         }
 
-        let plugins = Arc::new(self.plugins);
+        let plugins = Arc::new(plugins);
 
         // handle all local generate traffic and push it to relay
         let upstream = Upstream::new(sender.clone(), Arc::clone(&plugins), self.storage.clone());
@@ -126,7 +127,7 @@ where
             None => Some(request),
             Some((prefix, _)) => match self.plugins.get(prefix) {
                 // there is a prefix that matches a module, feed request to module
-                Some(plugin) => plugin.local(request),
+                Some(plugin) => plugin.local(request).await,
                 // no matching module
                 None => Some(request),
             },
@@ -250,6 +251,11 @@ where
             }
         };
 
+        if let Some(plugin) = self.plugins.get(&backlog.module) {
+            plugin.remote(envelope).await;
+            return Ok(());
+        }
+
         let mut response: JsonIncomingResponse = envelope.try_into()?;
         // set the reference back to original value
         response.reference = backlog.reference;
@@ -262,11 +268,18 @@ where
     }
 
     async fn handle(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        log::trace!(
+            "received a message {} (req: {}, resp: {})",
+            envelope.uid,
+            envelope.has_request(),
+            envelope.has_response()
+        );
+
         let req = envelope.request();
         // is this for a module
         if let Some((prefix, _)) = req.command.split_once('.') {
             if let Some(plugin) = self.plugins.get(prefix) {
-                plugin.remote(envelope);
+                plugin.remote(envelope).await;
                 return Ok(());
             }
         }

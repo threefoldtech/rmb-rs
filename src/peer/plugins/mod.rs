@@ -6,6 +6,9 @@ use tokio::sync::mpsc::Sender;
 
 mod rmb;
 
+pub use rmb::Rmb;
+
+#[async_trait::async_trait]
 pub trait Plugin: Send + Sync + 'static {
     /// return the unique name of the plugin. Any request that has a command that
     /// is prefixed as `$name.` will be always handed over to the module via either
@@ -20,7 +23,7 @@ pub trait Plugin: Send + Sync + 'static {
     ///
     /// The idea is that the Module can then rewrite the outgoing request(s) or
     /// just ask the system to forward the request as is.
-    fn local(&self, request: JsonOutgoingRequest) -> Option<JsonOutgoingRequest> {
+    async fn local(&self, request: JsonOutgoingRequest) -> Option<JsonOutgoingRequest> {
         Some(request)
     }
 
@@ -29,12 +32,12 @@ pub trait Plugin: Send + Sync + 'static {
     ///
     /// a module can do request->response can then for example answer a coming request by pushing
     /// a response on the sender channel
-    fn remote(&self, incoming: &Envelope);
+    async fn remote(&self, incoming: &Envelope);
     /// start this module by provided a sender channel. the channel can be then used to provide
     /// message to the system to be sent to remote peers.
     ///
     /// A module can decide then to spawn it's process that generate messages, or a simple module
     /// can just store the sender queue on its own structure and then use it to send message on a response
     /// to a delivered message via either local or remote methods
-    fn start(&self, sender: Sender<Bag>);
+    fn start(&mut self, sender: Sender<Bag>);
 }

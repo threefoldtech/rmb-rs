@@ -170,7 +170,10 @@ async fn app(args: &Params) -> Result<()> {
     let u = url::Url::parse(&args.relay)?;
     let peer = peer::Peer::new(id, signer, pair);
 
-    let app = peer::App::new(u, peer, db, storage);
+    let mut app = peer::App::new(u, peer, db, storage);
+    let p = peer::plugins::Rmb::default();
+    app.plugin(p);
+
     app.start().await;
 
     Ok(())

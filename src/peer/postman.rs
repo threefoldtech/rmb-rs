@@ -74,7 +74,13 @@ where
         // TODO: validate that ALL envelope has the same id as the backlog
         // if backlog is set.
         for envelope in bag.envelops {
+            log::trace!(
+                "sending message {} dest({:?})",
+                envelope.uid,
+                envelope.destination
+            );
             if let Err(err) = self.writer.write(envelope).await {
+                log::error!("failed to send message: {}", err);
                 if let Err(err) = self.undeliverable(err, bag.backlog.as_ref()).await {
                     log::error!("failed to report send error to local caller: {}", err);
                 }
