@@ -119,13 +119,9 @@ pub struct JsonOutgoingRequest {
 }
 
 impl JsonOutgoingRequest {
-    /// parts return all the components of this message. this include a backlog
-    /// object with all the tracking information, and all envelopes (one for)
-    /// each destination. each envelope is already stamped with correct time
-    /// stamps, but missing source, and signature information
-    /// return (backlog, envelopes, ttl) where ttl is time to live
-    /// for the request
-    pub fn parts(self) -> Result<(Backlog, impl Iterator<Item = Envelope>)> {
+    /// An outgoing request can be mapped to multiple envelops (if send to multiple destinations)
+    /// hence returning a stream of envelops and a backlog object for tracking
+    pub fn to_envelops(self) -> Result<(Backlog, impl Iterator<Item = Envelope>)> {
         // create a backlog tracker.
         // that's the part of the request that stays locally
         let uid = uuid::Uuid::new_v4().to_string();

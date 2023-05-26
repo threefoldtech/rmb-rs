@@ -74,14 +74,17 @@ where
     }
 }
 
-/// Connection works on top of the low level
+/// Protocol works on top of the low level
 /// socket connection and implement Envelope protocol
 /// it takes care of serialization/deserialization of messages
 /// signing and verification of messages.
 ///
 /// it also takes care of filling up source address, and destination federation
 /// information, and timestamps
-pub struct Connection<DB, S>
+///
+/// It also will handle protocol level errors by sending back protocol related
+/// errors back to the sender if happens.
+pub struct Protocol<DB, S>
 where
     DB: TwinDB,
     S: Signer,
@@ -93,7 +96,7 @@ where
     writer: Writer<DB, S>,
 }
 
-impl<DB, S> Connection<DB, S>
+impl<DB, S> Protocol<DB, S>
 where
     DB: TwinDB + Clone,
     S: Signer,
@@ -119,7 +122,7 @@ where
     }
 }
 
-impl<DB, S> Connection<DB, S>
+impl<DB, S> Protocol<DB, S>
 where
     DB: TwinDB,
     S: Signer,

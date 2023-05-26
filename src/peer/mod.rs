@@ -1,14 +1,19 @@
+use crate::identity::Signer;
 use crate::twin::TwinDB;
 use crate::types::Envelope;
-use crate::{identity::Signer, types::Backlog};
 use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use storage::Storage;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use url::Url;
 
+mod postman;
 mod protocol;
 mod socket;
+
+use postman::{Bag, Postman};
 
 pub mod e2e;
 pub mod storage;
@@ -21,7 +26,42 @@ use storage::{
     JsonIncomingRequest, JsonIncomingResponse, JsonOutgoingRequest, JsonOutgoingResponse,
 };
 
-use self::protocol::{Connection, ProtocolError, Writer};
+use self::protocol::{Protocol, ProtocolError};
+
+pub trait Plugin: Send + Sync + 'static {
+    /// return the unique name of the plugin. Any request that has a command that
+    /// is prefixed as `$name.` will be always handed over to the module via either
+    /// the `local()` method for requests that are initiated locally, or via the `remote()`
+    /// methods for requests that are received from a remote peer.
+    fn name(&self) -> &str;
+    /// local is called to handle the outgoing requests from the local side
+    /// if return None, the request then won't pushed to the remote peer and then
+    /// it's up the module to reschedule the sending of the request via the sender
+    ///
+    /// the sender is provided on start by calling the start method.
+    ///
+    /// The idea is that the Module can then rewrite the outgoing request(s) or
+    /// just ask the system to forward the request as is.
+    fn local(&self, request: JsonOutgoingRequest) -> Option<JsonOutgoingRequest> {
+        Some(request)
+    }
+
+    /// handling incoming message. the incoming message can either be a request or a response
+    /// and it's up to the module to decide what to do with it.
+    ///
+    /// a module can do request->response can then for example answer a coming request by pushing
+    /// a response on the sender channel
+    fn remote(&self, incoming: &Envelope);
+    /// start this module by provided a sender channel. the channel can be then used to provide
+    /// message to the system to be sent to remote peers.
+    ///
+    /// A module can decide then to spawn it's process that generate messages, or a simple module
+    /// can just store the sender queue on its own structure and then use it to send message on a response
+    /// to a delivered message via either local or remote methods
+    fn start(&self, sender: Sender<Bag>);
+}
+
+type Plugins = HashMap<String, Box<dyn Plugin>>;
 
 pub struct App<DB, S, R>
 where
@@ -29,8 +69,9 @@ where
     S: Signer,
     R: Storage,
 {
-    connection: Connection<DB, S>,
+    protocol: Protocol<DB, S>,
     storage: R,
+    plugins: Plugins,
 }
 
 impl<DB, S, R> App<DB, S, R>
@@ -40,25 +81,41 @@ where
     R: Storage,
 {
     pub fn new(relay: Url, peer: Peer<S>, twins: DB, storage: R) -> Self {
+        // create low level socket, this takes care of the relay connection and reconnecting if connection
+        // is lost. this include authentication with the relay and proving identity
         let socket = Socket::connect(relay, peer.id, peer.signer.clone());
-        let connection = Connection::new(socket, peer, twins);
+
+        // create a higher level protocol (Envelope) on top of the socket
+        let protocol = Protocol::new(socket, peer, twins);
 
         Self {
-            connection,
+            protocol,
             storage,
+            plugins: HashMap::default(),
         }
     }
 
-    pub async fn start(self) {
-        let (sender, receiver) = channel(1);
+    pub fn plugin<P: Plugin>(&mut self, plugin: P) {
+        self.plugins.insert(plugin.name().into(), Box::new(plugin));
+    }
 
-        let postman = Postman::new(self.connection.writer(), self.storage.clone());
-        tokio::spawn(postman.push(receiver));
+    pub async fn start(self) {
+        // start the post man which is responsible for sending message with tracking
+        let postman = Postman::new(self.protocol.writer(), self.storage.clone());
+        let sender = postman.start();
+
+        // start all modules
+        for plugin in self.plugins.values() {
+            plugin.start(sender.clone());
+        }
+
+        let plugins = Arc::new(self.plugins);
 
         // handle all local generate traffic and push it to relay
-        let upstream = Upstream::new(sender.clone(), self.storage.clone());
+        let upstream = Upstream::new(sender.clone(), Arc::clone(&plugins), self.storage.clone());
+
         // handle all received messages from the relay
-        let downstream = Downstream::new(self.connection, self.storage);
+        let downstream = Downstream::new(sender.clone(), self.protocol, plugins, self.storage);
 
         // start a processor for incoming message
         tokio::spawn(downstream.start());
@@ -69,131 +126,49 @@ where
     }
 }
 
-/// A Bag is a set of envelops that need to be sent out with an optional backlog (tracker)
-/// the tracker tell us who the sender is and where we need to respond back in case of an
-/// error or a response
-struct Bag {
-    backlog: Option<Backlog>,
-    envelops: Box<dyn Iterator<Item = Envelope> + Send + Sync + 'static>,
-}
-
-impl Bag {
-    pub fn new<I>(envelops: I) -> Self
-    where
-        I: Iterator<Item = Envelope> + Send + Sync + 'static,
-    {
-        Bag {
-            backlog: None,
-            envelops: Box::new(envelops),
-        }
-    }
-
-    pub fn backlog(mut self, backlog: Backlog) -> Self {
-        self.backlog = Some(backlog);
-        self
-    }
-}
-
-/// Postman is responsible of receiving all envelops that need to be sent remotely
-/// and actually send them. If a message is failed to deliver a response is send
-/// back locally for the caller (over storage) to explain why
-struct Postman<DB, S, R>
-where
-    DB: TwinDB,
-    S: Signer,
-    R: Storage,
-{
-    writer: Writer<DB, S>,
-    storage: R,
-}
-
-impl<DB, S, R> Postman<DB, S, R>
-where
-    DB: TwinDB,
-    S: Signer,
-    R: Storage,
-{
-    fn new(writer: Writer<DB, S>, storage: R) -> Self {
-        Self { writer, storage }
-    }
-
-    async fn push_one(&self, bag: Bag) -> Result<()> {
-        if let Some(ref backlog) = bag.backlog {
-            self.storage
-                .track(&backlog)
-                .await
-                .context("failed to store message tracking information")?;
-        }
-
-        // TODO: validate that ALL envelope has the same id as the backlog
-        // if backlog is set.
-        for envelope in bag.envelops {
-            if let Err(err) = self.writer.write(envelope).await {
-                if let Err(err) = self.undeliverable(err, bag.backlog.as_ref()).await {
-                    log::error!("failed to report send error to local caller: {}", err);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    ///sends an error back to the caller if any only if the message is tracked via a backlog
-    async fn undeliverable(&self, err: ProtocolError, backlog: Option<&Backlog>) -> Result<()> {
-        let backlog = match backlog {
-            Some(backlog) => backlog,
-            None => return Ok(()),
-        };
-
-        self.storage
-            .response(
-                &backlog.reply_to,
-                JsonIncomingResponse {
-                    version: 1,
-                    reference: backlog.reference.clone(),
-                    data: String::default(),
-                    source: String::default(),
-                    schema: None,
-                    timestamp: 0,
-                    error: Some(err.into()),
-                },
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn push(self, mut rx: Receiver<Bag>) {
-        while let Some(sent) = rx.recv().await {
-            if let Err(err) = self.push_one(sent).await {
-                log::error!("failed to push message: {}", err);
-            }
-        }
-    }
-}
-
-/// Upstream handle all local traffic and making sure to push
-/// it to server (relay)
+/// Upstream handle all local messages (requests and responses) from the storage and make
+/// sure they are handed over to the postman
 struct Upstream<R>
 where
     R: Storage,
 {
     up: Sender<Bag>,
     storage: R,
+    plugins: Arc<Plugins>,
 }
 
 impl<R> Upstream<R>
 where
     R: Storage,
 {
-    pub fn new(up: Sender<Bag>, storage: R) -> Self {
-        Self { up, storage }
+    pub fn new(up: Sender<Bag>, plugins: Arc<Plugins>, storage: R) -> Self {
+        Self {
+            up,
+            storage,
+            plugins,
+        }
     }
 
     // handle outgoing requests
     async fn request(&self, request: JsonOutgoingRequest) -> Result<()> {
-        // generate an id?
-        let (backlog, envelopes) = request.parts()?;
+        // check if request is intended for a module
+        let request = match request.command.split_once('.') {
+            // no prefix
+            None => Some(request),
+            Some((prefix, _)) => match self.plugins.get(prefix) {
+                // there is a prefix that matches a module, feed request to module
+                Some(plugin) => plugin.local(request),
+                // no matching module
+                None => Some(request),
+            },
+        };
+
+        let request = match request {
+            Some(request) => request,
+            None => return Ok(()),
+        };
+
+        let (backlog, envelopes) = request.to_envelops()?;
 
         self.up
             .send(Bag::new(envelopes).backlog(backlog))
@@ -210,7 +185,7 @@ where
             .context("failed to build envelope from response")?;
 
         self.up
-            .send(Bag::new(std::iter::once(envelope)))
+            .send(Bag::one(envelope))
             .await
             .map_err(|_| anyhow::anyhow!("failed to deliver response message to the postman"))
     }
@@ -228,8 +203,8 @@ where
             };
 
             let result = match msg {
-                storage::JsonMessage::Response(response) => self.response(response).await,
                 storage::JsonMessage::Request(request) => self.request(request).await,
+                storage::JsonMessage::Response(response) => self.response(response).await,
             };
 
             if let Err(err) = result {
@@ -239,17 +214,20 @@ where
     }
 }
 
-/// downstream is handler for the connection down stream
-/// so basically anything that is received from the server (relay)
-/// and making sure to validate and dispatch it as needed.
+/// Downstream takes care of reading all received messages
+/// then dispatch the received message based on type to either
+/// the right module or a response queue to be consumed by the local
+/// client that might be waiting for a response.
 struct Downstream<DB, S, G>
 where
     DB: TwinDB,
     S: Storage,
     G: Signer,
 {
-    reader: Connection<DB, G>,
+    up: Sender<Bag>,
+    reader: Protocol<DB, G>,
     storage: S,
+    plugins: Arc<Plugins>,
 }
 
 impl<DB, S, G> Downstream<DB, S, G>
@@ -258,22 +236,33 @@ where
     S: Storage,
     G: Signer,
 {
-    pub fn new(reader: Connection<DB, G>, storage: S) -> Self {
-        Self { reader, storage }
+    pub fn new(
+        up: Sender<Bag>,
+        reader: Protocol<DB, G>,
+        plugins: Arc<Plugins>,
+        storage: S,
+    ) -> Self {
+        Self {
+            up,
+            reader,
+            storage,
+            plugins,
+        }
     }
 
-    async fn handle_envelope(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
-        if envelope.has_request() {
-            let request: JsonIncomingRequest = envelope
-                .try_into()
-                .context("failed to get request from envelope")?;
-            return self
-                .storage
-                .request(request)
-                .await
-                .map_err(ProtocolError::Other);
-        }
+    async fn request(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        log::trace!("received a request: {}", envelope.uid);
 
+        let request: JsonIncomingRequest = envelope
+            .try_into()
+            .context("failed to get request from envelope")?;
+        self.storage
+            .request(request)
+            .await
+            .map_err(ProtocolError::Other)
+    }
+
+    async fn response(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
         log::trace!("received a response: {}", envelope.uid);
         // - get message from backlog
         // - fill back everything else from
@@ -303,12 +292,29 @@ where
         Ok(())
     }
 
+    async fn handle(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        let req = envelope.request();
+        // is this for a module
+        if let Some((prefix, _)) = req.command.split_once('.') {
+            if let Some(plugin) = self.plugins.get(prefix) {
+                plugin.remote(envelope);
+                return Ok(());
+            }
+        }
+
+        // otherwise this can either be a request envelope
+        // for a local service
+        if envelope.has_request() {
+            return self.request(envelope).await;
+        }
+
+        self.response(envelope).await
+    }
+
     // handler for incoming envelopes from the relay
     pub async fn start(mut self) {
-        let writer = self.reader.writer();
-
         while let Some(envelope) = self.reader.read().await {
-            if let Err(err) = self.handle_envelope(&envelope).await {
+            if let Err(err) = self.handle(&envelope).await {
                 // process error here if exists.
                 if envelope.has_request() {
                     let mut reply = Envelope {
@@ -322,7 +328,7 @@ where
                     let e = reply.mut_error();
                     e.message = err.to_string();
 
-                    if let Err(err) = writer.write(reply).await {
+                    if let Err(err) = self.up.send(Bag::one(reply)).await {
                         log::error!("failed to send error response to caller: {}", err);
                     }
                 }
