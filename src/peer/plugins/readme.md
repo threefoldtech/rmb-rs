@@ -13,7 +13,17 @@ the plugin will receive the request, and then it can decide either to `hijack` t
     channeled to the client (based on request `reply-to`). If the plugin choose to hijack the request it then can choose
     to reroute the returning response.
 - `remote` this method will receiving incoming requests that that has a command that is prefixed with `${plugin.name}.`. The plugin
-then can decide to either drop the request or send a response(s) back to caller.
+then can decide to either drop the request or send a response(s) back to caller. If receiving a remote request from a remote peer
+the backlog (tracker) provided to the method will always be None.
+If a remote message is only routed to the plugin because a tracker existed for that message ID that routed the message back to the plugin
+hence the tracker will also be provided to the method.
+
+In other words `remote` will be called if a message is:
+
+- a request with a command that is prefixed with `${plugin.name}.`, tracker will be None
+- a response message that has an associated tracker that specifically routed the message to plugin, in that case tracker will be set
+
+Note: the only way a response message will have a tracker set is by the plugin itself set the tracker before sending a request message by the means of the postman, hence any related responses will be routed back with the tracker information
 
 ## Postman
 

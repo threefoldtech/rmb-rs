@@ -4,7 +4,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::Sender;
 
 use super::{Bag, Plugin};
-use crate::types::Envelope;
+use crate::types::{Backlog, Envelope};
 use anyhow::{Context, Result};
 
 #[derive(Default)]
@@ -63,7 +63,7 @@ impl Plugin for Rmb {
         "rmb"
     }
 
-    async fn remote(&self, incoming: &crate::types::Envelope) {
+    async fn remote(&self, _: Option<Backlog>, incoming: &crate::types::Envelope) {
         log::debug!("got rmb plugin request");
         if !incoming.has_request() {
             return;

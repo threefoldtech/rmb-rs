@@ -252,7 +252,7 @@ where
         };
 
         if let Some(plugin) = self.plugins.get(&backlog.module) {
-            plugin.remote(envelope).await;
+            plugin.remote(Some(backlog), envelope).await;
             return Ok(());
         }
 
@@ -279,7 +279,7 @@ where
         // is this for a module
         if let Some((prefix, _)) = req.command.split_once('.') {
             if let Some(plugin) = self.plugins.get(prefix) {
-                plugin.remote(envelope).await;
+                plugin.remote(None, envelope).await;
                 return Ok(());
             }
         }

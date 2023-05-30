@@ -1,12 +1,14 @@
-use crate::types::Envelope;
+use crate::types::{Backlog, Envelope};
 
 use super::postman::Bag;
 use super::storage::JsonOutgoingRequest;
 use tokio::sync::mpsc::Sender;
 
 mod rmb;
+mod upload;
 
 pub use rmb::Rmb;
+pub use upload::Upload;
 
 #[async_trait::async_trait]
 pub trait Plugin: Send + Sync + 'static {
@@ -32,7 +34,7 @@ pub trait Plugin: Send + Sync + 'static {
     ///
     /// a module can do request->response can then for example answer a coming request by pushing
     /// a response on the sender channel
-    async fn remote(&self, incoming: &Envelope);
+    async fn remote(&self, track: Option<Backlog>, incoming: &Envelope);
     /// start this module by provided a sender channel. the channel can be then used to provide
     /// message to the system to be sent to remote peers.
     ///
