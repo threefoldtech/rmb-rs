@@ -5,18 +5,34 @@ use crate::types::Envelope;
 use crate::{identity::Signer, types::Backlog};
 use anyhow::{Context, Result};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+
+const DEFAULT_TTL: u64 = 300;
+
+#[async_trait::async_trait]
+pub trait Generator {
+    async fn next(&mut self) -> Option<Envelope>;
+    //todo: add size hint?
+}
+
+#[async_trait::async_trait]
+impl<T: Iterator<Item = Envelope> + Send + Sync> Generator for T {
+    async fn next(&mut self) -> Option<Envelope> {
+        self.next()
+    }
+}
+
 /// A Bag is a set of envelops that need to be sent out with an optional backlog (tracker)
 /// the tracker tell us who the sender is and where we need to respond back in case of an
 /// error or a response
 pub struct Bag {
     backlog: Option<Backlog>,
-    envelops: Box<dyn Iterator<Item = Envelope> + Send + Sync + 'static>,
+    envelops: Box<dyn Generator + Send + Sync + 'static>,
 }
 
 impl Bag {
     pub fn new<I>(envelops: I) -> Self
     where
-        I: Iterator<Item = Envelope> + Send + Sync + 'static,
+        I: Generator + Send + Sync + 'static,
     {
         Bag {
             backlog: None,
@@ -61,10 +77,13 @@ where
         Self { writer, storage }
     }
 
-    async fn push_one(&self, bag: Bag) -> Result<()> {
-        if let Some(ref backlog) = bag.backlog {
+    async fn push_one(&self, mut bag: Bag) -> Result<()> {
+        if let Some(ref mut backlog) = bag.backlog {
             // a backlog help the system figure out where to route
             // a message if we received a response with that id.
+            if backlog.ttl == 0 {
+                backlog.ttl = DEFAULT_TTL;
+            }
             self.storage
                 .track(backlog)
                 .await
@@ -73,16 +92,25 @@ where
 
         // TODO: validate that ALL envelope has the same id as the backlog
         // if backlog is set.
-        for envelope in bag.envelops {
+        // TODO: if a bag has MANY message (say a big file upload) other sender
+        // might starve. We probably need to multiplex this somehow
+        // a possible solution is to spawn a separate route for each bag if the
+        // size of the bag is bigger than a specific size
+        while let Some(mut envelope) = bag.envelops.next().await {
             log::trace!(
                 "sending message {} dest({:?})",
                 envelope.uid,
                 envelope.destination
             );
+
+            if envelope.expiration == 0 {
+                envelope.expiration = 300;
+            }
+
             if let Err(err) = self.writer.write(envelope).await {
-                log::error!("failed to send message: {}", err);
+                log::error!("failed to send message: {:#}", err);
                 if let Err(err) = self.undeliverable(err, bag.backlog.as_ref()).await {
-                    log::error!("failed to report send error to local caller: {}", err);
+                    log::error!("failed to report send error to local caller: {:#}", err);
                 }
             }
         }
@@ -119,7 +147,7 @@ where
     async fn push(self, mut rx: Receiver<Bag>) {
         while let Some(sent) = rx.recv().await {
             if let Err(err) = self.push_one(sent).await {
-                log::error!("failed to push message: {}", err);
+                log::error!("failed to push message: {:#}", err);
             }
         }
     }

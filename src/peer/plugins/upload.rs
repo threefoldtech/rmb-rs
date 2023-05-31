@@ -1,8 +1,8 @@
-use std::fmt::Display;
 use std::path::PathBuf;
 
 use super::Bag;
 use super::Plugin;
+use crate::peer::postman::Generator;
 use crate::peer::storage::{JsonError, Storage};
 use crate::peer::storage::{JsonIncomingResponse, JsonOutgoingRequest};
 use crate::types::Address;
@@ -13,11 +13,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{mpsc::Sender, Mutex};
 
 const MODULE: &str = "file";
 const FILE_UPLOAD: &str = "file.upload";
 const FILE_NEGOTIATE: &str = "file.negotiate";
+const FILE_WRITE: &str = "file.write";
+
+const SCHEME: &str = "application/json";
 
 #[derive(Deserialize)]
 struct UploadRequestBody {
@@ -44,12 +49,20 @@ enum UploadState {
     RemoteOpen,
 }
 
+enum LocalResp {
+    Error(String),
+    Data(String),
+    Empty,
+}
+
 // an upload operation
-struct Operation {
+struct UploadJob {
     // the original request
     request: UploadRequestBody,
     // the size of the upload
     size: u64,
+
+    dst: u32,
     // the state of the operation
     state: UploadState,
 }
@@ -59,7 +72,7 @@ where
     S: Storage,
 {
     ch: Option<Sender<Bag>>,
-    uploads: Arc<Mutex<HashMap<String, Operation>>>,
+    uploads: Arc<Mutex<HashMap<String, UploadJob>>>,
     storage: S,
     dir: PathBuf,
 }
@@ -96,9 +109,10 @@ where
             bail!("path '{}' is not a file", body.path);
         }
 
-        let operation = Operation {
+        let operation = UploadJob {
             request: body,
             size: meta.len(),
+            dst: request.destinations[0],
             state: UploadState::RemoteOpen,
         };
         let upload_id = uuid::Uuid::new_v4().to_string();
@@ -109,7 +123,6 @@ where
         let mut env = Envelope {
             uid: upload_id.clone(),
             destination: address(request.destinations[0]).into(),
-            expiration: 300,
             ..Default::default()
         };
 
@@ -139,7 +152,13 @@ where
         Ok(())
     }
 
-    async fn local_err<M: Display>(&self, queue: &str, reference: &Option<String>, msg: M) {
+    async fn send_local(&self, queue: &str, reference: &Option<String>, resp: LocalResp) {
+        let (data, err) = match resp {
+            LocalResp::Data(data) => (data, None),
+            LocalResp::Error(msg) => (String::default(), Some(msg)),
+            LocalResp::Empty => (String::default(), None),
+        };
+
         _ = self
             .storage
             .response(
@@ -147,15 +166,13 @@ where
                 JsonIncomingResponse {
                     version: 1,
                     reference: reference.clone(),
-                    data: String::default(),
+                    data: base64::encode(data),
                     source: String::default(),
-                    schema: None,
+                    schema: Some(SCHEME.into()),
                     timestamp: 0,
-                    error: Some(JsonError {
+                    error: err.map(|e| JsonError {
                         code: 0,
-                        // we using format and not `to_string()` to also
-                        // print context
-                        message: format!("{:#}", msg),
+                        message: e,
                     }),
                 },
             )
@@ -167,7 +184,6 @@ where
         let mut env = Envelope {
             uid: request.uid.clone(),
             destination: request.source.clone(),
-            expiration: 300,
             ..Default::default()
         };
         // mark as response
@@ -178,6 +194,7 @@ where
         Ok(())
     }
 
+    /// handles a request from a remote peer
     async fn remote_request(&self, request: &Envelope) -> Result<()> {
         if !request.has_request() {
             // should not happen
@@ -192,10 +209,16 @@ where
                 // just accept or reject this request
                 self.request_negotiate(request).await
             }
+            FILE_WRITE => {
+                // we got a write request
+                log::info!("writing to file: {}", request.uid);
+                Ok(())
+            }
             _ => Err(anyhow::anyhow!("unknown command: {}", req.command)),
         }
     }
 
+    /// handles responses from a remote peer
     async fn remote_response(&self, tracker: Backlog, response: &Envelope) {
         let uploads = self.uploads.lock().await;
         let upload = match uploads.get(&tracker.uid) {
@@ -210,12 +233,71 @@ where
             let err = response.error();
 
             return self
-                .local_err(&tracker.reply_to, &tracker.reference, &err.message)
+                .send_local(
+                    &tracker.reply_to,
+                    &tracker.reference,
+                    LocalResp::Error(err.message.clone()),
+                )
                 .await;
         }
 
         // okay now we have a response to an upload, we can then advance the state
         // and move to the next stage.
+        match upload.state {
+            UploadState::RemoteOpen => {
+                // this is the only state right now.
+                log::info!("starting a file upload: {}", upload.request.path);
+                // send success operation to client tell him
+                // that upload will start
+
+                if let Err(err) = self.start_upload(&tracker, upload).await {
+                    // if we failed to start the upload, send back an error
+                    self.send_local(
+                        &tracker.reply_to,
+                        &tracker.reference,
+                        LocalResp::Error(err.to_string()),
+                    )
+                    .await;
+
+                    return;
+                }
+                // otherwise send back the upload id.
+                // send the upload id to the local caller
+                let data = serde_json::to_string(&tracker.uid).unwrap();
+                // send local response
+                self.send_local(&tracker.reply_to, &tracker.reference, LocalResp::Data(data))
+                    .await;
+            }
+        }
+    }
+
+    async fn start_upload(&self, tracker: &Backlog, job: &UploadJob) -> Result<()> {
+        let file = fs::File::open(&job.request.path)
+            .await
+            .context("failed to open file for reading")?;
+
+        let mut base = Envelope {
+            uid: tracker.uid.clone(),
+            destination: address(job.dst).into(),
+            ..Default::default()
+        };
+
+        let req = base.mut_request();
+        req.command = "file.write".into();
+
+        // TODO: the tracker can timeout, so we need to set a bigger ttl, or find another mechanism to
+        // keep tracking of uploads ids.
+        //
+        // we also need to tell the other peer that the upload is complete. this can be done by sending
+        // a last message with the file.commit message may be
+        let bag = Bag::new(ChunkGenerator::new(base, file, 512 * 1024)).backlog(tracker.clone());
+
+        self.ch
+            .as_ref()
+            .unwrap()
+            .send(bag)
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to push message for sending"))
     }
 }
 
@@ -228,6 +310,7 @@ where
         MODULE
     }
 
+    /// handles local requests (that are initiated from a local client)
     async fn local(&self, request: JsonOutgoingRequest) -> Option<JsonOutgoingRequest> {
         // intercepts the user request to upload a file
         // so we assume that this can ONLY be `file.upload` with proper request body
@@ -235,10 +318,10 @@ where
 
         // check schema
         if !matches!(request.schema, Some(ref schema) if schema == "application/json") {
-            self.local_err(
+            self.send_local(
                 &request.reply_to,
                 &request.reference,
-                "expected content schema to be application/json",
+                LocalResp::Error("expected content schema to be application/json".into()),
             )
             .await;
             return None;
@@ -250,8 +333,12 @@ where
         };
 
         if let Err(err) = result {
-            self.local_err(&request.reply_to, &request.reference, err)
-                .await;
+            self.send_local(
+                &request.reply_to,
+                &request.reference,
+                LocalResp::Error(err.to_string()),
+            )
+            .await;
         }
 
         // hijack. return none here so that the request is not
@@ -271,7 +358,6 @@ where
             let mut env = Envelope {
                 uid: incoming.uid.clone(),
                 destination: incoming.source.clone(),
-                expiration: 300,
                 ..Default::default()
             };
 
@@ -294,4 +380,51 @@ fn address(a: u32) -> Option<Address> {
         twin: a,
         ..Default::default()
     })
+}
+
+/// a file iter generates envelops that carries file chunks
+struct ChunkGenerator {
+    base: Envelope,
+    inner: BufReader<fs::File>,
+    buffer: Vec<u8>,
+}
+
+impl ChunkGenerator {
+    fn new(base: Envelope, f: fs::File, bs: usize) -> Self {
+        Self {
+            base,
+            inner: BufReader::new(f),
+            buffer: vec![0; bs],
+        }
+    }
+
+    async fn next_env(&mut self) -> Result<Option<Envelope>> {
+        let len = self
+            .inner
+            .read(&mut self.buffer)
+            .await
+            .context("failed to read file")?;
+
+        log::debug!("read {} bytes", len);
+        if len == 0 {
+            return Ok(None);
+        }
+
+        let mut env = self.base.clone();
+        env.set_plain(self.buffer[..len].into());
+        log::debug!("sending chunk");
+        Ok(Some(env))
+    }
+}
+#[async_trait::async_trait]
+impl Generator for ChunkGenerator {
+    async fn next(&mut self) -> Option<Envelope> {
+        match self.next_env().await {
+            Ok(r) => r,
+            Err(err) => {
+                log::error!("error while reading file data: {:#}", err);
+                None
+            }
+        }
+    }
 }

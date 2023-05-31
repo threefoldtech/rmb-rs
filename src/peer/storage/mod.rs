@@ -398,7 +398,7 @@ impl TryFrom<JsonOutgoingResponse> for Envelope {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct JsonIncomingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
