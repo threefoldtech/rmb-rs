@@ -14,13 +14,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc::Sender, Mutex};
 
 const MODULE: &str = "file";
 const FILE_UPLOAD: &str = "file.upload";
 const FILE_NEGOTIATE: &str = "file.negotiate";
 const FILE_WRITE: &str = "file.write";
+const FILE_CLOSE: &str = "file.close";
 
 const SCHEME: &str = "application/json";
 
@@ -67,13 +68,23 @@ struct UploadJob {
     state: UploadState,
 }
 
+struct DownloadJob {
+    output: fs::File,
+}
+
 pub struct Upload<S>
 where
     S: Storage,
 {
+    // sender channel
     ch: Option<Sender<Bag>>,
+    // tracks upload job from the sender channel
     uploads: Arc<Mutex<HashMap<String, UploadJob>>>,
+    // tracks download jobs from the receiver channel
+    downloads: Arc<Mutex<HashMap<String, DownloadJob>>>,
+
     storage: S,
+    // store location
     dir: PathBuf,
 }
 
@@ -85,12 +96,26 @@ where
         Self {
             storage,
             uploads: Arc::new(Mutex::new(HashMap::default())),
+            downloads: Arc::new(Mutex::new(HashMap::default())),
             ch: None,
             dir: dir.into(),
         }
     }
 
-    async fn sender_upload(&self, request: &JsonOutgoingRequest) -> Result<()> {
+    async fn send(&self, bag: Bag) -> Result<()> {
+        self.ch
+            .as_ref()
+            .unwrap()
+            .send(bag)
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to push response"))
+    }
+    /// a local (sender) upload handler. all what this will do is validate the
+    /// request and then send a negotiate request
+    ///
+    /// the negotiate request is needed only to validate that remote side is
+    /// listening and actually accept file uploads.
+    async fn local_upload(&self, request: &JsonOutgoingRequest) -> Result<()> {
         // initial checks of the file.
         if request.destinations.len() != 1 {
             bail!("can only upload to one destination");
@@ -145,13 +170,10 @@ where
             ..Default::default()
         });
 
-        if self.ch.as_ref().unwrap().send(bag).await.is_err() {
-            bail!("failed to schedule message for sending");
-        }
-
-        Ok(())
+        self.send(bag).await
     }
 
+    /// a utility function to send back responses to the local client (the one request the upload)
     async fn send_local(&self, queue: &str, reference: &Option<String>, resp: LocalResp) {
         let (data, err) = match resp {
             LocalResp::Data(data) => (data, None),
@@ -179,17 +201,55 @@ where
             .await;
     }
 
-    async fn request_negotiate(&self, request: &Envelope) -> Result<()> {
+    async fn remote_request_negotiate(&self, request: &Envelope) -> Result<()> {
         // TODO: add check if size is acceptable
+        let file = fs::File::create(self.dir.join(&request.uid))
+            .await
+            .context("failed to prepare a file for an upload")?;
+
+        let mut downloads = self.downloads.lock().await;
+        downloads.insert(request.uid.clone(), DownloadJob { output: file });
+
         let mut env = Envelope {
             uid: request.uid.clone(),
             destination: request.source.clone(),
             ..Default::default()
         };
+
         // mark as response
         env.mut_response();
         // send back
-        _ = self.ch.as_ref().unwrap().send(Bag::one(env)).await;
+        self.send(Bag::one(env)).await
+    }
+
+    async fn remote_request_write(&self, request: &Envelope) -> Result<()> {
+        let mut downloads = self.downloads.lock().await;
+
+        let download = downloads
+            .get_mut(&request.uid)
+            .ok_or_else(|| anyhow::anyhow!("write operation for an upload that does not exist"))?;
+
+        // TODO: if we failed to write a chunk, right now the sender will just keep
+        // sending the rest of the chunks.
+        // sending an error here `Err` will actually send a message back to the
+        // sender but current code does not care and will keep sending the rest of the
+        // chunks (more like a stream).
+        // two possible solutions:
+        // - on close, send a request to ask the sender to send back all missing parts
+        // - on close send an error back that upload failed and file need to be send over.
+        download
+            .output
+            .write_all(request.plain())
+            .await
+            .context("failed to write chunk")
+    }
+
+    async fn remote_request_close(&self, request: &Envelope) -> Result<()> {
+        let mut downloads = self.downloads.lock().await;
+
+        downloads
+            .remove(&request.uid)
+            .ok_or_else(|| anyhow::anyhow!("write operation for an upload that does not exist"))?;
 
         Ok(())
     }
@@ -202,18 +262,9 @@ where
         }
         let req = request.request();
         match req.command.as_str() {
-            FILE_NEGOTIATE => {
-                // a remote (sender) peer is negotiating a file upload!
-                // if we already here then we know that file
-                // upload is already enabled, and we then can
-                // just accept or reject this request
-                self.request_negotiate(request).await
-            }
-            FILE_WRITE => {
-                // we got a write request
-                log::info!("writing to file: {}", request.uid);
-                Ok(())
-            }
+            FILE_NEGOTIATE => self.remote_request_negotiate(request).await,
+            FILE_WRITE => self.remote_request_write(request).await,
+            FILE_CLOSE => self.remote_request_close(request).await,
             _ => Err(anyhow::anyhow!("unknown command: {}", req.command)),
         }
     }
@@ -250,7 +301,7 @@ where
                 // send success operation to client tell him
                 // that upload will start
 
-                if let Err(err) = self.start_upload(&tracker, upload).await {
+                if let Err(err) = self.local_start_upload(&tracker, upload).await {
                     // if we failed to start the upload, send back an error
                     self.send_local(
                         &tracker.reply_to,
@@ -271,7 +322,7 @@ where
         }
     }
 
-    async fn start_upload(&self, tracker: &Backlog, job: &UploadJob) -> Result<()> {
+    async fn local_start_upload(&self, tracker: &Backlog, job: &UploadJob) -> Result<()> {
         let file = fs::File::open(&job.request.path)
             .await
             .context("failed to open file for reading")?;
@@ -292,12 +343,7 @@ where
         // a last message with the file.commit message may be
         let bag = Bag::new(ChunkGenerator::new(base, file, 512 * 1024)).backlog(tracker.clone());
 
-        self.ch
-            .as_ref()
-            .unwrap()
-            .send(bag)
-            .await
-            .map_err(|_| anyhow::anyhow!("failed to push message for sending"))
+        self.send(bag).await
     }
 }
 
@@ -328,7 +374,7 @@ where
         }
 
         let result = match request.command.as_str() {
-            FILE_UPLOAD => self.sender_upload(&request).await,
+            FILE_UPLOAD => self.local_upload(&request).await,
             _ => Err(anyhow::anyhow!("unknown command: {}", request.command)),
         };
 
@@ -364,8 +410,8 @@ where
             let e = env.mut_error();
             e.message = format!("{:#}", err);
 
-            if self.ch.as_ref().unwrap().send(Bag::one(env)).await.is_err() {
-                log::error!("failed to send error message back to caller");
+            if let Err(err) = self.send(Bag::one(env)).await {
+                log::error!("failed to send error message back to caller: {:#}", err);
             }
         }
     }
@@ -405,17 +451,18 @@ impl ChunkGenerator {
             .await
             .context("failed to read file")?;
 
-        log::debug!("read {} bytes", len);
+        log::trace!("upload read {} bytes", len);
+
         if len == 0 {
             return Ok(None);
         }
 
         let mut env = self.base.clone();
         env.set_plain(self.buffer[..len].into());
-        log::debug!("sending chunk");
         Ok(Some(env))
     }
 }
+
 #[async_trait::async_trait]
 impl Generator for ChunkGenerator {
     async fn next(&mut self) -> Option<Envelope> {
