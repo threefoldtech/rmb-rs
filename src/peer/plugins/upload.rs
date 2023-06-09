@@ -1,3 +1,47 @@
+//! Implementation of the upload plugin. The file upload while is a very simple concept
+//! it gets more complex in a async peer to peer setup. Here is a list of the challenges
+//! that needed to be taken into account while building this:
+//!
+//! - Peers can only communicate asynchronously. In other words, when a request is send
+//!   there is no grantee a response will be sent back. All what u can do is wait on the receiver
+//!   channel to see if the expected response is received
+//! - A remote peer can be offline, while (of course) the relay is online. Relay keep messages in a buffer for some time
+//!   until the peer is online again. means `sending` a message never fails even if the peer is offline hence a local peer
+//!   can only assume peer is offline if a response is not received in a proper window of time.
+//! - A remote peer doesn't have to support or allow file uploads, hence a negotiation of the upload has to be done a head of
+//!   the actual upload
+//! - A remote peer can die during an upload, which will cause the uploaded parts to queue on the relay side but the local peer
+//!   will not know about it. To work around this an ack can be waited between each upload chunk but this can slow the entire system
+//!   down [not implemented]. Right now the entire file is sent over 512k messages straight away after negotiation
+//!
+//! the system (ideally) works as following:
+//!
+//! - A client request its local peer to upload a file, given the local file `path` and a remote `cmd` to call
+//!   after the upload is complete.
+//! - The local peer receive this request, and it starts to do some checks including the validity of the file path, etc...
+//!   We can also set a limit on the file size at this stage. An error is sent to the local client if validation fails
+//! - Otherwise a negotiation request is sent to the remote peer `file.negotiate` with the requested upload size.
+//! - The remote peer can either return success or error, or not send a response at all (not handled yet)
+//! - In case of a success, a local response is sent to the local client with the job id
+//!   - The upload is started as explained below
+//! - In case of an error, a local response is sent to the local client with the cause of th error
+//! - [need to handle timeout]
+//!
+//! In case of file negotiation success the local peer will just send a stream of messages with cmd file.write each message carries
+//! a chunk of data of 512K bytes.
+//!
+//! So far there is no negotiation of th rate of sending since this is totally up to the relay to queue. A problem can occur (that is not handled)
+//! if the relay is started with a rate limiter which allows it to drop messages if they are coming to fast or too big. this is also not handled
+//! yet in this plugin.
+//!
+//! The upload finish with a `file.close` call that should terminate the upload job and signal the remote peer that there are no more chunks
+//! to be received
+//!
+//! ### TODO:
+//! Here is a list of the things that need to be done
+//! - [ ] [important] Handle timeout in both sender and receiver sides
+//! - [ ] Support query the current upload state, this is possible with another local command to query the state
+//! - [ ] Remote peer once file is received need to call the local cmd with the local file path
 use std::path::PathBuf;
 
 use super::Bag;
@@ -23,6 +67,7 @@ const FILE_NEGOTIATE: &str = "file.negotiate";
 const FILE_WRITE: &str = "file.write";
 const FILE_CLOSE: &str = "file.close";
 
+const FILE_CHUNK_SIZE: usize = 512 * 1024;
 const SCHEME: &str = "application/json";
 
 #[derive(Deserialize)]
@@ -345,6 +390,7 @@ where
             .await
             .context("failed to open file for reading")?;
 
+        let meta = file.metadata().await.context("failed to get file state")?;
         let mut base = Envelope {
             uid: tracker.uid.clone(),
             destination: address(job.dst).into(),
@@ -362,7 +408,7 @@ where
         //
         // we also need to tell the other peer that the upload is complete. this can be done by sending
         // a last message with the file.commit message may be
-        let bag = Bag::new(ChunkGenerator::new(base, file, 512 * 1024)).backlog(tracker.clone());
+        let bag = Bag::new(ChunkGenerator::new(base, file, meta.len())).backlog(tracker.clone());
 
         self.send(bag).await
     }
@@ -453,16 +499,18 @@ fn address(a: u32) -> Option<Address> {
 struct ChunkGenerator {
     base: Envelope,
     inner: BufReader<fs::File>,
+    remaining: u64,
     buffer: Vec<u8>,
     ended: bool,
 }
 
 impl ChunkGenerator {
-    fn new(base: Envelope, f: fs::File, bs: usize) -> Self {
+    fn new(base: Envelope, f: fs::File, size: u64) -> Self {
         Self {
             base,
             inner: BufReader::new(f),
-            buffer: vec![0; bs],
+            remaining: size,
+            buffer: vec![0; FILE_CHUNK_SIZE],
             ended: false,
         }
     }
@@ -474,6 +522,7 @@ impl ChunkGenerator {
             .await
             .context("failed to read file")?;
 
+        self.remaining -= len as u64;
         log::trace!("upload read {} bytes", len);
 
         // the iterator has already been exhausted
@@ -504,5 +553,9 @@ impl Generator for ChunkGenerator {
                 None
             }
         }
+    }
+
+    fn count_hint(&self) -> Option<u64> {
+        return Some(self.remaining / FILE_CHUNK_SIZE as u64);
     }
 }

@@ -31,3 +31,9 @@ The plugin is granted to receive a `start` call before any of the `local` or `re
 receive a `Send` (stream) channel that accepts a `Bag` object. The send channel is the plugin only way to send message to remote peers
 by constructing an `Envelope` with all fields that is needed for message delivery, and an optional `Backlog` object that can be used
 to route expected responses (if there are any) back to the plugin.
+
+## Available Plugins
+
+There are two plugins already included in this implementation one of them is very simple and was mainly to be used as a simple example `rmb` implemented in the [rmb.rs](rmb.rs) file. It handles a request to ask the peer for its version and send a simple response. Can be extended later with more functionality.
+
+The other more complex plugin is `upload` plugin implemented in [upload.rs](upload.rs) file. Please read the plugin doc for explanation of its operation

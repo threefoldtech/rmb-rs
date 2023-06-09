@@ -1,3 +1,10 @@
+//! The RMB plugin is a simple plugin that answers to only remote request
+//!
+//! Currently, the plugin only answer the `rmb.version` request and return
+//! the version of the instance of the peer.
+//!
+//! This can/(will) be extended later with more rmb queries to check the state
+//! of the running peer and may be the list of running service handlers.
 use std::fmt::Display;
 
 use serde::Serialize;

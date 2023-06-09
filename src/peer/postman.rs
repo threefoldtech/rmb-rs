@@ -7,17 +7,25 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 const DEFAULT_TTL: u64 = 300;
+/// SPAWN_THRESHOLD if a single bag contains more than 10 messages
+/// we can spawn a separate sender so other senders don't starve
+const SPAWN_THRESHOLD: u64 = 10;
 
 #[async_trait::async_trait]
 pub trait Generator {
     async fn next(&mut self) -> Option<Envelope>;
-    //todo: add size hint?
+    fn count_hint(&self) -> Option<u64>;
 }
 
 #[async_trait::async_trait]
 impl<T: Iterator<Item = Envelope> + Send + Sync> Generator for T {
     async fn next(&mut self) -> Option<Envelope> {
         self.next()
+    }
+
+    fn count_hint(&self) -> Option<u64> {
+        let (_, hint) = self.size_hint();
+        hint.map(|v| v as u64)
     }
 }
 
@@ -57,6 +65,7 @@ impl Bag {
 ///
 /// this allow other components to send messages and forget about it, if the message fails
 /// the post man will take care of informing the concerned entities
+#[derive(Clone)]
 pub struct Postman<DB, S, R>
 where
     DB: TwinDB,
@@ -69,15 +78,15 @@ where
 
 impl<DB, S, R> Postman<DB, S, R>
 where
-    DB: TwinDB,
-    S: Signer,
-    R: Storage,
+    DB: TwinDB + Clone,
+    S: Signer + Clone,
+    R: Storage + Clone,
 {
     pub fn new(writer: Writer<DB, S>, storage: R) -> Self {
         Self { writer, storage }
     }
 
-    async fn push_one(&self, mut bag: Bag) -> Result<()> {
+    async fn push_bag(&self, mut bag: Bag) -> Result<()> {
         if let Some(ref mut backlog) = bag.backlog {
             // a backlog help the system figure out where to route
             // a message if we received a response with that id.
@@ -145,8 +154,28 @@ where
     }
 
     async fn push(self, mut rx: Receiver<Bag>) {
-        while let Some(sent) = rx.recv().await {
-            if let Err(err) = self.push_one(sent).await {
+        while let Some(bag) = rx.recv().await {
+            let spawn = bag
+                .envelops
+                .count_hint()
+                .map(|v| v > SPAWN_THRESHOLD)
+                .unwrap_or(true);
+
+            // if we sending a big bag we instead spawn the sending
+            // in a separate routine to avoid starving other senders
+
+            if spawn {
+                log::trace!("spawning postman send for a bag");
+                let p = self.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = p.push_bag(bag).await {
+                        log::error!("failed to push message: {:#}", err);
+                    }
+                });
+                continue;
+            }
+
+            if let Err(err) = self.push_bag(bag).await {
                 log::error!("failed to push message: {:#}", err);
             }
         }
