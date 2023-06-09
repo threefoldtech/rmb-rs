@@ -42,7 +42,7 @@
 //! - [ ] [important] Handle timeout in both sender and receiver sides
 //! - [ ] Support query the current upload state, this is possible with another local command to query the state
 //! - [ ] Remote peer once file is received need to call the local cmd with the local file path
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::Bag;
 use super::Plugin;
@@ -134,20 +134,20 @@ where
 
     storage: S,
     // store location
-    dir: PathBuf,
+    dir: Option<String>,
 }
 
 impl<S> Upload<S>
 where
     S: Storage,
 {
-    pub fn new<P: Into<PathBuf>>(storage: S, dir: P) -> Self {
+    pub fn new(storage: S, dir: Option<String>) -> Self {
         Self {
             storage,
             uploads: Arc::new(Mutex::new(HashMap::default())),
             downloads: Arc::new(Mutex::new(HashMap::default())),
             ch: None,
-            dir: dir.into(),
+            dir: dir,
         }
     }
 
@@ -255,11 +255,17 @@ where
     }
 
     async fn remote_request_negotiate(&self, request: &Envelope) -> Result<()> {
+        let dir = match self.dir {
+            Some(ref dir) => dir,
+            None => bail!("upload is not enabled"),
+        };
+
         let _body: UploadOpen =
             serde_json::from_slice(request.plain()).context("failed to read request body")?;
 
         // TODO: add check if size is acceptable
-        let file = fs::File::create(self.dir.join(&request.uid))
+        let path = Path::new(dir);
+        let file = fs::File::create(path.join(&request.uid))
             .await
             .context("failed to prepare a file for an upload")?;
 

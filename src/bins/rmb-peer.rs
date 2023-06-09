@@ -62,12 +62,16 @@ struct Params {
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
 
+    /// enable upload and save uploaded files in the given location
+    #[clap(short, long)]
+    upload: Option<String>,
+
     /// skip twin update on chain if relay is not matching. only used for debugging
     #[clap(long = "no-update")]
     no_update: bool,
 }
 
-async fn app(args: &Params) -> Result<()> {
+async fn app(args: Params) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
     simple_logger::SimpleLogger::new()
@@ -170,7 +174,7 @@ async fn app(args: &Params) -> Result<()> {
     let u = url::Url::parse(&args.relay)?;
     let peer = peer::Peer::new(id, signer, pair);
 
-    let upload_plugin = peer::plugins::Upload::new(storage.clone(), "/tmp");
+    let upload_plugin = peer::plugins::Upload::new(storage.clone(), args.upload);
     let mut app = peer::App::new(u, peer, db, storage);
     app.plugin(peer::plugins::Rmb::default());
     app.plugin(upload_plugin);
@@ -183,7 +187,7 @@ async fn app(args: &Params) -> Result<()> {
 #[tokio::main]
 async fn main() {
     let args = Params::parse();
-    if let Err(e) = app(&args).await {
+    if let Err(e) = app(args).await {
         eprintln!("{:#}", e);
         std::process::exit(1);
     }
