@@ -36,6 +36,7 @@ struct UploadRequestBody {
 #[derive(Serialize, Deserialize, Debug)]
 struct UploadOpen {
     size: u64,
+    cmd: Option<String>,
 }
 
 // in case we need to extend the upload process
@@ -48,11 +49,13 @@ enum UploadState {
     // or fail
     #[default]
     RemoteOpen,
+    Uploading,
 }
 
 enum LocalResp {
     Error(String),
     Data(String),
+    #[allow(dead_code)]
     Empty,
 }
 
@@ -61,6 +64,7 @@ struct UploadJob {
     // the original request
     request: UploadRequestBody,
     // the size of the upload
+    #[allow(dead_code)]
     size: u64,
 
     dst: u32,
@@ -134,6 +138,11 @@ where
             bail!("path '{}' is not a file", body.path);
         }
 
+        let open = UploadOpen {
+            size: meta.len(),
+            cmd: body.cmd.clone(),
+        };
+
         let operation = UploadJob {
             request: body,
             size: meta.len(),
@@ -153,8 +162,7 @@ where
 
         let msg = env.mut_request();
         msg.command = FILE_NEGOTIATE.into();
-        let data = serde_json::to_vec(&UploadOpen { size: meta.len() })
-            .context("failed to build request")?;
+        let data = serde_json::to_vec(&open).context("failed to build request")?;
 
         env.set_plain(data);
 
@@ -202,6 +210,9 @@ where
     }
 
     async fn remote_request_negotiate(&self, request: &Envelope) -> Result<()> {
+        let _body: UploadOpen =
+            serde_json::from_slice(request.plain()).context("failed to read request body")?;
+
         // TODO: add check if size is acceptable
         let file = fs::File::create(self.dir.join(&request.uid))
             .await
@@ -251,6 +262,7 @@ where
             .remove(&request.uid)
             .ok_or_else(|| anyhow::anyhow!("write operation for an upload that does not exist"))?;
 
+        log::info!("upload {} complete", request.uid);
         Ok(())
     }
 
@@ -271,8 +283,8 @@ where
 
     /// handles responses from a remote peer
     async fn remote_response(&self, tracker: Backlog, response: &Envelope) {
-        let uploads = self.uploads.lock().await;
-        let upload = match uploads.get(&tracker.uid) {
+        let mut uploads = self.uploads.lock().await;
+        let upload = match uploads.get_mut(&tracker.uid) {
             None => {
                 log::error!("received response for an upload that does not exist");
                 return;
@@ -318,6 +330,12 @@ where
                 // send local response
                 self.send_local(&tracker.reply_to, &tracker.reference, LocalResp::Data(data))
                     .await;
+                upload.state = UploadState::Uploading;
+            }
+            UploadState::Uploading => {
+                // already uploading and shouldn't be here
+                // but this is reserved in case the remote peer sent a message
+                // regarding this upload to cancel or
             }
         }
     }
@@ -333,8 +351,11 @@ where
             ..Default::default()
         };
 
+        // set initial command to file.write
+        // will be used by the generator to send the write
+        // command and auto-fill the chunks
         let req = base.mut_request();
-        req.command = "file.write".into();
+        req.command = FILE_WRITE.into();
 
         // TODO: the tracker can timeout, so we need to set a bigger ttl, or find another mechanism to
         // keep tracking of uploads ids.
@@ -382,7 +403,7 @@ where
             self.send_local(
                 &request.reply_to,
                 &request.reference,
-                LocalResp::Error(err.to_string()),
+                LocalResp::Error(format!("{:#}", err)),
             )
             .await;
         }
@@ -433,6 +454,7 @@ struct ChunkGenerator {
     base: Envelope,
     inner: BufReader<fs::File>,
     buffer: Vec<u8>,
+    ended: bool,
 }
 
 impl ChunkGenerator {
@@ -441,6 +463,7 @@ impl ChunkGenerator {
             base,
             inner: BufReader::new(f),
             buffer: vec![0; bs],
+            ended: false,
         }
     }
 
@@ -453,12 +476,20 @@ impl ChunkGenerator {
 
         log::trace!("upload read {} bytes", len);
 
-        if len == 0 {
+        // the iterator has already been exhausted
+        if len == 0 && self.ended {
             return Ok(None);
         }
 
         let mut env = self.base.clone();
-        env.set_plain(self.buffer[..len].into());
+        if len == 0 {
+            // and self.ended == false also
+            let req = env.mut_request();
+            req.command = FILE_CLOSE.into();
+            self.ended = true;
+        } else {
+            env.set_plain(self.buffer[..len].into());
+        }
         Ok(Some(env))
     }
 }
