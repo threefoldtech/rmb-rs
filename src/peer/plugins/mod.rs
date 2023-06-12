@@ -7,7 +7,7 @@ use tokio::sync::mpsc::Sender;
 mod rmb;
 mod upload;
 
-pub use rmb::Rmb;
+pub use self::rmb::Rmb;
 pub use upload::Upload;
 
 #[async_trait::async_trait]

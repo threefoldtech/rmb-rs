@@ -147,7 +147,7 @@ where
             uploads: Arc::new(Mutex::new(HashMap::default())),
             downloads: Arc::new(Mutex::new(HashMap::default())),
             ch: None,
-            dir: dir,
+            dir,
         }
     }
 
@@ -562,6 +562,6 @@ impl Generator for ChunkGenerator {
     }
 
     fn count_hint(&self) -> Option<u64> {
-        return Some(self.remaining / FILE_CHUNK_SIZE as u64);
+        Some(self.remaining / FILE_CHUNK_SIZE as u64)
     }
 }
