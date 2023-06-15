@@ -86,7 +86,6 @@ async fn app(args: &Params) -> Result<()> {
         .init()?;
 
     let secret = &args.secret;
-    log::info!("secret: {:?}", secret);
     let secret: &str = match secret.mnemonic.as_deref() {
         Some(m) => m,
         None => match secret.mnemonics.as_deref() {
