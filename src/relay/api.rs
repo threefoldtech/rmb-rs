@@ -411,7 +411,7 @@ impl<M: Metrics> Stream<M> {
         let mut resp = Envelope::new();
         resp.uid = envelope.uid;
         resp.destination = Some((&self.id).into()).into();
-        let mut e = resp.mut_error();
+        let e = resp.mut_error();
         e.message = err.to_string();
 
         let bytes = match resp.write_to_bytes() {
