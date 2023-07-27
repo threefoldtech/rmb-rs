@@ -6,7 +6,7 @@ use futures_util::stream::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error, Message};
 use url::Url;
 
 const PING_INTERVAL: Duration = Duration::from_secs(20);
@@ -104,7 +104,8 @@ async fn retainer<S: Signer>(
             }
         };
 
-        let (mut write, mut read) = ws.split();
+        let (mut write, read) = ws.split();
+        let mut read = read_stream(read);
         let mut last = Instant::now();
 
         'receive: loop {
@@ -129,7 +130,15 @@ async fn retainer<S: Signer>(
                         break 'receive;
                     }
                 },
-                Some(message) =  read.next() => {
+                message = read.recv() => {
+                    let message = match message {
+                        None=> {
+                            log::debug!("read stream ended")  ;
+                            break 'receive;
+                        },
+                        Some(message) => message,
+                    };
+
                     // we take a note with when a message was received
                     last = Instant::now();
                     log::trace!("received a message from relay");
@@ -157,4 +166,28 @@ async fn retainer<S: Signer>(
         tokio::time::sleep(Duration::from_secs(2)).await;
         log::info!("retrying connection");
     }
+}
+
+fn read_stream(
+    mut stream: futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+) -> mpsc::Receiver<Result<Message, Error>> {
+    let (sender, receiver) = mpsc::channel(1);
+    tokio::spawn(async move {
+        loop {
+            match stream.next().await {
+                None => return,
+                Some(result) => {
+                    if sender.send(result).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    receiver
 }
