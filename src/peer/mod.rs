@@ -259,7 +259,7 @@ where
                     // otherwise, we clear up the payload
                     // and set the error instead
                     envelope.payload = None;
-                    let mut e = envelope.mut_error();
+                    let e = envelope.mut_error();
                     e.code = err.code();
                     e.message = err.to_string();
                 }
