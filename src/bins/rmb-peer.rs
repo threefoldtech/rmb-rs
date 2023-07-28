@@ -62,13 +62,12 @@ struct Params {
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
 
-    /// enable upload and save uploaded files in the given location
-    #[clap(short, long)]
-    upload: Option<String>,
-
     /// skip twin update on chain if relay is not matching. only used for debugging
     #[clap(long = "no-update")]
     no_update: bool,
+    // enable upload and save uploaded files in the given location
+    // #[clap(short, long)]
+    // upload: Option<String>,
 }
 
 async fn app(args: Params) -> Result<()> {
@@ -173,10 +172,10 @@ async fn app(args: Params) -> Result<()> {
     let u = url::Url::parse(&args.relay)?;
     let peer = peer::Peer::new(id, signer, pair);
 
-    let upload_plugin = peer::plugins::Upload::new(storage.clone(), args.upload);
+    //let upload_plugin = peer::plugins::Upload::new(storage.clone(), args.upload);
     let mut app = peer::App::new(u, peer, db, storage);
     app.plugin(peer::plugins::Rmb::default());
-    app.plugin(upload_plugin);
+    //app.plugin(upload_plugin);
 
     app.start().await;
 
