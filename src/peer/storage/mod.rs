@@ -1,5 +1,6 @@
 mod redis_storage;
 
+use super::protocol::ProtocolError;
 use crate::types::{self, Address, AddressExt, EnvelopeExt};
 use crate::types::{Backlog, Envelope};
 use anyhow::{Context, Result};
@@ -15,7 +16,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
     // track stores some information about the envelope
     // in a backlog used to track replies received related to this
     // envelope. The envelope has to be a request envelope.
-    async fn track(&self, uid: &str, ttl: u64, backlog: Backlog) -> Result<()>;
+    async fn track(&self, backlog: &Backlog) -> Result<()>;
 
     // gets message with ID. This will retrieve the object
     // from backlog.$id. On success, this can either be None which means
@@ -63,10 +64,34 @@ impl From<JsonOutgoingResponse> for JsonMessage {
     }
 }
 
+struct EnvIter {
+    base: Envelope,
+    destinations: std::vec::IntoIter<u32>,
+}
+
+impl Iterator for EnvIter {
+    type Item = Envelope;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.destinations.next().map(|id| {
+            let mut env = self.base.clone();
+            env.destination = Some(id.into()).into();
+            env
+        })
+    }
+}
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonError {
     pub code: u32,
     pub message: String,
+}
+
+impl From<ProtocolError> for JsonError {
+    fn from(value: ProtocolError) -> Self {
+        Self {
+            code: value.code(),
+            message: value.to_string(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -94,49 +119,37 @@ pub struct JsonOutgoingRequest {
 }
 
 impl JsonOutgoingRequest {
-    /// parts return all the components of this message. this include a backlog
-    /// object with all the tracking information, and all envelopes (one for)
-    /// each destination. each envelope is already stamped with correct time
-    /// stamps, but missing source, and signature information
-    /// return (backlog, envelopes, ttl) where ttl is time to live
-    /// for the request
-    pub fn parts(self) -> Result<(Backlog, Vec<Envelope>, u64)> {
+    /// An outgoing request can be mapped to multiple envelops (if send to multiple destinations)
+    /// hence returning a stream of envelops and a backlog object for tracking
+    pub fn to_envelops(self) -> Result<(Backlog, impl Iterator<Item = Envelope>)> {
         // create a backlog tracker.
         // that's the part of the request that stays locally
+        let uid = uuid::Uuid::new_v4().to_string();
+
         let mut backlog = types::Backlog::new();
+        backlog.uid = uid;
         backlog.reply_to = self.reply_to;
         backlog.reference = self.reference;
 
-        // create an (incomplete) envelope
-        let mut request = types::Request::new();
-
-        request.command = self.command;
-
         let mut env = Envelope::new();
+        env.uid = backlog.uid.clone();
         env.set_plain(base64::decode(self.data).context("invalid data base64 encoding")?);
         env.tags = self.tags;
         env.timestamp = self.timestamp;
         env.expiration = self.expiration;
         env.signature = None;
         env.schema = self.schema;
-        env.set_request(request);
+        let request = env.mut_request();
+        request.command = self.command;
 
         env.stamp();
-        let ttl = env.ttl().context("request has expired")?.as_secs();
+        backlog.ttl = env.ttl().context("request has expired")?.as_secs();
 
-        let mut envs: Vec<Envelope>;
-        if self.destinations.len() == 1 {
-            env.destination = Some(self.destinations[0].into()).into();
-            envs = vec![env]
-        } else {
-            envs = Vec::default();
-            for dest in self.destinations {
-                env.destination = Some(dest.into()).into();
-                envs.push(env.clone());
-            }
-        }
-
-        Ok((backlog, envs, ttl))
+        let iter = EnvIter {
+            base: env,
+            destinations: self.destinations.into_iter(),
+        };
+        Ok((backlog, iter))
     }
 }
 
@@ -169,25 +182,25 @@ impl redis::FromRedisValue for JsonOutgoingRequest {
     }
 }
 
-impl TryFrom<Envelope> for JsonOutgoingRequest {
+impl TryFrom<&Envelope> for JsonOutgoingRequest {
     type Error = anyhow::Error;
-    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
         if !value.has_request() {
             anyhow::bail!("envelope doesn't hold a request");
         }
-        let req = value.take_request();
+        let req = value.request();
 
         let data = base64::encode(value.plain());
         Ok(JsonOutgoingRequest {
             version: 1,
-            reference: Some(value.uid),
-            command: req.command,
+            reference: Some(value.uid.clone()),
+            command: req.command.clone(),
             expiration: value.expiration,
             data,
-            tags: value.tags,
+            tags: value.tags.clone(),
             destinations: vec![value.destination.twin],
             reply_to: String::default(),
-            schema: value.schema,
+            schema: value.schema.clone(),
             timestamp: value.timestamp,
         })
     }
@@ -246,25 +259,25 @@ impl redis::FromRedisValue for JsonIncomingRequest {
     }
 }
 
-impl TryFrom<Envelope> for JsonIncomingRequest {
+impl TryFrom<&Envelope> for JsonIncomingRequest {
     type Error = anyhow::Error;
-    fn try_from(mut value: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(value: &Envelope) -> Result<Self, Self::Error> {
         if !value.has_request() {
             anyhow::bail!("envelope doesn't hold a request");
         }
-        let req = value.take_request();
+        let req = value.request();
         let data = base64::encode(value.plain());
 
         Ok(JsonIncomingRequest {
             version: 1,
-            reference: Some(value.uid),
-            command: req.command,
+            reference: Some(value.uid.clone()),
+            command: req.command.clone(),
             expiration: value.expiration,
             data,
-            tags: value.tags,
+            tags: value.tags.clone(),
             source: value.source.stringify(),
             reply_to: String::default(),
-            schema: value.schema,
+            schema: value.schema.clone(),
             timestamp: value.timestamp,
         })
     }
@@ -317,9 +330,9 @@ impl redis::FromRedisValue for JsonOutgoingResponse {
     }
 }
 
-impl TryFrom<Envelope> for JsonOutgoingResponse {
+impl TryFrom<&Envelope> for JsonOutgoingResponse {
     type Error = anyhow::Error;
-    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(env: &Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
 
         // message can be only a response or error
@@ -337,11 +350,11 @@ impl TryFrom<Envelope> for JsonOutgoingResponse {
             data,
             destination: env.destination.stringify(),
             timestamp: env.timestamp,
-            schema: env.schema,
-            error: if let Some(Message::Error(err)) = env.message {
+            schema: env.schema.clone(),
+            error: if let Some(Message::Error(ref err)) = env.message {
                 Some(JsonError {
                     code: err.code,
-                    message: err.message,
+                    message: err.message.clone(),
                 })
             } else {
                 None
@@ -385,7 +398,7 @@ impl TryFrom<JsonOutgoingResponse> for Envelope {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct JsonIncomingResponse {
     #[serde(rename = "ver")]
     pub version: usize,
@@ -432,9 +445,9 @@ impl redis::FromRedisValue for JsonIncomingResponse {
     }
 }
 
-impl TryFrom<Envelope> for JsonIncomingResponse {
+impl TryFrom<&Envelope> for JsonIncomingResponse {
     type Error = anyhow::Error;
-    fn try_from(env: Envelope) -> Result<Self, Self::Error> {
+    fn try_from(env: &Envelope) -> Result<Self, Self::Error> {
         use types::envelope::Message;
 
         // message can be only a response or error
@@ -452,11 +465,11 @@ impl TryFrom<Envelope> for JsonIncomingResponse {
             data,
             source: env.source.stringify(),
             timestamp: env.timestamp,
-            schema: env.schema,
-            error: if let Some(Message::Error(err)) = env.message {
+            schema: env.schema.clone(),
+            error: if let Some(Message::Error(ref err)) = env.message {
                 Some(JsonError {
                     code: err.code,
-                    message: err.message,
+                    message: err.message.clone(),
                 })
             } else {
                 None

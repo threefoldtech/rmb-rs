@@ -65,9 +65,12 @@ struct Params {
     /// skip twin update on chain if relay is not matching. only used for debugging
     #[clap(long = "no-update")]
     no_update: bool,
+    // enable upload and save uploaded files in the given location
+    // #[clap(short, long)]
+    // upload: Option<String>,
 }
 
-async fn app(args: &Params) -> Result<()> {
+async fn app(args: Params) -> Result<()> {
     //ed25519 seed.
     //let seed = "0xb2643a23e021c2597ad2902ac8460057165af2b52b734300ae1214cffe384816";
     simple_logger::SimpleLogger::new()
@@ -97,9 +100,9 @@ async fn app(args: &Params) -> Result<()> {
         },
     };
 
-    let sk = Pair::from_str(secret).context("failed to initialize encryption key")?;
+    let pair = Pair::from_str(secret).context("failed to initialize encryption key")?;
 
-    let identity = match args.key_type {
+    let signer = match args.key_type {
         KeyType::Ed25519 => {
             let sk = identity::Ed25519Signer::try_from(secret)
                 .context("failed to load ed25519 key from mnemonics or seed")?;
@@ -126,7 +129,7 @@ async fn app(args: &Params) -> Result<()> {
     .context("cannot create substrate twin db object")?;
 
     let id = db
-        .get_twin_with_account(identity.account())
+        .get_twin_with_account(signer.account())
         .await
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
@@ -147,14 +150,14 @@ async fn app(args: &Params) -> Result<()> {
         // if twin relay or his pk don't match the ones that
         // should be there, we need to set the value on chain
         if twin.relay.as_deref() != relay_url.domain()
-            || !matches!(twin.pk, Some(ref pk) if pk == &sk.public())
+            || !matches!(twin.pk, Some(ref pk) if pk == &pair.public())
         {
             // remote relay is not the same as configure one. update is needed
             log::info!("update twin details on the chain");
 
-            let pk = sk.public();
+            let pk = pair.public();
             db.update_twin(
-                &identity.pair(),
+                &signer.pair(),
                 relay_url.domain().map(|d| d.to_owned()),
                 Some(&pk),
             )
@@ -167,13 +170,22 @@ async fn app(args: &Params) -> Result<()> {
     log::info!("twin: {}", id);
 
     let u = url::Url::parse(&args.relay)?;
-    peer::start(u, id, sk, identity, storage, db).await
+    let peer = peer::Peer::new(id, signer, pair);
+
+    //let upload_plugin = peer::plugins::Upload::new(storage.clone(), args.upload);
+    let mut app = peer::App::new(u, peer, db, storage);
+    app.plugin(peer::plugins::Rmb::default());
+    //app.plugin(upload_plugin);
+
+    app.start().await;
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
     let args = Params::parse();
-    if let Err(e) = app(&args).await {
+    if let Err(e) = app(args).await {
         eprintln!("{:#}", e);
         std::process::exit(1);
     }

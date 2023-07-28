@@ -6,4 +6,6 @@ message Backlog {
   string uid = 1;
   optional string reference = 2;
   string reply_to = 3;
+  string module = 4;
+  uint64 ttl = 5;
 }

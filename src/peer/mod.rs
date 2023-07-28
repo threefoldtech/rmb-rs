@@ -1,306 +1,163 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::{Address, Envelope, EnvelopeExt, Error as MessageError, ValidationError};
+use crate::types::Envelope;
 use anyhow::{Context, Result};
-use protobuf::Message as ProtoMessage;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use storage::Storage;
-use tokio_tungstenite::tungstenite::Message;
+use tokio::sync::mpsc::Sender;
 use url::Url;
 
-mod con;
+mod postman;
+mod protocol;
+mod socket;
+
+use postman::{Bag, Postman};
 
 pub mod e2e;
+pub mod plugins;
 pub mod storage;
-pub use e2e::Pair;
 
-use con::{Connection, Writer};
+pub use e2e::Pair;
+pub use plugins::Plugin;
+pub use protocol::Peer;
+
+use socket::Socket;
 use storage::{
     JsonIncomingRequest, JsonIncomingResponse, JsonOutgoingRequest, JsonOutgoingResponse,
 };
 
-use self::storage::JsonError;
+use self::protocol::{Protocol, ProtocolError};
 
-#[derive(thiserror::Error, Debug)]
-enum EnvelopeErrorKind {
-    #[error("failed to validate envelope: {0}")]
-    Validation(ValidationError),
-    #[error("invalid signature: {0}")]
-    InvalidSignature(anyhow::Error),
-    #[error("failed to get twin information: {0}")]
-    GetTwin(anyhow::Error),
-    #[error("twin not found")]
-    UnknownTwin,
-    #[error("unknown built-in command '{0}'")]
-    UnknownCommand(String),
-    #[error("{0}")]
-    Other(anyhow::Error),
-}
+type Plugins = HashMap<String, Box<dyn Plugin>>;
 
-impl EnvelopeErrorKind {
-    fn code(&self) -> u32 {
-        match self {
-            Self::Validation(_) => 300,
-            Self::InvalidSignature(_) => 301,
-            Self::GetTwin(_) => 302,
-            Self::UnknownTwin => 303,
-            Self::UnknownCommand(_) => 304,
-            Self::Other(_) => 305,
-        }
-    }
-}
-
-impl From<EnvelopeErrorKind> for JsonError {
-    fn from(value: EnvelopeErrorKind) -> Self {
-        Self {
-            code: value.code(),
-            message: value.to_string(),
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum PeerError {
-    #[error("received invalid message type")]
-    InvalidMessage,
-
-    #[error("received invalid message format: {0}")]
-    InvalidPayload(#[from] protobuf::Error),
-
-    #[error("envelope error {0}")]
-    Envelope(#[from] EnvelopeErrorKind),
-
-    #[error("twin {0} not found")]
-    TwinNotFound(u32),
-
-    #[error("e2e encryption error: {0}")]
-    E2E(#[from] e2e::Error),
-
-    #[error("{0}")]
-    Other(#[from] anyhow::Error),
-
-    #[error("multiple errors")]
-    MultiError(Vec<PeerError>),
-}
-
-impl PeerError {
-    fn code(&self) -> u32 {
-        match self {
-            // range 100
-            Self::InvalidMessage => 100,
-            // range 200
-            Self::InvalidPayload(_) => 200,
-            // range 300
-            Self::Envelope(k) => k.code(),
-            // range 400
-            Self::TwinNotFound(_) => 404,
-            Self::E2E(_) => 401,
-            // range 500
-            Self::Other(_) => 500,
-            // not coded
-            // this will be return to user one by one
-            Self::MultiError(_) => 0,
-        }
-    }
-}
-
-impl From<PeerError> for JsonError {
-    fn from(value: PeerError) -> Self {
-        Self {
-            code: value.code(),
-            message: value.to_string(),
-        }
-    }
-}
-
-/// entry point for peer, it initializes connection to the relay and handle both up stream
-/// and down stream
-/// - it uses the storage to get local generated requests or responses, and forward it to the relay
-/// - it handle all received messages and dispatch it to local clients or services.
-/// - sign all outgoing messages
-/// - verify all incoming messages
-/// - restore relay connection if lost
-pub async fn start<S, G, DB>(
-    relay: Url,
-    twin: u32,
-    sk: Pair,
-    signer: G,
-    storage: S,
-    db: DB,
-) -> Result<()>
+pub struct App<DB, S, R>
 where
-    S: Storage,
-    G: Signer + Clone + Send + Sync + 'static,
+    DB: TwinDB,
+    S: Signer,
+    R: Storage,
+{
+    protocol: Protocol<DB, S>,
+    storage: R,
+    plugins: Plugins,
+}
+
+impl<DB, S, R> App<DB, S, R>
+where
     DB: TwinDB + Clone,
+    S: Signer,
+    R: Storage,
 {
-    let con = Connection::connect(relay, twin, signer.clone());
-    let mut address = Address::new();
-    address.twin = twin;
-    // a high level sender that can stamp and sign the message before sending automatically
-    let sender = Sender::new(con.writer(), address, signer);
+    pub fn new(relay: Url, peer: Peer<S>, twins: DB, storage: R) -> Self {
+        // create low level socket, this takes care of the relay connection and reconnecting if connection
+        // is lost. this include authentication with the relay and proving identity
+        let socket = Socket::connect(relay, peer.id, peer.signer.clone());
 
-    // handle all received messages from the relay
-    let downstream = Downstream::new(sk.clone(), db.clone(), storage.clone(), sender.clone());
-    // handle all local generate traffic and push it to relay
-    let upstream = Upstream::new(sk, db, storage, sender);
+        // create a higher level protocol (Envelope) on top of the socket
+        let protocol = Protocol::new(socket, peer, twins);
 
-    //let upstream = Upstream::
-    // start a processor for incoming message
-    tokio::spawn(downstream.start(con));
-
-    // we start this in this current routine to block the peer from exiting
-    // no need to spawn it in the back
-    upstream.start().await;
-    // shouldn't be reachable
-    Ok(())
-}
-
-/// Upstream handle all local traffic and making sure to push
-/// it to server (relay)
-struct Upstream<DB, S, G>
-where
-    DB: TwinDB,
-    S: Storage,
-    G: Signer,
-{
-    sk: Pair,
-    db: DB,
-    storage: S,
-    sender: Sender<G>,
-}
-
-impl<DB, S, G> Upstream<DB, S, G>
-where
-    DB: TwinDB,
-    S: Storage,
-    G: Signer,
-{
-    pub fn new(sk: Pair, db: DB, storage: S, sender: Sender<G>) -> Self {
         Self {
-            sk,
-            db,
+            protocol,
             storage,
-            sender,
+            plugins: HashMap::default(),
+        }
+    }
+
+    pub fn plugin<P: Plugin>(&mut self, plugin: P) {
+        self.plugins.insert(plugin.name().into(), Box::new(plugin));
+    }
+
+    pub async fn start(self) {
+        // start the post man which is responsible for sending message with tracking
+        let postman = Postman::new(self.protocol.writer(), self.storage.clone());
+        let sender = postman.start();
+
+        // start all modules
+        let mut plugins = self.plugins;
+        for plugin in plugins.values_mut() {
+            plugin.start(sender.clone());
+        }
+
+        let plugins = Arc::new(plugins);
+
+        // handle all local generate traffic and push it to relay
+        let upstream = Upstream::new(sender.clone(), Arc::clone(&plugins), self.storage.clone());
+
+        // handle all received messages from the relay
+        let downstream = Downstream::new(sender.clone(), self.protocol, plugins, self.storage);
+
+        // start a processor for incoming message
+        tokio::spawn(downstream.start());
+
+        // we start this in this current routine to block the peer from exiting
+        // no need to spawn it in the back
+        upstream.start().await;
+    }
+}
+
+/// Upstream handle all local messages (requests and responses) from the storage and make
+/// sure they are handed over to the postman
+struct Upstream<R>
+where
+    R: Storage,
+{
+    up: Sender<Bag>,
+    storage: R,
+    plugins: Arc<Plugins>,
+}
+
+impl<R> Upstream<R>
+where
+    R: Storage,
+{
+    pub fn new(up: Sender<Bag>, plugins: Arc<Plugins>, storage: R) -> Self {
+        Self {
+            up,
+            storage,
+            plugins,
         }
     }
 
     // handle outgoing requests
-    async fn request(&self, request: JsonOutgoingRequest) -> Result<(), PeerError> {
-        // generate an id?
-        let uid = uuid::Uuid::new_v4().to_string();
-        let (backlog, envelopes, ttl) = request.parts()?;
-        self.storage
-            .track(&uid, ttl, backlog)
+    async fn request(&self, request: JsonOutgoingRequest) -> Result<()> {
+        // check if request is intended for a module
+        let request = match request.command.split_once('.') {
+            // no prefix
+            None => Some(request),
+            Some((prefix, _)) => match self.plugins.get(prefix) {
+                // there is a prefix that matches a module, feed request to module
+                Some(plugin) => plugin.local(request).await,
+                // no matching module
+                None => Some(request),
+            },
+        };
+
+        let request = match request {
+            Some(request) => request,
+            None => return Ok(()),
+        };
+
+        let (backlog, envelopes) = request.to_envelops()?;
+
+        self.up
+            .send(Bag::new(envelopes).backlog(backlog))
             .await
-            .context("failed to store message tracking information")?;
-
-        let mut errors: Vec<PeerError> = Vec::default();
-        for mut envelope in envelopes {
-            envelope.uid = uid.clone();
-
-            if let Err(err) = self.tweaks(&mut envelope).await {
-                errors.push(err);
-                continue;
-            }
-
-            self.sender.send(envelope).await?;
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(PeerError::MultiError(errors))
-        }
-    }
-
-    // handle outgoing requests (so sent by a client to the peer) but command is prefixed
-    // with `rmb.` which makes it internal command. rmb can then process this differently
-    // and send a reply back to caller.
-    async fn request_builtin(&self, request: JsonOutgoingRequest) -> Result<(), PeerError> {
-        Err(EnvelopeErrorKind::UnknownCommand(request.command).into())
+            .map_err(|_| anyhow::anyhow!("failed to deliver request message(s) to the postman"))
     }
 
     // handle outgoing responses
     async fn response(&self, response: JsonOutgoingResponse) -> Result<()> {
         // that's a reply message that is initiated locally and need to be
         // sent to a remote peer
-        let mut envelope: Envelope = response
+        let envelope: Envelope = response
             .try_into()
             .context("failed to build envelope from response")?;
 
-        self.tweaks(&mut envelope).await?;
-
-        self.sender.send(envelope).await
-    }
-
-    async fn tweaks(&self, envelope: &mut Envelope) -> Result<(), PeerError> {
-        let twin = self
-            .db
-            .get_twin(envelope.destination.twin)
-            .await?
-            .ok_or_else(|| PeerError::TwinNotFound(envelope.destination.twin))?;
-
-        envelope.federation = twin.relay;
-        // if the other peer supports e2e we
-        // also encrypt the message
-        if let Some(ref pk) = twin.pk {
-            log::trace!("encrypt message for: {}", twin.id);
-            match self
-                .sk
-                .encrypt(pk, envelope.plain())
-                .map_err(PeerError::E2E)
-            {
-                Ok(cipher) => {
-                    // if we managed to cipher the message
-                    // we set it as payload
-                    envelope.set_cipher(cipher);
-                }
-                Err(err) => {
-                    // otherwise, we clear up the payload
-                    // and set the error instead
-                    envelope.payload = None;
-                    let e = envelope.mut_error();
-                    e.code = err.code();
-                    e.message = err.to_string();
-                }
-            };
-        }
-
-        Ok(())
-    }
-
-    async fn reply_err(
-        &self,
-        err: PeerError,
-        reply_to: &str,
-        reference: Option<String>,
-    ) -> Result<()> {
-        // error here can be a "multi-error"
-        // in that case we need to send a full message
-        // for each error in that list
-        let errors = match err {
-            PeerError::MultiError(errors) => errors,
-            _ => vec![err],
-        };
-
-        for err in errors {
-            self.storage
-                .response(
-                    reply_to,
-                    JsonIncomingResponse {
-                        version: 1,
-                        reference: reference.clone(),
-                        data: String::default(),
-                        source: String::default(),
-                        schema: None,
-                        timestamp: 0,
-                        error: Some(err.into()),
-                    },
-                )
-                .await?;
-        }
-
-        Ok(())
+        self.up
+            .send(Bag::one(envelope))
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to deliver response message to the postman"))
     }
 
     pub async fn start(self) {
@@ -316,24 +173,8 @@ where
             };
 
             let result = match msg {
+                storage::JsonMessage::Request(request) => self.request(request).await,
                 storage::JsonMessage::Response(response) => self.response(response).await,
-                storage::JsonMessage::Request(request) => {
-                    let reply_to = request.reply_to.clone();
-                    let reference = request.reference.clone();
-
-                    let result = if request.command.starts_with("rmb.") {
-                        self.request_builtin(request).await
-                    } else {
-                        self.request(request).await
-                    };
-
-                    // failure to process the request then we can simply
-                    // push a response back directly to the client
-                    match result {
-                        Ok(_) => Ok(()),
-                        Err(err) => self.reply_err(err, &reply_to, reference).await,
-                    }
-                }
             };
 
             if let Err(err) = result {
@@ -343,80 +184,55 @@ where
     }
 }
 
-/// downstream is handler for the connection down stream
-/// so basically anything that is received from the server (relay)
-/// and making sure to validate and dispatch it as needed.
+/// Downstream takes care of reading all received messages
+/// then dispatch the received message based on type to either
+/// the right module or a response queue to be consumed by the local
+/// client that might be waiting for a response.
 struct Downstream<DB, S, G>
 where
     DB: TwinDB,
     S: Storage,
     G: Signer,
 {
-    sk: Pair,
-    db: DB,
+    up: Sender<Bag>,
+    reader: Protocol<DB, G>,
     storage: S,
-    sender: Sender<G>,
+    plugins: Arc<Plugins>,
 }
 
 impl<DB, S, G> Downstream<DB, S, G>
 where
-    DB: TwinDB,
+    DB: TwinDB + Clone,
     S: Storage,
     G: Signer,
 {
-    pub fn new(sk: Pair, db: DB, storage: S, sender: Sender<G>) -> Self {
+    pub fn new(
+        up: Sender<Bag>,
+        reader: Protocol<DB, G>,
+        plugins: Arc<Plugins>,
+        storage: S,
+    ) -> Self {
         Self {
-            sk,
-            db,
+            up,
+            reader,
             storage,
-            sender,
+            plugins,
         }
     }
 
-    fn parse(&self, msg: Message) -> Result<Envelope, PeerError> {
-        let bytes = match msg {
-            Message::Binary(bytes) => bytes,
-            _ => return Err(PeerError::InvalidMessage),
-        };
+    async fn request(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        log::trace!("received a request: {}", envelope.uid);
 
-        let envelope = Envelope::parse_from_bytes(&bytes)?;
-        Ok(envelope)
-    }
-
-    async fn handle_envelope(&self, mut envelope: Envelope) -> Result<(), PeerError> {
-        envelope.valid().map_err(EnvelopeErrorKind::Validation)?;
-
-        let twin = self
-            .db
-            .get_twin(envelope.source.twin)
+        let request: JsonIncomingRequest = envelope
+            .try_into()
+            .context("failed to get request from envelope")?;
+        self.storage
+            .request(request)
             .await
-            .map_err(EnvelopeErrorKind::GetTwin)?
-            .ok_or(EnvelopeErrorKind::UnknownTwin)?;
+            .map_err(ProtocolError::Other)
+    }
 
-        envelope
-            .verify(&twin.account)
-            .map_err(EnvelopeErrorKind::InvalidSignature)?;
-
-        if let Some(ref pk) = twin.pk {
-            if envelope.has_cipher() {
-                log::trace!("decrypt message from: {}", twin.id);
-                let plain = self.sk.decrypt(pk, envelope.cipher())?;
-                envelope.set_plain(plain);
-            }
-        }
-
-        if envelope.has_request() {
-            let request: JsonIncomingRequest = envelope
-                .try_into()
-                .context("failed to get request from envelope")?;
-            return self
-                .storage
-                .request(request)
-                .await
-                .map_err(EnvelopeErrorKind::Other)
-                .map_err(PeerError::Envelope);
-        }
-
+    async fn response(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
         log::trace!("received a response: {}", envelope.uid);
         // - get message from backlog
         // - fill back everything else from
@@ -435,6 +251,11 @@ where
             }
         };
 
+        if let Some(plugin) = self.plugins.get(&backlog.module) {
+            plugin.remote(Some(backlog), envelope).await;
+            return Ok(());
+        }
+
         let mut response: JsonIncomingResponse = envelope.try_into()?;
         // set the reference back to original value
         response.reference = backlog.reference;
@@ -446,94 +267,54 @@ where
         Ok(())
     }
 
+    async fn handle(&self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        log::trace!(
+            "received a message {} (req: {}, resp: {})",
+            envelope.uid,
+            envelope.has_request(),
+            envelope.has_response()
+        );
+
+        let req = envelope.request();
+        // is this for a module
+        if let Some((prefix, _)) = req.command.split_once('.') {
+            if let Some(plugin) = self.plugins.get(prefix) {
+                plugin.remote(None, envelope).await;
+                return Ok(());
+            }
+        }
+
+        // otherwise this can either be a request envelope
+        // for a local service
+        if envelope.has_request() {
+            return self.request(envelope).await;
+        }
+
+        self.response(envelope).await
+    }
+
     // handler for incoming envelopes from the relay
-    pub async fn start(self, mut reader: Connection) {
-        while let Some(input) = reader.read().await {
-            let envelope = match self.parse(input) {
-                Ok(env) => env,
-                Err(err) => {
-                    log::error!("error while loading received message: {:#}", err);
-                    continue;
-                }
-            };
+    pub async fn start(mut self) {
+        while let Some(envelope) = self.reader.read().await {
+            if let Err(err) = self.handle(&envelope).await {
+                // process error here if exists.
+                if envelope.has_request() {
+                    let mut reply = Envelope {
+                        uid: envelope.uid,
+                        tags: envelope.tags,
+                        destination: envelope.source,
+                        expiration: 300,
+                        ..Default::default()
+                    };
 
-            // we track these here in case we need to send an error
-            let is_request = envelope.has_request();
-            let uid = envelope.uid.clone();
-            let source = envelope.source.clone();
-            match self.handle_envelope(envelope).await {
-                Ok(_) => {}
-                Err(PeerError::Envelope(kind)) => {
-                    // while processing incoming envelope, error happened
-                    // but this error happened after the envelope has been
-                    // decoded, so we have enough information to actually send
-                    // back an error response.
-                    log::debug!("error while handling incoming message ({}): {}", uid, kind);
-                    if is_request {
-                        // only send handling error back in case of request
-                        // if this a response message or itself is an error
-                        // message do nothing.
-                        let mut e = MessageError::new();
-                        e.code = kind.code();
-                        e.message = kind.to_string();
+                    let e = reply.mut_error();
+                    e.message = err.to_string();
 
-                        let mut response = Envelope::new();
-                        response.set_error(e);
-                        response.uid = uid;
-                        response.destination = source;
-                        response.expiration = 300;
-
-                        if let Err(err) = self.sender.send(response).await {
-                            log::error!("failed to push error response back to caller: {:#}", err);
-                        }
+                    if let Err(err) = self.up.send(Bag::one(reply)).await {
+                        log::error!("failed to send error response to caller: {}", err);
                     }
                 }
-                Err(err) => log::error!("error while handling received message: {:#}", err),
             };
         }
-    }
-}
-
-#[derive(Clone)]
-struct Sender<S>
-where
-    S: Signer,
-{
-    writer: Writer,
-    source: Address,
-    signer: S,
-}
-
-impl<S> Sender<S>
-where
-    S: Signer + Clone,
-{
-    pub fn new(writer: Writer, source: Address, signer: S) -> Self {
-        Self {
-            writer,
-            source,
-            signer,
-        }
-    }
-
-    /// send an envelope, make sure to stamp, and sign the envelope
-    pub async fn send(&self, mut envelope: Envelope) -> Result<()> {
-        envelope.source = Some(self.source.clone()).into();
-        envelope.stamp();
-        envelope
-            .ttl()
-            .context("response has expired before sending!")?;
-        envelope.sign(&self.signer);
-        let bytes = envelope
-            .write_to_bytes()
-            .context("failed to serialize envelope")?;
-        log::trace!(
-            "pushing outgoing response: {} -> {:?}",
-            envelope.uid,
-            envelope.destination
-        );
-        self.writer.write(Message::Binary(bytes)).await?;
-
-        Ok(())
     }
 }

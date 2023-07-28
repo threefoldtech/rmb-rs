@@ -12,42 +12,42 @@ use url::Url;
 const PING_INTERVAL: Duration = Duration::from_secs(20);
 const READ_TIMEOUT: Duration = Duration::from_secs(40);
 
-pub struct Connection {
+pub struct Socket {
     rx: mpsc::Receiver<Message>,
     tx: mpsc::Sender<Message>,
 }
 
-impl Connection {
+impl Socket {
     pub async fn read(&mut self) -> Option<Message> {
         self.rx.recv().await
     }
 
-    pub fn writer(&self) -> Writer {
-        Writer {
+    pub fn writer(&self) -> SocketWriter {
+        SocketWriter {
             tx: self.tx.clone(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct Writer {
+pub struct SocketWriter {
     tx: mpsc::Sender<Message>,
 }
 
-impl Writer {
+impl SocketWriter {
     pub async fn write(&self, message: Message) -> Result<()> {
         self.tx.send(message).await?;
         Ok(())
     }
 }
 
-impl Connection {
+impl Socket {
     // creates a retained connection. means it will retry to connect on error .. forever
     // the problem is caller of the system can then only tell if there is a perminent error
     // by checking the logs. this is not very good
-    pub fn connect<U: Into<Url>, S>(u: U, id: u32, signer: S) -> Connection
+    pub fn connect<U: Into<Url>, S>(u: U, id: u32, signer: S) -> Socket
     where
-        S: Signer + Send + Sync + 'static,
+        S: Signer,
     {
         // to support auto reconnect we will run a connection loop in the
         // background. but we will return only reader and writer channels
@@ -60,7 +60,7 @@ impl Connection {
         let (up_tx, up_rx) = mpsc::channel::<Message>(1);
 
         // select both futures
-        let connection = Connection {
+        let connection = Socket {
             rx: down_rx,
             tx: up_tx,
         };
@@ -72,7 +72,7 @@ impl Connection {
         let pinger = connection.writer();
         tokio::spawn(async move {
             loop {
-                log::debug!("sending a ping");
+                log::trace!("sending a ping");
                 if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
                     log::error!("ping error: {}", err);
                 }
@@ -105,9 +105,9 @@ async fn retainer<S: Signer>(
         };
 
         let (mut write, read) = ws.split();
+        let mut read = read_stream(read);
         let mut last = Instant::now();
 
-        let mut read = read_stream(read);
         'receive: loop {
             // we check here when was the last time a message was received
             // from the relay. we expect to receive PONG answers (because we
@@ -144,7 +144,7 @@ async fn retainer<S: Signer>(
                     log::trace!("received a message from relay");
                     let message = match message {
                         Ok(Message::Pong(_)) => {
-                            log::debug!("received a pong");
+                            log::trace!("received a pong");
                             continue 'receive;
                         }
                         Ok(message) => message,

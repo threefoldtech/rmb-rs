@@ -19,7 +19,7 @@ pub trait Identity: Clone + Send + Sync {
     fn account(&self) -> AccountId32;
 }
 
-pub trait Signer: Identity {
+pub trait Signer: Identity + 'static {
     /// sign a message. the returned signature is a 64 bytes signature prefixed with
     /// one byte which indicates the type of the key.
     fn sign<M: AsRef<[u8]>>(&self, message: M) -> [u8; SIGNATURE_LENGTH];

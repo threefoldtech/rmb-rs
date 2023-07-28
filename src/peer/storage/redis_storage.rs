@@ -144,12 +144,13 @@ impl RedisStorage {
 
 #[async_trait]
 impl Storage for RedisStorage {
-    async fn track(&self, uid: &str, ttl: u64, backlog: Backlog) -> Result<()> {
+    async fn track(&self, backlog: &Backlog) -> Result<()> {
+        if backlog.uid.is_empty() {
+            anyhow::bail!("backlog has no uid");
+        }
         let mut conn = self.get_connection().await?;
-        let key = BacklogKey(uid);
-        conn.set_ex(&key, backlog, ttl as usize)
-            .await
-            .with_context(|| format!("failed to set message ttl to '{}'", ttl))?;
+        let key = BacklogKey(&backlog.uid);
+        conn.set_ex(&key, backlog, backlog.ttl as usize).await?;
 
         Ok(())
     }
