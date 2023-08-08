@@ -91,21 +91,42 @@ This allows you to compile Rust programs that can run on Linux systems that do n
   protoc --version  # Ensure compiler version is updated
   ```
 
+- Redis:
+  - Install Redis server using the apt package manager:
+    
+    ```bash
+    sudo apt update
+    sudo apt install redis-server
+    ```
+
+  - Configure Redis server by editing the `/etc/redis/redis.conf` file (optional)
+  - Enable Redis server to start automatically on boot:
+    
+    ```bash
+    sudo systemctl enable redis-server
+    ```
+
+  - Start Redis server using systemd:
+    
+    ```bash
+    sudo systemctl start redis-server
+    ```
+
 ### Building
 ```bash
 git clone git@github.com:threefoldtech/rmb-rs.git
 cd rmb-rs
 cargo build --release --target=x86_64-unknown-linux-musl
 ```
+### Troubleshooting
 
-If you encounter an error like the one below, it is likely that the `protoc` version installed by your package manager is too old.
-```bash
---- stderr
-  types.proto: This file contains proto3 optional fields, but --experimental_allow_proto3_optional was not set.
-  codegen failed: parse and typecheck
-```
-
-The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries. See perquisites.
+- If you encounter an error like the one below, it is likely that the `protoc` version installed by your package manager is too old.
+  ```bash
+  --- stderr
+    types.proto: This file contains proto3 optional fields, but --experimental_allow_proto3_optional was not set.
+    codegen failed: parse and typecheck
+  ```
+  **Solution**: The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries. See perquisites.
  
 ### Running tests
 While inside the repository
