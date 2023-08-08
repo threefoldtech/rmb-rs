@@ -23,22 +23,22 @@ Starting from this we came up with a more detailed requirements:
 - To support federation (using 3rd party relays) we needed to add e2e encryption to make sure messages that are surfing the public internet can't be sniffed
 - e2e encryption is done by deriving an encryption key from the same identity seed, and share the public key on `tfchain` hence it's available to everyone to use
 
-# Specification
+## Specification
 For details about protocol itself please check the [docs](docs/readme.md)
 
-# How to use
+## How to use
 There are many ways to use `rmb` because it was built for `bots` and software to communicate. Hence, there is no mobile app for it for example, but instead a set of libraries where you can use to connect to the network, make chitchats with other bots then exit.
 
 Or you can keep the connection forever to answer other bots requests if you are providing a service.
 
-## If there is a library in your preferred language
+### If there is a library in your preferred language
 Then you are in luck, follow the library documentations to implement a service bot, or to make requests to other bots.
 
-### known libraries
+#### known libraries
 - Golang [rmb-sdk-go](https://github.com/threefoldtech/rmb-sdk-go)
 - Typescript [rmb-sdk-ts](https://github.com/threefoldtech/rmb-sdk-ts)
 
-## Well, I am not that lucky
+### Well, I am not that lucky
 In that case:
 - Implement a library in your preferred language
 - If it's too much to do all the signing, verification, e2e in your language then use `rmb-peer`
@@ -54,17 +54,60 @@ Then it provide a simple (plain-text) api over `redis`. means to send messages (
 
 > More details about the structure of the messages are also in the [docs](docs/readme.md) page
 
-# Download
+## Download
 Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/releases) normally you only need the `rmb-peer` binary, unless you want to host your own relay.
 
-# Building
+## Build from source
+### Perquisites
+
+- download Rustup and install Rust, run the following in your terminal, then follow the on-screen instructions:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+- Install the standard library for the target `x86_64-unknown-linux-musl`, which is a Linux platform that uses the musl `libc` implementation instead of the `glibc` one.
+This allows you to compile Rust programs that can run on Linux systems that do not have glibc installed, or to create fully static binaries that do not depend on any shared libraries.
+
+  ```bash
+  rustup target add x86_64-unknown-linux-musl
+  ```
+
+- To use this target, you also need to install a linker that supports musl, such as `musl-gcc`.
+
+  ```bash
+  sudo apt update
+  sudo apt install musl-tools
+  ```
+
+  You can then pass the `--target=x86_64-unknown-linux-musl` option to `cargo build` or `cargo run` to compile and run your program for this target.
+
+- Install pre-compiled `protoc` binary to ensure that you’re using the latest release of protoc.
+
+  ```bash
+  PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+  curl -LO $PB_REL/download/v23.4/protoc-23.4-linux-x86_64.zip
+  sudo unzip -d /usr/local protoc-23.4-linux-x86_64.zip
+  protoc --version  # Ensure compiler version is updated
+  ```
+
+### Building
 ```bash
 git clone git@github.com:threefoldtech/rmb-rs.git
 cd rmb-rs
 cargo build --release --target=x86_64-unknown-linux-musl
 ```
 
-# Running tests
+If you encounter an error like the one below, it is likely that the `protoc` version installed by your package manager is too old.
+```bash
+--- stderr
+  types.proto: This file contains proto3 optional fields, but --experimental_allow_proto3_optional was not set.
+  codegen failed: parse and typecheck
+```
+
+The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries. See perquisites.
+ 
+### Running tests
 While inside the repository
 ```bash
 cargo test
