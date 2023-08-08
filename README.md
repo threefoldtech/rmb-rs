@@ -105,9 +105,8 @@ If you encounter an error like the one below, it is likely that the `protoc` ver
   codegen failed: parse and typecheck
 ```
 
-The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries.
-
-make sure to 
+The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries. see perquisites.
+ 
 ### Running tests
 While inside the repository
 ```bash
