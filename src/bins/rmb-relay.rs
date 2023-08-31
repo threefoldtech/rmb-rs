@@ -10,6 +10,7 @@ use rmb::relay::{
     limiter::{FixedWindowOptions, Limiters},
 };
 use rmb::twin::SubstrateTwinDB;
+use std::sync::Arc;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -28,8 +29,15 @@ struct Args {
     redis: String,
 
     /// substrate address please make sure the url also include the port number
-    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
-    substrate: String,
+    #[clap(
+        short,
+        long,
+        use_value_delimiter = true,
+        value_delimiter = ' ',
+        default_value = "wss://tfchain.grid.tf:443",
+        num_args = 1..,
+    )]
+    substrate: Vec<String>,
 
     /// number of switch users. Each worker maintains a single connection to
     /// redis used for waiting on user messages. hence this need to be sain value
@@ -131,7 +139,7 @@ async fn app(args: &Args) -> Result<()> {
     // we use 6 hours cache for twin information because twin id will not change anyway
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
-        &args.substrate,
+        Arc::new(args.substrate.clone()),
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await

@@ -3,6 +3,7 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
@@ -15,7 +16,7 @@ pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    url: String,
+    substrate_urls: Arc<Vec<String>>,
     client: Arc<Mutex<Client>>,
     cache: C,
 }
@@ -24,17 +25,21 @@ impl<C> SubstrateTwinDB<C>
 where
     C: Cache<Twin> + Clone,
 {
-    pub async fn new<S: Into<String>>(url: S, cache: C) -> Result<Self> {
-        let url = url.into();
-        let client = Self::connect(&url).await?;
+    pub async fn new(substrate_urls: Arc<Vec<String>>, cache: C) -> Result<Self> {
+        let client = Self::connect(substrate_urls.clone()).await?;
         Ok(Self {
-            url,
+            substrate_urls: substrate_urls.clone(),
             client: Arc::new(Mutex::new(client)),
             cache,
         })
     }
 
-    async fn connect(url: &str) -> Result<Client> {
+    async fn connect(urls: Arc<Vec<String>>) -> Result<Client> {
+        let url = urls
+            .choose(&mut rand::thread_rng())
+            .ok_or(ClientError::Other(String::from(
+                "failed to choose substrate url",
+            )))?;
         let client = Client::new(&url).await?;
         Ok(client)
     }
@@ -69,7 +74,7 @@ where
             match client.get_twin_by_id(twin_id).await {
                 Ok(twin) => break twin,
                 Err(ClientError::Rpc(_)) => {
-                    *client = Self::connect(&self.url).await?;
+                    *client = Self::connect(self.substrate_urls.clone()).await?;
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -93,7 +98,7 @@ where
             match client.get_twin_id_by_account(account_id.clone()).await {
                 Ok(twin) => break twin,
                 Err(ClientError::Rpc(_)) => {
-                    *client = Self::connect(&self.url).await?;
+                    *client = Self::connect(self.substrate_urls.clone()).await?;
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -115,10 +120,13 @@ mod tests {
     async fn test_get_twin_with_mem_cache() {
         let mem: MemCache<Twin> = MemCache::new();
 
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
-            .await
-            .context("cannot create substrate twin db object")
-            .unwrap();
+        let db = SubstrateTwinDB::new(
+            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
+            Some(mem.clone()),
+        )
+        .await
+        .context("cannot create substrate twin db object")
+        .unwrap();
 
         let twin = db
             .get_twin(1)
@@ -149,10 +157,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_no_cache() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
-            .await
-            .context("cannot create substrate twin db object")
-            .unwrap();
+        let db = SubstrateTwinDB::new(
+            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
+            NoCache,
+        )
+        .await
+        .context("cannot create substrate twin db object")
+        .unwrap();
 
         let twin = db
             .get_twin(1)
@@ -175,10 +186,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_id() {
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", NoCache)
-            .await
-            .context("cannot create substrate twin db object")
-            .unwrap();
+        let db = SubstrateTwinDB::new(
+            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
+            NoCache,
+        )
+        .await
+        .context("cannot create substrate twin db object")
+        .unwrap();
 
         let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
             .parse()

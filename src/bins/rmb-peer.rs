@@ -11,6 +11,7 @@ use rmb::peer::Pair;
 use rmb::peer::{self, storage::RedisStorage};
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
+use std::sync::Arc;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -51,8 +52,15 @@ struct Params {
     redis: String,
 
     /// substrate address please make sure the url also include the port number
-    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
-    substrate: String,
+    #[clap(
+        short,
+        long,
+        use_value_delimiter = true,
+        value_delimiter = ' ',
+        default_value = "wss://tfchain.grid.tf:443",
+        num_args = 1..,
+    )]
+    substrate: Vec<String>,
 
     /// substrate address please make sure the url also include the port number
     #[clap(long, default_value_t = String::from("wss://relay.grid.tf:443"))]
@@ -122,7 +130,7 @@ async fn app(args: Params) -> Result<()> {
     // cache is a little bit tricky because while it improves performance it
     // makes changes to twin data takes at least 5 min before they are detected
     let db = SubstrateTwinDB::<RedisCache>::new(
-        &args.substrate,
+        Arc::new(args.substrate),
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
