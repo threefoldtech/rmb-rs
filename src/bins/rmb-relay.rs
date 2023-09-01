@@ -10,7 +10,6 @@ use rmb::relay::{
     limiter::{FixedWindowOptions, Limiters},
 };
 use rmb::twin::SubstrateTwinDB;
-use std::sync::Arc;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -139,7 +138,7 @@ async fn app(args: &Args) -> Result<()> {
     // we use 6 hours cache for twin information because twin id will not change anyway
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
-        Arc::new(args.substrate.clone()),
+        args.substrate.clone(),
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await

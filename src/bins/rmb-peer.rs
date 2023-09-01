@@ -11,7 +11,6 @@ use rmb::peer::Pair;
 use rmb::peer::{self, storage::RedisStorage};
 use rmb::twin::{SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
-use std::sync::Arc;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -130,7 +129,7 @@ async fn app(args: Params) -> Result<()> {
     // cache is a little bit tricky because while it improves performance it
     // makes changes to twin data takes at least 5 min before they are detected
     let db = SubstrateTwinDB::<RedisCache>::new(
-        Arc::new(args.substrate),
+        args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await

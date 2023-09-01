@@ -3,7 +3,7 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
-use rand::seq::SliceRandom;
+use std::collections::LinkedList;
 use std::sync::Arc;
 use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
@@ -11,13 +11,16 @@ use tokio::sync::Mutex;
 
 use tfchain_client::client::{Client, KeyPair};
 
+struct ClientWrapper {
+    client: Client,
+    substrate_urls: LinkedList<String>,
+}
 #[derive(Clone)]
 pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    substrate_urls: Arc<Vec<String>>,
-    client: Arc<Mutex<Client>>,
+    client: Arc<Mutex<ClientWrapper>>,
     cache: C,
 }
 
@@ -25,23 +28,13 @@ impl<C> SubstrateTwinDB<C>
 where
     C: Cache<Twin> + Clone,
 {
-    pub async fn new(substrate_urls: Arc<Vec<String>>, cache: C) -> Result<Self> {
-        let client = Self::connect(substrate_urls.clone()).await?;
+    pub async fn new(substrate_urls: Vec<String>, cache: C) -> Result<Self> {
+        let client_wrapper = ClientWrapper::new(substrate_urls).await?;
+
         Ok(Self {
-            substrate_urls: substrate_urls.clone(),
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(client_wrapper)),
             cache,
         })
-    }
-
-    async fn connect(urls: Arc<Vec<String>>) -> Result<Client> {
-        let url = urls
-            .choose(&mut rand::thread_rng())
-            .ok_or(ClientError::Other(String::from(
-                "failed to choose substrate url",
-            )))?;
-        let client = Client::new(&url).await?;
-        Ok(client)
     }
 
     pub async fn update_twin(
@@ -51,9 +44,96 @@ where
         pk: Option<&[u8]>,
     ) -> Result<()> {
         let client = self.client.lock().await;
-        let hash = client.update_twin(kp, relay, pk).await?;
+        client.update_twin(kp, relay, pk).await?;
+        Ok(())
+    }
+}
+
+impl ClientWrapper {
+    pub async fn new(substrate_urls: Vec<String>) -> Result<Self> {
+        let mut urls = LinkedList::new();
+        for url in substrate_urls {
+            urls.push_back(url);
+        }
+
+        let client = Self::connect(&mut urls).await?;
+
+        return Ok(Self {
+            client,
+            substrate_urls: urls,
+        });
+    }
+
+    pub async fn connect(urls: &mut LinkedList<String>) -> Result<Client> {
+        let trials = urls.len() * 2;
+        for _ in 0..trials {
+            let url = match urls.front() {
+                Some(url) => url,
+                None => {
+                    // should never happen
+                    return Err(anyhow!("substrate urls list is empty"));
+                }
+            };
+
+            match Client::new(&url).await {
+                Ok(client) => return Ok(client),
+                Err(err) => {
+                    log::error!(
+                        "failed to create substrate client with url \"{}\": {}",
+                        url,
+                        err
+                    );
+                }
+            }
+
+            if let Some(front) = urls.pop_front() {
+                urls.push_back(front);
+            }
+        }
+
+        Err(anyhow!(
+            "failed to connect to substrate using the provided urls"
+        ))
+    }
+
+    pub async fn update_twin(
+        &self,
+        kp: &KeyPair,
+        relay: Option<String>,
+        pk: Option<&[u8]>,
+    ) -> Result<()> {
+        let hash = self.client.update_twin(kp, relay, pk).await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
+    }
+
+    pub async fn get_twin_by_id(&mut self, twin_id: u32) -> Result<Option<Twin>> {
+        let twin = loop {
+            match self.client.get_twin_by_id(twin_id).await {
+                Ok(twin) => break twin,
+                Err(ClientError::Rpc(_)) => {
+                    self.client = Self::connect(&mut self.substrate_urls).await?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+        .map(Twin::from);
+
+        Ok(twin)
+    }
+
+    pub async fn get_twin_id_by_account(&mut self, account_id: AccountId32) -> Result<Option<u32>> {
+        let id = loop {
+            match self.client.get_twin_id_by_account(account_id.clone()).await {
+                Ok(twin) => break twin,
+                Err(ClientError::Rpc(_)) => {
+                    self.client = Self::connect(&mut self.substrate_urls).await?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
+
+        Ok(id)
     }
 }
 
@@ -70,16 +150,7 @@ where
 
         let mut client = self.client.lock().await;
 
-        let twin = loop {
-            match client.get_twin_by_id(twin_id).await {
-                Ok(twin) => break twin,
-                Err(ClientError::Rpc(_)) => {
-                    *client = Self::connect(self.substrate_urls.clone()).await?;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-        .map(Twin::from);
+        let twin = client.get_twin_by_id(twin_id).await?;
 
         // but if we wanna hit the grid we get throttled by the workers pool
         // the pool has a limited size so only X queries can be in flight.
@@ -94,15 +165,7 @@ where
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
         let mut client = self.client.lock().await;
 
-        let id = loop {
-            match client.get_twin_id_by_account(account_id.clone()).await {
-                Ok(twin) => break twin,
-                Err(ClientError::Rpc(_)) => {
-                    *client = Self::connect(self.substrate_urls.clone()).await?;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        };
+        let id = client.get_twin_id_by_account(account_id).await?;
 
         Ok(id)
     }
@@ -121,7 +184,7 @@ mod tests {
         let mem: MemCache<Twin> = MemCache::new();
 
         let db = SubstrateTwinDB::new(
-            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
+            vec![String::from("wss://tfchain.dev.grid.tf:443")],
             Some(mem.clone()),
         )
         .await
@@ -157,13 +220,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_no_cache() {
-        let db = SubstrateTwinDB::new(
-            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
-            NoCache,
-        )
-        .await
-        .context("cannot create substrate twin db object")
-        .unwrap();
+        let db = SubstrateTwinDB::new(vec![String::from("wss://tfchain.dev.grid.tf:443")], NoCache)
+            .await
+            .context("cannot create substrate twin db object")
+            .unwrap();
 
         let twin = db
             .get_twin(1)
@@ -186,13 +246,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_id() {
-        let db = SubstrateTwinDB::new(
-            Arc::new(vec![String::from("wss://tfchain.dev.grid.tf:443")]),
-            NoCache,
-        )
-        .await
-        .context("cannot create substrate twin db object")
-        .unwrap();
+        let db = SubstrateTwinDB::new(vec![String::from("wss://tfchain.dev.grid.tf:443")], NoCache)
+            .await
+            .context("cannot create substrate twin db object")
+            .unwrap();
 
         let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
             .parse()
