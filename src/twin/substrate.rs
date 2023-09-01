@@ -263,4 +263,19 @@ mod tests {
 
         assert_eq!(Some(55), twin_id);
     }
+
+    #[tokio::test]
+    async fn test_multiple_substrate_urls() {
+        SubstrateTwinDB::new(
+            vec![
+                String::from("wss://invalid_substrate_url_1:443"),
+                String::from("wss://invalid_substrate_url_1:443"),
+                String::from("wss://tfchain.dev.grid.tf:443"),
+            ],
+            NoCache,
+        )
+        .await
+        .context("cannot create substrate twin db object")
+        .unwrap();
+    }
 }
