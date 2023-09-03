@@ -35,8 +35,12 @@ pub struct SocketWriter {
 }
 
 impl SocketWriter {
-    pub async fn write(&self, message: Message) -> Result<()> {
-        self.tx.send(message).await?;
+    pub async fn write(&self, message: Message, timeout: Option<Duration>) -> Result<()> {
+        if let Some(duration) = timeout {
+            self.tx.send_timeout(message, duration).await?;
+        } else {
+            self.tx.send(message).await?;
+        }
         Ok(())
     }
 }
@@ -73,7 +77,7 @@ impl Socket {
         tokio::spawn(async move {
             loop {
                 log::trace!("sending a ping");
-                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                if let Err(err) = pinger.write(Message::Ping(Vec::default()), None).await {
                     log::error!("ping error: {}", err);
                 }
                 tokio::time::sleep(PING_INTERVAL).await;
@@ -123,7 +127,7 @@ async fn retainer<S: Signer>(
 
             tokio::select! {
                 Some(message) = up_rx.recv() => {
-                    log::trace!("sending message to relay");
+                    log::trace!("sending message to relay {:?}", &u.domain());
                     if let Err(err) = write.send(message).await {
                         // probably connection closed as well, we need to renew!
                         log::error!("error while sending message: {}", err);
@@ -141,7 +145,7 @@ async fn retainer<S: Signer>(
 
                     // we take a note with when a message was received
                     last = Instant::now();
-                    log::trace!("received a message from relay");
+                    log::trace!("received a message from relay {:?}", &u.domain());
                     let message = match message {
                         Ok(Message::Pong(_)) => {
                             log::trace!("received a pong");

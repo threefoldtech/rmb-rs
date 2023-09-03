@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use super::e2e::{Error as CryptoError, Pair};
 use super::socket::{Socket, SocketWriter};
 use crate::types::Address;
@@ -7,7 +8,11 @@ use crate::{
     types::{Envelope, EnvelopeExt, ValidationError},
 };
 use anyhow::Context;
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use protobuf::Message as ProtoMessage;
+use tokio::time::{sleep, Duration};
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(thiserror::Error, Debug)]
@@ -89,7 +94,7 @@ where
     DB: TwinDB,
     S: Signer,
 {
-    inner: Socket,
+    inner: Arc<Mutex<Vec<Socket>>>,
     twins: DB,
     peer: Peer<S>,
 
@@ -101,16 +106,16 @@ where
     DB: TwinDB + Clone,
     S: Signer,
 {
-    pub fn new(socket: Socket, peer: Peer<S>, twins: DB) -> Self {
-        let writer = socket.writer();
+    pub fn new(sockets: Vec<Socket>, peer: Peer<S>, twins: DB) -> Self {
+        let writers = sockets.iter().map(|socket| socket.writer()).collect();
         let writer = Writer {
-            inner: writer,
+            inner: writers,
             identity: peer.clone(),
             twins: twins.clone(),
         };
 
         Self {
-            inner: socket,
+            inner: Arc::new(Mutex::new(sockets)),
             twins,
             peer,
             writer,
@@ -168,9 +173,14 @@ where
     }
 
     pub async fn read(&mut self) -> Option<Envelope> {
-        while let Some(msg) = self.inner.read().await {
+        let mut sockets = self.inner.lock().await;
+        let mut futures = FuturesUnordered::new();
+        for socket in sockets.iter_mut() {
+            futures.push(socket.read());
+        } 
+        while let Some(msg) = futures.select_next_some().await {
             let mut envelope = match self.parse(msg) {
-                Ok(env) => env,
+                Ok(env) => env.clone(),
                 Err(err) => {
                     // if parse failed there is nothing we can do except
                     // logging the error.
@@ -217,7 +227,7 @@ where
     DB: TwinDB,
     S: Signer,
 {
-    inner: SocketWriter,
+    inner: Vec<SocketWriter>,
     twins: DB,
     identity: Peer<S>,
 }
@@ -227,14 +237,13 @@ where
     DB: TwinDB,
     S: Signer,
 {
-    pub async fn write(&self, mut envelope: Envelope) -> Result<(), ProtocolError> {
+    pub async fn write(&mut self, mut envelope: Envelope) -> Result<(), ProtocolError> {
         let twin = self
             .twins
             .get_twin(envelope.destination.twin)
             .await?
             .ok_or_else(|| ProtocolError::UnknownTwin(envelope.destination.twin))?;
 
-        envelope.federation = twin.relay;
         // if the other peer supports e2e we
         // also encrypt the message
         if let Some(ref pk) = twin.pk {
@@ -280,8 +289,22 @@ where
             envelope.uid,
             envelope.destination
         );
-
-        self.inner.write(Message::Binary(bytes)).await?;
+        // we will keep trying all registered sockets till we succeed
+        for (index, socket) in self.inner.iter().enumerate().cycle() {
+            log::debug!("trying socket {} to send the message", index);
+            if socket.write(Message::Binary(bytes.clone()), Some(Duration::from_millis(500))).await.is_ok() {
+                log::debug!("using socket {} succeeded", index);
+                if index != 0 {
+                    self.inner.swap(index, 0);
+                }
+                break;
+            }
+            log::warn!("using socket {} failed", index);
+            // calm down after trying all sockets before repeating
+            if index == self.inner.len()-1 {
+                sleep(Duration::from_secs(1)).await;
+            }
+        }
 
         Ok(())
     }

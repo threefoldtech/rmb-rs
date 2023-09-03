@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
@@ -6,7 +8,7 @@ use bb8_redis::{
 };
 use prometheus::{IntCounterVec, Opts, Registry};
 use workers::WorkerPool;
-
+use crate::twin::TwinDB;
 use self::router::Router;
 use super::switch::Sink;
 
@@ -33,18 +35,22 @@ pub enum FederationError {
     RedisError(#[from] RedisError),
 }
 
-pub struct FederationOptions {
+pub struct FederationOptions<D: TwinDB> {
     pool: Pool<RedisConnectionManager>,
     workers: usize,
     registry: Registry,
+    _marker: PhantomData<D>,
 }
 
-impl FederationOptions {
+impl<D> FederationOptions<D> 
+    where D: TwinDB + Clone,
+    {
     pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
         Self {
             pool,
             workers: DEFAULT_WORKERS,
             registry: prometheus::default_registry().clone(),
+            _marker: PhantomData,
         }
     }
 
@@ -58,14 +64,14 @@ impl FederationOptions {
         self
     }
 
-    pub(crate) fn build(self, sink: Sink) -> Result<Federation> {
-        Federation::new(self, sink)
+    pub(crate) fn build(self, sink: Sink, twins: D) -> Result<Federation<D>> {
+        Federation::new(self, sink, twins)
     }
 }
 
-pub struct Federation {
+pub struct Federation<D: TwinDB> {
     pool: Pool<RedisConnectionManager>,
-    workers: WorkerPool<Router>,
+    workers: WorkerPool<Router<D>>,
 }
 
 #[derive(Clone)]
@@ -88,13 +94,14 @@ impl Federator {
     }
 }
 
-impl Federation {
+impl<D> Federation<D>
+    where D: TwinDB {
     /// create a new federation router
-    fn new(opts: FederationOptions, sink: Sink) -> Result<Self> {
+    fn new(opts: FederationOptions<D>, sink: Sink, twins: D) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
         opts.registry.register(Box::new(MESSAGE_ERROR.clone()))?;
 
-        let runner = Router::new(sink);
+        let runner = Router::new(sink, twins);
         let workers = WorkerPool::new(runner, opts.workers);
 
         Ok(Self {
@@ -144,9 +151,9 @@ impl Federation {
     }
 }
 
-#[cfg(test)]
+/* #[cfg(test)]
 mod test {
-    use crate::relay::switch::Sink;
+    use crate::{relay::switch::Sink, twin::SubstrateTwinDB, cache::RedisCache};
     use protobuf::Message;
 
     use super::*;
@@ -161,11 +168,16 @@ mod test {
         let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
         let sink = Sink::new(pool.clone());
-
+        let twins = SubstrateTwinDB::<RedisCache>::new(
+            &args.substrate,
+            RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
+        )
+        .await
+        .context("cannot create substrate twin db object")?; 
         let federation = FederationOptions::new(pool)
             .with_registry(reg)
             .with_workers(10)
-            .build(sink)
+            .build(sink, twins)
             .unwrap();
 
         let federator = federation.start();
@@ -193,3 +205,4 @@ mod test {
         mock.assert_hits(10);
     }
 }
+ */

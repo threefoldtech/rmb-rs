@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, Error};
 use clap::{builder::ArgAction, Args, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
@@ -54,9 +55,9 @@ struct Params {
     #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
     substrate: String,
 
-    /// substrate address please make sure the url also include the port number
-    #[clap(long, default_value_t = String::from("wss://relay.grid.tf:443"))]
-    relay: String,
+    /// set of relay Urls (max 3) please ensure url contain a domain
+    #[clap(long, num_args = 1..=3 , default_values = ["wss://relay.grid.tf:443"])]
+    relay: Vec<String>,
 
     /// enable debugging logs
     #[clap(short, long, action=ArgAction::Count)]
@@ -68,6 +69,29 @@ struct Params {
     // enable upload and save uploaded files in the given location
     // #[clap(short, long)]
     // upload: Option<String>,
+}
+
+// parses a &Vec<String> into a vec of Url, ensure domain part is not None
+fn parse_validate_relay_urls(input: &Vec<String>) -> Result<Vec<url::Url>, Error> {
+    let mut urls: Vec<url::Url> = Vec::new();
+
+    for s in input {
+        let u: url::Url = url::Url::parse(&s)?;
+        if u.domain() == None {
+            return Err(Error::msg("relay URL must contain a domain name"));
+        }
+        urls.push(u);
+    }
+
+    Ok(urls)
+}
+
+// maps a &Vec<url::Url> to a HashSet<String> that contains the domain name of each URL
+fn get_domains(urls: &Vec<url::Url>) -> HashSet<String> {
+    urls.iter()
+        .filter_map(|url| url.domain())
+        .map(|domain| domain.to_string())
+        .collect()
 }
 
 async fn app(args: Params) -> Result<()> {
@@ -134,7 +158,7 @@ async fn app(args: Params) -> Result<()> {
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
 
-    let relay_url: url::Url = args.relay.parse().context("failed to parse relay url")?;
+    let relays_urls: Vec<url::Url> = parse_validate_relay_urls(&args.relay).context("failed to parse relays urls")?;
 
     if !args.no_update {
         // try to check and update the twin info on chain
@@ -147,9 +171,11 @@ async fn app(args: Params) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
 
         log::debug!("twin relay domain: {:?}", twin.relay);
+        let onchain_relays: HashSet<String> = twin.relay.unwrap_or_default();
+        let provided_relays: HashSet<String> = get_domains(&relays_urls);
         // if twin relay or his pk don't match the ones that
         // should be there, we need to set the value on chain
-        if twin.relay.as_deref() != relay_url.domain()
+        if onchain_relays != provided_relays
             || !matches!(twin.pk, Some(ref pk) if pk == &pair.public())
         {
             // remote relay is not the same as configure one. update is needed
@@ -158,7 +184,7 @@ async fn app(args: Params) -> Result<()> {
             let pk = pair.public();
             db.update_twin(
                 &signer.pair(),
-                relay_url.domain().map(|d| d.to_owned()),
+                provided_relays,
                 Some(&pk),
             )
             .await
@@ -169,11 +195,10 @@ async fn app(args: Params) -> Result<()> {
     let storage = RedisStorage::builder(pool).build();
     log::info!("twin: {}", id);
 
-    let u = url::Url::parse(&args.relay)?;
     let peer = peer::Peer::new(id, signer, pair);
 
     //let upload_plugin = peer::plugins::Upload::new(storage.clone(), args.upload);
-    let mut app = peer::App::new(u, peer, db, storage);
+    let mut app = peer::App::new(relays_urls, peer, db, storage);
     app.plugin(peer::plugins::Rmb::default());
     //app.plugin(upload_plugin);
 

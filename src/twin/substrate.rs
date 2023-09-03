@@ -3,6 +3,8 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
+use itertools::Itertools;
+use std::collections::HashSet;
 use std::sync::Arc;
 use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
@@ -42,11 +44,11 @@ where
     pub async fn update_twin(
         &self,
         kp: &KeyPair,
-        relay: Option<String>,
+        relay: HashSet<String>,
         pk: Option<&[u8]>,
     ) -> Result<()> {
         let client = self.client.lock().await;
-        let hash = client.update_twin(kp, relay, pk).await?;
+        let hash = client.update_twin(kp, Some(relay.iter().join("_")), pk).await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
     }

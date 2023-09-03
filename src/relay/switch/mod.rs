@@ -322,7 +322,11 @@ where
 
         Ok(())
     }
-
+    
+    /* pub async fn is_local(&self, id: StreamID) -> bool {
+        return self.users.read().await.contains_key(&id);
+    } */
+    
     async fn worker(self, id: u32, nr: usize) {
         log::trace!("[{}] worker started", id);
         // a worker will wait for available registrations.

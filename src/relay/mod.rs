@@ -22,7 +22,7 @@ pub struct Relay<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
     domain: String,
-    federation: Federation,
+    federation: Federation<D>,
     limiter: R,
 }
 
@@ -35,11 +35,11 @@ where
         domain: S,
         twins: D,
         opt: SwitchOptions,
-        federation: FederationOptions,
+        federation: FederationOptions<D>,
         limiter: R,
     ) -> Result<Self> {
         let switch = opt.build().await?;
-        let federation = federation.build(switch.sink())?;
+        let federation = federation.build(switch.sink(), twins.clone())?;
         Ok(Self {
             switch: Arc::new(switch),
             twins,

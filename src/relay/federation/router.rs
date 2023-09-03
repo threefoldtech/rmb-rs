@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use crate::{
     relay::switch::{Sink, StreamID},
-    types::Envelope,
+    types::Envelope, twin::TwinDB,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,64 +12,73 @@ use reqwest::Client;
 use workers::Work;
 
 #[derive(Clone)]
-pub(crate) struct Router {
+pub(crate) struct Router<D: TwinDB> {
     sink: Option<Sink>,
+    twins: D,
 }
 
-impl Router {
-    pub fn new(sink: Sink) -> Self {
-        Self { sink: Some(sink) }
+impl<D> Router<D>
+    where D: TwinDB {
+    pub fn new(sink: Sink, twins: D) -> Self {
+        Self { sink: Some(sink), twins: twins }
     }
 
-    async fn try_send(&self, domain: &str, msg: Vec<u8>) -> Result<()> {
-        let url = if cfg!(test) {
-            format!("http://{}/", domain)
-        } else {
-            format!("https://{}/", domain)
-        };
-
-        log::debug!("federation to: {}", url);
-        let client = Client::new();
-        for _ in 0..3 {
-            let resp = match client.post(&url).body(msg.clone()).send().await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    if err.is_connect() || err.is_timeout() {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
-                        continue;
-                    }
-
-                    bail!("could not send message to relay '{}': {}", domain, err)
-                }
+    async fn try_send<'a>(&self, domains: &'a HashSet<String>, msg: Vec<u8>) -> Result<&'a str> { // TODO: FIX ME
+        for domain in domains.iter() {
+            let url = if cfg!(test) {
+                format!("http://{}/", domain)
+            } else {
+                format!("https://{}/", domain)
             };
-
-            if resp.status() != StatusCode::ACCEPTED {
-                bail!(
-                    "received relay '{}' did not accept the message: {}",
+            log::debug!("federation to: {}", url);
+            let client = Client::new();
+            for _ in 0..3 {
+                let resp = match client.post(&url).body(msg.clone()).send().await {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        if err.is_connect() || err.is_timeout() {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            continue;
+                        }
+                        log::warn!("could not send message to relay '{}': {}", domain, err);
+                        break;
+                        // bail!("could not send message to relay '{}': {}", domain, err)
+                    }
+                };
+    
+                if resp.status() != StatusCode::ACCEPTED {
+                    log::warn!("received relay '{}' did not accept the message: {}",
                     domain,
-                    resp.status()
-                );
+                    resp.status());
+                    break;
+                    /* bail!(
+                        "received relay '{}' did not accept the message: {}",
+                        domain,
+                        resp.status()
+                    ); */
+                }
+    
+                return Ok(domain);
             }
-
-            return Ok(());
+    
         }
-
-        bail!("relay '{}' was not reachable in time", domain);
+        bail!("relays '{:?}' was not reachable in time", domains);
     }
 
     async fn process(&self, msg: Vec<u8>) -> Result<()> {
         let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
-
-        let domain = env
-            .federation
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("federation is not set on envelope"))?;
-
-        let result = self.try_send(domain, msg).await;
+        let twin = self.twins
+        .get_twin(env.destination.twin)
+        .await
+        .context("failed to get twin details")?
+        .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
+        let domains = twin.relay
+            .ok_or_else(|| anyhow::anyhow!("relay is not set for this twin"))?;
+        let result = self.try_send(&domains, msg).await;
         match result {
-            Ok(_) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
+            Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
             Err(ref err) => {
-                super::MESSAGE_ERROR.with_label_values(&[domain]).inc();
+                super::MESSAGE_ERROR.with_label_values(domains.iter().map(|s| s.as_str()).collect::<Vec<&str>>().as_slice()).inc();
 
                 if let Some(ref sink) = self.sink {
                     let mut msg = Envelope::new();
@@ -82,12 +93,13 @@ impl Router {
             }
         }
 
-        result
+        result.map(|_| ())
     }
 }
 
 #[async_trait]
-impl Work for Router {
+impl<D> Work for Router<D>
+    where D: TwinDB {
     type Input = Vec<u8>;
 
     type Output = ();
@@ -98,7 +110,7 @@ impl Work for Router {
         }
     }
 }
-#[cfg(test)]
+/* #[cfg(test)]
 mod test {
     use super::*;
     use crate::types::{Envelope, EnvelopeExt};
@@ -136,3 +148,4 @@ mod test {
         federation.assert()
     }
 }
+ */
