@@ -3,12 +3,12 @@ syntax = "proto3";
 // A Request annotate this message as a request message
 // with proper command
 message Request {
-  reserved 2;
+  reserved 2, 11;
   string command = 1;
 }
 
 // A Response annotate this message as a response message
-message Response { reserved 1, 2; }
+message Response { reserved 1, 2, 11; }
 
 // A Error annotiate this message as an error message
 message Error {
@@ -61,12 +61,6 @@ message Envelope {
   // schema of the payload of either the request or the resposne message.
   optional string schema = 10;
 
-  // a federation url (domain)
-  // if not provided the relay assumes it's a local twin
-  // but if provided it can be checked against the relay
-  // domain, and hence decided if message need federation
-  // or local.
-  optional string federation = 11;
 
   // pyload of the message is interpreted differently based
   // on the message filed

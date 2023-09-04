@@ -288,7 +288,6 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             // if ping just change it to pong and send back
             envelope.set_pong(Pong::default());
             std::mem::swap(&mut envelope.source, &mut envelope.destination);
-            envelope.federation = None;
             let plain = envelope.mut_plain();
             plain.extend_from_slice("hello world".as_bytes());
             // override the serialized data
