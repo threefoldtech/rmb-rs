@@ -39,6 +39,7 @@ tokio-tungstenite = { version = "0.18.0", features = ["native-tls"] }
 futures-util = "0.3.25"
 jwt = "0.16"
 subxt = "0.28.0"
+itertools = "0.11"
 
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }
@@ -72,3 +73,4 @@ httpmock = "0.6"
 
 [features]
 tracker = []
+test = []
