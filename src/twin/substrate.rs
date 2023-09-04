@@ -11,10 +11,6 @@ use tokio::sync::Mutex;
 
 use tfchain_client::client::{Client, KeyPair};
 
-struct ClientWrapper {
-    client: Client,
-    substrate_urls: LinkedList<String>,
-}
 #[derive(Clone)]
 pub struct SubstrateTwinDB<C>
 where
@@ -47,6 +43,45 @@ where
         client.update_twin(kp, relay, pk).await?;
         Ok(())
     }
+}
+
+#[async_trait]
+impl<C> TwinDB for SubstrateTwinDB<C>
+where
+    C: Cache<Twin> + Clone,
+{
+    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>> {
+        // we can hit the cache as fast as we can here
+        if let Some(twin) = self.cache.get(twin_id).await? {
+            return Ok(Some(twin));
+        }
+
+        let mut client = self.client.lock().await;
+
+        let twin = client.get_twin_by_id(twin_id).await?;
+
+        // but if we wanna hit the grid we get throttled by the workers pool
+        // the pool has a limited size so only X queries can be in flight.
+
+        if let Some(ref twin) = twin {
+            self.cache.set(twin.id, twin.clone()).await?;
+        }
+
+        Ok(twin)
+    }
+
+    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
+        let mut client = self.client.lock().await;
+
+        let id = client.get_twin_id_by_account(account_id).await?;
+
+        Ok(id)
+    }
+}
+
+struct ClientWrapper {
+    client: Client,
+    substrate_urls: LinkedList<String>,
 }
 
 impl ClientWrapper {
@@ -132,40 +167,6 @@ impl ClientWrapper {
                 Err(err) => return Err(err.into()),
             }
         };
-
-        Ok(id)
-    }
-}
-
-#[async_trait]
-impl<C> TwinDB for SubstrateTwinDB<C>
-where
-    C: Cache<Twin> + Clone,
-{
-    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>> {
-        // we can hit the cache as fast as we can here
-        if let Some(twin) = self.cache.get(twin_id).await? {
-            return Ok(Some(twin));
-        }
-
-        let mut client = self.client.lock().await;
-
-        let twin = client.get_twin_by_id(twin_id).await?;
-
-        // but if we wanna hit the grid we get throttled by the workers pool
-        // the pool has a limited size so only X queries can be in flight.
-
-        if let Some(ref twin) = twin {
-            self.cache.set(twin.id, twin.clone()).await?;
-        }
-
-        Ok(twin)
-    }
-
-    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        let mut client = self.client.lock().await;
-
-        let id = client.get_twin_id_by_account(account_id).await?;
 
         Ok(id)
     }
