@@ -50,12 +50,10 @@ struct Params {
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
     redis: String,
 
-    /// substrate address please make sure the url also include the port number
+    /// substrate addresses please make sure the url also include the port number
     #[clap(
         short,
         long,
-        use_value_delimiter = true,
-        value_delimiter = ' ',
         default_value = "wss://tfchain.grid.tf:443",
         num_args = 1..,
     )]
