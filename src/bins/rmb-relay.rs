@@ -86,7 +86,7 @@ fn set_limits() -> Result<()> {
     Ok(())
 }
 
-async fn app(args: &Args) -> Result<()> {
+async fn app(args: Args) -> Result<()> {
     if args.workers == 0 {
         anyhow::bail!("number of workers cannot be zero");
     }
@@ -173,7 +173,7 @@ async fn app(args: &Args) -> Result<()> {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    if let Err(e) = app(&args).await {
+    if let Err(e) = app(args).await {
         eprintln!("{:#}", e);
         std::process::exit(1);
     }
