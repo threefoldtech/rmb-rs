@@ -210,7 +210,6 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         .status(http::StatusCode::ACCEPTED)
         .body(Body::empty())
         .map_err(HttpError::Http)
-    
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -310,7 +309,11 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
-        if !twin.relay.ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?.contains(&self.domain) {
+        if !twin
+            .relay
+            .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
+            .contains(&self.domain)
+        {
             log::debug!("got an foreign message");
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);

@@ -325,7 +325,6 @@ impl Challengeable for Envelope {
             write!(hash, "{}", schema)?;
         }
 
-
         match self.payload {
             None => {}
             Some(types::envelope::Payload::Plain(ref data)) => {

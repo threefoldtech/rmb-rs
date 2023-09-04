@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use super::e2e::{Error as CryptoError, Pair};
 use super::socket::{Socket, SocketWriter};
 use crate::types::Address;
@@ -8,11 +7,12 @@ use crate::{
     types::{Envelope, EnvelopeExt, ValidationError},
 };
 use anyhow::Context;
-use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use protobuf::Message as ProtoMessage;
-use tokio::time::{sleep, Duration};
+use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(thiserror::Error, Debug)]
@@ -177,7 +177,7 @@ where
         let mut futures = FuturesUnordered::new();
         for socket in sockets.iter_mut() {
             futures.push(socket.read());
-        } 
+        }
         while let Some(msg) = futures.select_next_some().await {
             let mut envelope = match self.parse(msg) {
                 Ok(env) => env.clone(),
@@ -292,7 +292,14 @@ where
         // we will keep trying all registered sockets till we succeed
         for (index, socket) in self.inner.iter().enumerate().cycle() {
             log::debug!("trying socket {} to send the message", index);
-            if socket.write(Message::Binary(bytes.clone()), Some(Duration::from_millis(500))).await.is_ok() {
+            if socket
+                .write(
+                    Message::Binary(bytes.clone()),
+                    Some(Duration::from_millis(500)),
+                )
+                .await
+                .is_ok()
+            {
                 log::debug!("using socket {} succeeded", index);
                 if index != 0 {
                     self.inner.swap(index, 0);
@@ -301,7 +308,7 @@ where
             }
             log::warn!("using socket {} failed", index);
             // calm down after trying all sockets before repeating
-            if index == self.inner.len()-1 {
+            if index == self.inner.len() - 1 {
                 sleep(Duration::from_secs(1)).await;
             }
         }

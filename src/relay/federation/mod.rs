@@ -1,5 +1,8 @@
 use std::marker::PhantomData;
 
+use self::router::Router;
+use super::switch::Sink;
+use crate::twin::TwinDB;
 use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
@@ -8,9 +11,6 @@ use bb8_redis::{
 };
 use prometheus::{IntCounterVec, Opts, Registry};
 use workers::WorkerPool;
-use crate::twin::TwinDB;
-use self::router::Router;
-use super::switch::Sink;
 
 mod router;
 
@@ -42,9 +42,10 @@ pub struct FederationOptions<D: TwinDB> {
     _marker: PhantomData<D>,
 }
 
-impl<D> FederationOptions<D> 
-    where D: TwinDB + Clone,
-    {
+impl<D> FederationOptions<D>
+where
+    D: TwinDB + Clone,
+{
     pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
         Self {
             pool,
@@ -95,7 +96,9 @@ impl Federator {
 }
 
 impl<D> Federation<D>
-    where D: TwinDB {
+where
+    D: TwinDB,
+{
     /// create a new federation router
     fn new(opts: FederationOptions<D>, sink: Sink, twins: D) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
@@ -173,7 +176,7 @@ mod test {
             RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
         )
         .await
-        .context("cannot create substrate twin db object")?; 
+        .context("cannot create substrate twin db object")?;
         let federation = FederationOptions::new(pool)
             .with_registry(reg)
             .with_workers(10)

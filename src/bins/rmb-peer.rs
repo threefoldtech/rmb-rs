@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result, Error};
+use anyhow::{Context, Error, Result};
 use clap::{builder::ArgAction, Args, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
@@ -158,7 +158,8 @@ async fn app(args: Params) -> Result<()> {
         .context("failed to get own twin id")?
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
 
-    let relays_urls: Vec<url::Url> = parse_validate_relay_urls(&args.relay).context("failed to parse relays urls")?;
+    let relays_urls: Vec<url::Url> =
+        parse_validate_relay_urls(&args.relay).context("failed to parse relays urls")?;
 
     if !args.no_update {
         // try to check and update the twin info on chain
@@ -182,13 +183,9 @@ async fn app(args: Params) -> Result<()> {
             log::info!("update twin details on the chain");
 
             let pk = pair.public();
-            db.update_twin(
-                &signer.pair(),
-                provided_relays,
-                Some(&pk),
-            )
-            .await
-            .context("failed to update twin information")?;
+            db.update_twin(&signer.pair(), provided_relays, Some(&pk))
+                .await
+                .context("failed to update twin information")?;
         }
     }
 

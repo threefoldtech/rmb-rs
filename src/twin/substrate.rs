@@ -48,7 +48,9 @@ where
         pk: Option<&[u8]>,
     ) -> Result<()> {
         let client = self.client.lock().await;
-        let hash = client.update_twin(kp, Some(relay.iter().join("_")), pk).await?;
+        let hash = client
+            .update_twin(kp, Some(relay.iter().join("_")), pk)
+            .await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
     }

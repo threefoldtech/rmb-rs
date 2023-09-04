@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use crate::{
     relay::switch::{Sink, StreamID},
-    types::Envelope, twin::TwinDB,
+    twin::TwinDB,
+    types::Envelope,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -18,12 +19,18 @@ pub(crate) struct Router<D: TwinDB> {
 }
 
 impl<D> Router<D>
-    where D: TwinDB {
+where
+    D: TwinDB,
+{
     pub fn new(sink: Sink, twins: D) -> Self {
-        Self { sink: Some(sink), twins: twins }
+        Self {
+            sink: Some(sink),
+            twins: twins,
+        }
     }
 
-    async fn try_send<'a>(&self, domains: &'a HashSet<String>, msg: Vec<u8>) -> Result<&'a str> { // TODO: FIX ME
+    async fn try_send<'a>(&self, domains: &'a HashSet<String>, msg: Vec<u8>) -> Result<&'a str> {
+        // TODO: FIX ME
         for domain in domains.iter() {
             let url = if cfg!(test) {
                 format!("http://{}/", domain)
@@ -45,11 +52,13 @@ impl<D> Router<D>
                         // bail!("could not send message to relay '{}': {}", domain, err)
                     }
                 };
-    
+
                 if resp.status() != StatusCode::ACCEPTED {
-                    log::warn!("received relay '{}' did not accept the message: {}",
-                    domain,
-                    resp.status());
+                    log::warn!(
+                        "received relay '{}' did not accept the message: {}",
+                        domain,
+                        resp.status()
+                    );
                     break;
                     /* bail!(
                         "received relay '{}' did not accept the message: {}",
@@ -57,28 +66,37 @@ impl<D> Router<D>
                         resp.status()
                     ); */
                 }
-    
+
                 return Ok(domain);
             }
-    
         }
         bail!("relays '{:?}' was not reachable in time", domains);
     }
 
     async fn process(&self, msg: Vec<u8>) -> Result<()> {
         let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
-        let twin = self.twins
-        .get_twin(env.destination.twin)
-        .await
-        .context("failed to get twin details")?
-        .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
-        let domains = twin.relay
+        let twin = self
+            .twins
+            .get_twin(env.destination.twin)
+            .await
+            .context("failed to get twin details")?
+            .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
+        let domains = twin
+            .relay
             .ok_or_else(|| anyhow::anyhow!("relay is not set for this twin"))?;
         let result = self.try_send(&domains, msg).await;
         match result {
             Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
             Err(ref err) => {
-                super::MESSAGE_ERROR.with_label_values(domains.iter().map(|s| s.as_str()).collect::<Vec<&str>>().as_slice()).inc();
+                super::MESSAGE_ERROR
+                    .with_label_values(
+                        domains
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<&str>>()
+                            .as_slice(),
+                    )
+                    .inc();
 
                 if let Some(ref sink) = self.sink {
                     let mut msg = Envelope::new();
@@ -99,7 +117,9 @@ impl<D> Router<D>
 
 #[async_trait]
 impl<D> Work for Router<D>
-    where D: TwinDB {
+where
+    D: TwinDB,
+{
     type Input = Vec<u8>;
 
     type Output = ();
