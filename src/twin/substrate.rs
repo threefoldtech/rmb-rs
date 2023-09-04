@@ -104,10 +104,7 @@ impl ClientWrapper {
         for _ in 0..trials {
             let url = match urls.front() {
                 Some(url) => url,
-                None => {
-                    // should never happen
-                    return Err(anyhow!("substrate urls list is empty"));
-                }
+                None => anyhow::bail!("substrate urls list is empty"),
             };
 
             match Client::new(&url).await {
@@ -126,9 +123,7 @@ impl ClientWrapper {
             }
         }
 
-        Err(anyhow!(
-            "failed to connect to substrate using the provided urls"
-        ))
+        anyhow::bail!("failed to connect to substrate using the provided urls")
     }
 
     pub async fn update_twin(
