@@ -58,10 +58,10 @@ impl ClientWrapper {
 
         let client = Self::connect(&mut urls).await?;
 
-        return Ok(Self {
+        Ok(Self {
             client,
             substrate_urls: urls,
-        });
+        })
     }
 
     pub async fn connect(urls: &mut LinkedList<String>) -> Result<Client> {
