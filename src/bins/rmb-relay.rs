@@ -136,7 +136,7 @@ async fn app(args: Args) -> Result<()> {
     // we use 6 hours cache for twin information because twin id will not change anyway
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
-        args.substrate.clone(),
+        args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
