@@ -39,7 +39,7 @@ where
         relay: Option<String>,
         pk: Option<&[u8]>,
     ) -> Result<()> {
-        let client = self.client.lock().await;
+        let mut client = self.client.lock().await;
         client.update_twin(kp, relay, pk).await?;
         Ok(())
     }
@@ -79,6 +79,10 @@ where
     }
 }
 
+/// ClientWrapper is basically a substrate client.
+/// all methods exported by the ClientWrapper has a reconnect functionality internally.
+/// so if any network error happened, the ClientWrapper will try to reconnect to substrate using the provided substrate urls.
+/// if after a number of trials (currently 2 * the number of urls) a reconnect was not successful, the ClientWrapper returns an error.
 struct ClientWrapper {
     client: Client,
     substrate_urls: LinkedList<String>,
@@ -99,7 +103,7 @@ impl ClientWrapper {
         })
     }
 
-    pub async fn connect(urls: &mut LinkedList<String>) -> Result<Client> {
+    async fn connect(urls: &mut LinkedList<String>) -> Result<Client> {
         let trials = urls.len() * 2;
         for _ in 0..trials {
             let url = match urls.front() {
@@ -127,13 +131,23 @@ impl ClientWrapper {
     }
 
     pub async fn update_twin(
-        &self,
+        &mut self,
         kp: &KeyPair,
         relay: Option<String>,
         pk: Option<&[u8]>,
     ) -> Result<()> {
-        let hash = self.client.update_twin(kp, relay, pk).await?;
+        let hash = loop {
+            match self.client.update_twin(kp, relay.clone(), pk).await {
+                Ok(hash) => break hash,
+                Err(ClientError::Rpc(_)) => {
+                    self.client = Self::connect(&mut self.substrate_urls).await?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
+
         log::debug!("hash: {:?}", hash);
+
         Ok(())
     }
 
