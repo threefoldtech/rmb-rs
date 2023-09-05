@@ -77,7 +77,7 @@ fn parse_validate_relay_urls(input: &Vec<String>) -> Result<Vec<url::Url>, Error
 
     for s in input {
         let u: url::Url = url::Url::parse(&s)?;
-        if u.domain() == None {
+        if u.domain().is_none() {
             return Err(Error::msg("relay URL must contain a domain name"));
         }
         urls.push(u);
