@@ -1,8 +1,7 @@
-use std::collections::HashSet;
-
 use crate::{
     relay::switch::{Sink, StreamID},
     twin::TwinDB,
+    twin::RelayDomains,
     types::Envelope,
 };
 use anyhow::{Context, Result};
@@ -29,7 +28,7 @@ where
         }
     }
 
-    async fn try_send<'a>(&self, domains: &'a HashSet<String>, msg: Vec<u8>) -> Result<&'a str> {
+    async fn try_send<'a>(&self, domains: &'a RelayDomains, msg: Vec<u8>) -> Result<&'a str> {
         // TODO: FIX ME
         for domain in domains.iter() {
             let url = if cfg!(test) {

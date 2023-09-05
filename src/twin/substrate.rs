@@ -1,3 +1,4 @@
+use super::RelayDomains;
 use super::Twin;
 use super::TwinDB;
 use crate::cache::Cache;
@@ -44,12 +45,12 @@ where
     pub async fn update_twin(
         &self,
         kp: &KeyPair,
-        relay: HashSet<String>,
+        relay: RelayDomains,
         pk: Option<&[u8]>,
     ) -> Result<()> {
         let client = self.client.lock().await;
         let hash = client
-            .update_twin(kp, Some(relay.iter().join("_")), pk)
+            .update_twin(kp, Some(relay.to_string()), pk)
             .await?;
         log::debug!("hash: {:?}", hash);
         Ok(())

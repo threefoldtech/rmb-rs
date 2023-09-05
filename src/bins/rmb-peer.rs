@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -10,7 +9,7 @@ use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
 use rmb::peer::Pair;
 use rmb::peer::{self, storage::RedisStorage};
-use rmb::twin::{SubstrateTwinDB, TwinDB};
+use rmb::twin::{SubstrateTwinDB, TwinDB, RelayDomains};
 use rmb::{identity, redis};
 
 /// A peer requires only which rely to connect to, and
@@ -87,11 +86,12 @@ fn parse_urls(input: &[String]) -> Result<Vec<url::Url>> {
 }
 
 // maps a &Vec<url::Url> to a HashSet<String> that contains the domain name of each URL
-fn get_domains(urls: &[url::Url]) -> HashSet<String> {
-    urls.iter()
+fn get_domains(urls: &[url::Url]) -> RelayDomains {
+    let h = urls.iter()
         .filter_map(|url| url.domain())
         .map(|domain| domain.to_string())
-        .collect()
+        .collect::<Vec<_>>();
+    RelayDomains::new(&h)
 }
 
 async fn app(args: Params) -> Result<()> {
@@ -172,8 +172,8 @@ async fn app(args: Params) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
 
         log::debug!("twin relay domain: {:?}", twin.relay);
-        let onchain_relays: HashSet<String> = twin.relay.unwrap_or_default();
-        let provided_relays: HashSet<String> = get_domains(&relays_urls);
+        let onchain_relays = twin.relay.unwrap_or_default();
+        let provided_relays = get_domains(&relays_urls);
         // if twin relay or his pk don't match the ones that
         // should be there, we need to set the value on chain
         if onchain_relays != provided_relays

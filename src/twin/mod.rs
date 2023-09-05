@@ -3,7 +3,7 @@ mod substrate;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::{Display, Formatter}, str::FromStr};
 pub use substrate::*;
 use subxt::utils::AccountId32;
 
@@ -19,7 +19,7 @@ use tfchain_client::client::Twin as TwinData;
 pub struct Twin {
     pub id: u32,
     pub account: AccountId32,
-    pub relay: Option<HashSet<String>>,
+    pub relay: Option<RelayDomains>,
     pub pk: Option<Vec<u8>>,
 }
 
@@ -30,9 +30,47 @@ impl From<TwinData> for Twin {
             account: twin.account_id,
             relay: twin.relay.map(|v| {
                 let string: String = String::from_utf8_lossy(&v.0).into();
-                string.split('_').map(|s| s.to_string()).collect()
+                RelayDomains::from_str(&string).unwrap_or_default()
             }),
             pk: twin.pk.map(|v| v.0),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq)]
+pub struct RelayDomains(HashSet<String>);
+
+impl FromStr for RelayDomains {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let set = s.split('_')
+            .map(|s| s.to_string())
+            .collect::<HashSet<String>>();
+        Ok(RelayDomains(set))
+    }
+}
+
+impl Display for RelayDomains {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = self.0.iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join("_");
+        write!(f, "{}", s)
+    }
+}
+
+impl RelayDomains {
+    pub fn new(inner: &[String]) -> Self {
+        Self (inner.iter().cloned().collect())
+    }
+
+    pub fn contains(&self, domain: &str) -> bool {
+        self.0.contains(domain)
+    }
+
+    pub fn iter(&self) -> std::collections::hash_set::Iter<String> {
+        self.0.iter()
     }
 }
