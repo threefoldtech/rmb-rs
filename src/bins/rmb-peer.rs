@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Args, Parser};
 use rmb::cache::RedisCache;
 use rmb::identity::KeyType;
@@ -72,13 +72,13 @@ struct Params {
 }
 
 // parses a &Vec<String> into a vec of Url, ensure domain part is not None
-fn parse_validate_relay_urls(input: &Vec<String>) -> Result<Vec<url::Url>, Error> {
+fn parse_urls(input: &[String]) -> Result<Vec<url::Url>> {
     let mut urls: Vec<url::Url> = Vec::new();
 
     for s in input {
         let u: url::Url = url::Url::parse(&s)?;
         if u.domain().is_none() {
-            return Err(Error::msg("relay URL must contain a domain name"));
+            anyhow::bail!("relay URL must contain a domain name");
         }
         urls.push(u);
     }
@@ -87,7 +87,7 @@ fn parse_validate_relay_urls(input: &Vec<String>) -> Result<Vec<url::Url>, Error
 }
 
 // maps a &Vec<url::Url> to a HashSet<String> that contains the domain name of each URL
-fn get_domains(urls: &Vec<url::Url>) -> HashSet<String> {
+fn get_domains(urls: &[url::Url]) -> HashSet<String> {
     urls.iter()
         .filter_map(|url| url.domain())
         .map(|domain| domain.to_string())
@@ -159,7 +159,7 @@ async fn app(args: Params) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no twin found on this network with given key"))?;
 
     let relays_urls: Vec<url::Url> =
-        parse_validate_relay_urls(&args.relay).context("failed to parse relays urls")?;
+        parse_urls(&args.relay).context("failed to parse relays urls")?;
 
     if !args.no_update {
         // try to check and update the twin info on chain
