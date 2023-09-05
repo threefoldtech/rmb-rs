@@ -4,8 +4,6 @@ use super::TwinDB;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
-use itertools::Itertools;
-use std::collections::HashSet;
 use std::sync::Arc;
 use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
@@ -49,9 +47,7 @@ where
         pk: Option<&[u8]>,
     ) -> Result<()> {
         let client = self.client.lock().await;
-        let hash = client
-            .update_twin(kp, Some(relay.to_string()), pk)
-            .await?;
+        let hash = client.update_twin(kp, Some(relay.to_string()), pk).await?;
         log::debug!("hash: {:?}", hash);
         Ok(())
     }

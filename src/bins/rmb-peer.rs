@@ -9,7 +9,7 @@ use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
 use rmb::peer::Pair;
 use rmb::peer::{self, storage::RedisStorage};
-use rmb::twin::{SubstrateTwinDB, TwinDB, RelayDomains};
+use rmb::twin::{RelayDomains, SubstrateTwinDB, TwinDB};
 use rmb::{identity, redis};
 
 /// A peer requires only which rely to connect to, and
@@ -87,7 +87,8 @@ fn parse_urls(input: &[String]) -> Result<Vec<url::Url>> {
 
 // maps a &Vec<url::Url> to a HashSet<String> that contains the domain name of each URL
 fn get_domains(urls: &[url::Url]) -> RelayDomains {
-    let h = urls.iter()
+    let h = urls
+        .iter()
         .filter_map(|url| url.domain())
         .map(|domain| domain.to_string())
         .collect::<Vec<_>>();

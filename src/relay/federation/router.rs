@@ -1,7 +1,7 @@
 use crate::{
     relay::switch::{Sink, StreamID},
-    twin::TwinDB,
     twin::RelayDomains,
+    twin::TwinDB,
     types::Envelope,
 };
 use anyhow::{Context, Result};
@@ -30,15 +30,15 @@ where
 
     async fn try_send<'a>(&self, domains: &'a RelayDomains, msg: Vec<u8>) -> Result<&'a str> {
         // TODO: FIX ME
-        for domain in domains.iter() {
-            let url = if cfg!(test) {
-                format!("http://{}/", domain)
-            } else {
-                format!("https://{}/", domain)
-            };
-            log::debug!("federation to: {}", url);
-            let client = Client::new();
-            for _ in 0..3 {
+        for _ in 0..3 {
+            for domain in domains.iter() {
+                let url = if cfg!(test) {
+                    format!("http://{}/", domain)
+                } else {
+                    format!("https://{}/", domain)
+                };
+                log::debug!("federation to: {}", url);
+                let client = Client::new();
                 let resp = match client.post(&url).body(msg.clone()).send().await {
                     Ok(resp) => resp,
                     Err(err) => {

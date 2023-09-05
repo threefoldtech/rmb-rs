@@ -3,7 +3,11 @@ mod substrate;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fmt::{Display, Formatter}, str::FromStr};
+use std::{
+    collections::HashSet,
+    fmt::{Display, Formatter},
+    str::FromStr,
+};
 pub use substrate::*;
 use subxt::utils::AccountId32;
 
@@ -44,7 +48,8 @@ impl FromStr for RelayDomains {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let set = s.split('_')
+        let set = s
+            .split('_')
             .map(|s| s.to_string())
             .collect::<HashSet<String>>();
         Ok(RelayDomains(set))
@@ -53,7 +58,9 @@ impl FromStr for RelayDomains {
 
 impl Display for RelayDomains {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = self.0.iter()
+        let s = self
+            .0
+            .iter()
             .map(|t| t.to_string())
             .collect::<Vec<_>>()
             .join("_");
@@ -63,7 +70,7 @@ impl Display for RelayDomains {
 
 impl RelayDomains {
     pub fn new(inner: &[String]) -> Self {
-        Self (inner.iter().cloned().collect())
+        Self(inner.iter().cloned().collect())
     }
 
     pub fn contains(&self, domain: &str) -> bool {
