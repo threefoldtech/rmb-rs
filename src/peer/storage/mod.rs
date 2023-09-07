@@ -78,7 +78,12 @@ impl Iterator for EnvIter {
             env
         })
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.destinations.size_hint()
+    }
 }
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsonError {
     pub code: u32,
