@@ -161,13 +161,16 @@ async fn app(args: Params) -> Result<()> {
             log::info!("update twin details on the chain");
 
             let pk = pair.public();
-            db.update_twin(
-                &signer.pair(),
-                relay_url.domain().map(|d| d.to_owned()),
-                Some(&pk),
-            )
-            .await
-            .context("failed to update twin information")?;
+            let hash = db
+                .update_twin(
+                    &signer.pair(),
+                    relay_url.domain().map(|d| d.to_owned()),
+                    Some(&pk),
+                )
+                .await
+                .context("failed to update twin information")?;
+
+            log::debug!("hash: {:?}", hash);
         }
     }
 

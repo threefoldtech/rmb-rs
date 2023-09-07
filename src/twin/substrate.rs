@@ -9,7 +9,7 @@ use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
 use tokio::sync::Mutex;
 
-use tfchain_client::client::{Client, KeyPair};
+use tfchain_client::client::{Client, Hash, KeyPair};
 
 #[derive(Clone)]
 pub struct SubstrateTwinDB<C>
@@ -38,10 +38,10 @@ where
         kp: &KeyPair,
         relay: Option<String>,
         pk: Option<&[u8]>,
-    ) -> Result<()> {
+    ) -> Result<Hash> {
         let mut client = self.client.lock().await;
-        client.update_twin(kp, relay, pk).await?;
-        Ok(())
+        let hash = client.update_twin(kp, relay, pk).await?;
+        Ok(hash)
     }
 }
 
@@ -135,7 +135,7 @@ impl ClientWrapper {
         kp: &KeyPair,
         relay: Option<String>,
         pk: Option<&[u8]>,
-    ) -> Result<()> {
+    ) -> Result<Hash> {
         let hash = loop {
             match self.client.update_twin(kp, relay.clone(), pk).await {
                 Ok(hash) => break hash,
@@ -146,9 +146,7 @@ impl ClientWrapper {
             }
         };
 
-        log::debug!("hash: {:?}", hash);
-
-        Ok(())
+        Ok(hash)
     }
 
     pub async fn get_twin_by_id(&mut self, twin_id: u32) -> Result<Option<Twin>> {
