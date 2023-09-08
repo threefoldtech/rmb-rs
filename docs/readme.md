@@ -206,3 +206,18 @@ Currently there are two implementations of the rate limiter:
 
 - `NoLimit` which imposes no limits on users.
 - `FixedWindowLimiter` which breaks the timeline into fixed time windows, and allows a twin to send a fixed number of messages, with a fixed total size, in each time window. If a twin exceeded their limits in some time window, their message is dropped, an error message is sent back to the user, the relay dumps a log about this twin, and the user gets to keep their connection with the relay.
+
+## Substrate connections
+
+To make the relay and peer more reliable, the substrate client accepts multiple substrate urls.
+> To provide multiple urls use the `--substrate <url>` command line argument multiple times.
+
+Example:
+
+```bash
+  rmb-peer --substrate wss://tfchain.grid.tf:443 --substrate wss://02.tfchain.grid.tf:443 --substrate wss://03.tfchain.grid.tf:443
+```
+
+It's important to note the only one substrate client is held at a time, and the other urls are only used in the case of a network failure.\
+This way, if a substrate connection failed, other urls are used to try to connect to substrate.\
+The client uses iterates between urls in a Round Robin fashion, and tries to reconnect. If a specified number of trials is done (currently 2x the number of urls) and none of them was successful, the client fails and returns and error.

@@ -27,9 +27,14 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
     redis: String,
 
-    /// substrate address please make sure the url also include the port number
-    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
-    substrate: String,
+    /// substrate addresses please make sure the url also include the port number
+    #[clap(
+        short,
+        long,
+        default_value = "wss://tfchain.grid.tf:443",
+        num_args = 1..,
+    )]
+    substrate: Vec<String>,
 
     /// number of switch users. Each worker maintains a single connection to
     /// redis used for waiting on user messages. hence this need to be sain value
@@ -81,7 +86,7 @@ fn set_limits() -> Result<()> {
     Ok(())
 }
 
-async fn app(args: &Args) -> Result<()> {
+async fn app(args: Args) -> Result<()> {
     if args.workers == 0 {
         anyhow::bail!("number of workers cannot be zero");
     }
@@ -131,7 +136,7 @@ async fn app(args: &Args) -> Result<()> {
     // we use 6 hours cache for twin information because twin id will not change anyway
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
-        &args.substrate,
+        args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
@@ -168,7 +173,7 @@ async fn app(args: &Args) -> Result<()> {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    if let Err(e) = app(&args).await {
+    if let Err(e) = app(args).await {
         eprintln!("{:#}", e);
         std::process::exit(1);
     }
