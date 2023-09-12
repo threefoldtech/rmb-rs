@@ -20,6 +20,7 @@ impl RelayStats {
         }
     }
 
+    /// Keep only the failures that happened during the specified recent period.
     fn _clean(&mut self, retain: Duration) {
         let count = self.failure_times.len();
         self.failure_times.retain(|t| {
@@ -30,12 +31,13 @@ impl RelayStats {
         });
         log::trace!("cleaning {:?} entires", count - &self.failure_times.len());
     }
-
+ 
     fn add_failure(&mut self, retain: Duration) {
         self.failure_times.push(SystemTime::now());
         self._clean(retain);
     }
 
+    /// Return the count of the failures that happened during the specified recent period.
     fn failures_last(&self, period: Duration) -> Result<usize> {
         let mut count = 0;
         for failure_time in &self.failure_times {
@@ -51,6 +53,7 @@ impl RelayStats {
         Ok(&self.failure_times.len() - count)
     }
 
+    /// Return the mean failure rate per hour based on the known failures happened during the specified recent period.
     fn mean_failure_rate(&self, period: Duration) -> Result<f64> {
         let failures = self.failures_last(period)?;
 
@@ -63,20 +66,21 @@ impl RelayStats {
 
 #[derive(Debug, Clone)]
 pub struct RelayRanker {
-    domain_stats: Arc<Mutex<RefCell<HashMap<String, RelayStats>>>>,
+    relay_stats: Arc<Mutex<RefCell<HashMap<String, RelayStats>>>>,
     max_duration: Duration,
 }
 
 impl RelayRanker {
     pub fn new(retain: Duration) -> RelayRanker {
         RelayRanker {
-            domain_stats: Arc::new(Mutex::new(RefCell::new(HashMap::new()))),
+            relay_stats: Arc::new(Mutex::new(RefCell::new(HashMap::new()))),
             max_duration: retain,
         }
     }
 
+    /// report a service failure to the ranker
     pub fn downvote(&self, domain: impl Into<String>) -> Result<()> {
-        let guard = match self.domain_stats.lock() {
+        let guard = match self.relay_stats.lock() {
             Ok(guard) => guard,
             Err(_) => return Err(anyhow::anyhow!("failed to acquire lock")),
         };
@@ -86,8 +90,13 @@ impl RelayRanker {
         Ok(())
     }
 
+    /// Sort the domains of relays in ascending order based on their recent failure rate.
+    /// 
+    /// The ranking of relays is determined by the number of failures that occur during a specified period of time.
+    /// This ensures that the affected relay’s rank will improve over time, and messages will be routed to it again if the service recovers.
+    /// If multiple relays have the same failure rate, their order will be randomized
     pub fn reorder(&self, domains: &mut Vec<&str>) -> Result<()> {
-        let guard = match self.domain_stats.lock() {
+        let guard = match self.relay_stats.lock() {
             Ok(guard) => guard,
             Err(_) => return Err(anyhow::anyhow!("failed to acquire lock")),
         };
@@ -158,7 +167,7 @@ mod tests {
 
         let _ = ranking_system.downvote("bing.com");
 
-        let binding = ranking_system.domain_stats.lock().unwrap();
+        let binding = ranking_system.relay_stats.lock().unwrap();
         let mut inner = binding.borrow_mut();
         let ds = inner.get_mut("bing.com").unwrap();
         if let Some(first) = ds.failure_times.get_mut(0) {
