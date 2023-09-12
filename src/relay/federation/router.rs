@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::{
-    relay::federation::ranker::{RelayRanker, HOUR},
+    relay::ranker::RelayRanker,
     relay::switch::{Sink, StreamID},
     twin::TwinDB,
     types::Envelope,
@@ -24,11 +24,11 @@ impl<D> Router<D>
 where
     D: TwinDB,
 {
-    pub fn new(sink: Sink, twins: D) -> Self {
+    pub fn new(sink: Sink, twins: D, ranker: RelayRanker) -> Self {
         Self {
             sink: Some(sink),
             twins: twins,
-            ranker: RelayRanker::new(HOUR),
+            ranker,
         }
     }
 

@@ -11,12 +11,14 @@ mod federation;
 pub mod limiter;
 mod switch;
 use self::limiter::RateLimiter;
+use self::ranker::RelayRanker;
 use api::RelayHook;
 use federation::Federation;
 pub use federation::FederationOptions;
 use std::sync::Arc;
 use switch::Switch;
 pub use switch::SwitchOptions;
+pub mod ranker;
 
 pub struct Relay<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
@@ -37,9 +39,10 @@ where
         opt: SwitchOptions,
         federation: FederationOptions<D>,
         limiter: R,
+        ranker: RelayRanker,
     ) -> Result<Self> {
         let switch = opt.build().await?;
-        let federation = federation.build(switch.sink(), twins.clone())?;
+        let federation = federation.build(switch.sink(), twins.clone(), ranker)?;
         Ok(Self {
             switch: Arc::new(switch),
             twins,

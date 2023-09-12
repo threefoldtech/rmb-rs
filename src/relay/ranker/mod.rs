@@ -31,7 +31,7 @@ impl RelayStats {
         });
         log::trace!("cleaning {:?} entires", count - &self.failure_times.len());
     }
- 
+
     fn add_failure(&mut self, retain: Duration) {
         self.failure_times.push(SystemTime::now());
         self._clean(retain);
@@ -91,7 +91,7 @@ impl RelayRanker {
     }
 
     /// Sort the domains of relays in ascending order based on their recent failure rate.
-    /// 
+    ///
     /// The ranking of relays is determined by the number of failures that occur during a specified period of time.
     /// This ensures that the affected relay’s rank will improve over time, and messages will be routed to it again if the service recovers.
     /// If multiple relays have the same failure rate, their order will be randomized

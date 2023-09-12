@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use self::router::Router;
-use super::switch::Sink;
+use super::{ranker::RelayRanker, switch::Sink};
 use crate::twin::TwinDB;
 use anyhow::Result;
 use bb8_redis::{
@@ -12,7 +12,6 @@ use bb8_redis::{
 use prometheus::{IntCounterVec, Opts, Registry};
 use workers::WorkerPool;
 
-pub mod ranker;
 mod router;
 
 lazy_static::lazy_static! {
@@ -66,8 +65,8 @@ where
         self
     }
 
-    pub(crate) fn build(self, sink: Sink, twins: D) -> Result<Federation<D>> {
-        Federation::new(self, sink, twins)
+    pub(crate) fn build(self, sink: Sink, twins: D, ranker: RelayRanker) -> Result<Federation<D>> {
+        Federation::new(self, sink, twins, ranker)
     }
 }
 
@@ -101,11 +100,11 @@ where
     D: TwinDB,
 {
     /// create a new federation router
-    fn new(opts: FederationOptions<D>, sink: Sink, twins: D) -> Result<Self> {
+    fn new(opts: FederationOptions<D>, sink: Sink, twins: D, ranker: RelayRanker) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
         opts.registry.register(Box::new(MESSAGE_ERROR.clone()))?;
 
-        let runner = Router::new(sink, twins);
+        let runner = Router::new(sink, twins, ranker);
         let workers = WorkerPool::new(runner, opts.workers);
 
         Ok(Self {
