@@ -29,7 +29,7 @@ impl RelayStats {
                 retain.saturating_add(Duration::from_secs(1))
             }) < retain
         });
-        log::trace!("cleaning {:?} entires", count - &self.failure_times.len());
+        log::trace!("cleaning {:?} entires", count - self.failure_times.len());
     }
 
     fn add_failure(&mut self, retain: Duration) {
@@ -50,7 +50,7 @@ impl RelayStats {
             }
             count += 1;
         }
-        Ok(&self.failure_times.len() - count)
+        Ok(self.failure_times.len() - count)
     }
 
     /// Return the mean failure rate per hour based on the known failures happened during the specified recent period.

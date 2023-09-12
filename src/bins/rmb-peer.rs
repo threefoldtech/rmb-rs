@@ -75,7 +75,7 @@ fn parse_urls(input: &[String]) -> Result<Vec<url::Url>> {
     let mut urls: Vec<url::Url> = Vec::new();
 
     for s in input {
-        let u: url::Url = url::Url::parse(&s)?;
+        let u: url::Url = url::Url::parse(s)?;
         if u.domain().is_none() {
             anyhow::bail!("relay URL must contain a domain name");
         }

@@ -27,7 +27,7 @@ where
     pub fn new(sink: Sink, twins: D, ranker: RelayRanker) -> Self {
         Self {
             sink: Some(sink),
-            twins: twins,
+            twins,
             ranker,
         }
     }
