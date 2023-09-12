@@ -1,6 +1,8 @@
+use std::fmt::Debug;
+
 use crate::{
+    relay::federation::ranker::{RelayRanker, HOUR},
     relay::switch::{Sink, StreamID},
-    twin::RelayDomains,
     twin::TwinDB,
     types::Envelope,
 };
@@ -15,6 +17,7 @@ use workers::Work;
 pub(crate) struct Router<D: TwinDB> {
     sink: Option<Sink>,
     twins: D,
+    ranker: RelayRanker,
 }
 
 impl<D> Router<D>
@@ -25,29 +28,35 @@ where
         Self {
             sink: Some(sink),
             twins: twins,
+            ranker: RelayRanker::new(HOUR),
         }
     }
 
-    async fn try_send<'a>(&self, domains: &'a RelayDomains, msg: Vec<u8>) -> Result<&'a str> {
+    async fn try_send<'a, S: AsRef<str> + Debug>(
+        &self,
+        domains: &'a Vec<S>,
+        msg: Vec<u8>,
+    ) -> Result<&'a str> {
         // TODO: FIX ME
         for _ in 0..3 {
             for domain in domains.iter() {
                 let url = if cfg!(test) {
-                    format!("http://{}/", domain)
+                    format!("http://{}/", domain.as_ref())
                 } else {
-                    format!("https://{}/", domain)
+                    format!("https://{}/", domain.as_ref())
                 };
                 log::debug!("federation to: {}", url);
                 let client = Client::new();
                 let resp = match client.post(&url).body(msg.clone()).send().await {
                     Ok(resp) => resp,
                     Err(err) => {
-                        if err.is_connect() || err.is_timeout() {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                            continue;
-                        }
-                        log::warn!("could not send message to relay '{}': {}", domain, err);
-                        break;
+                        log::warn!(
+                            "could not send message to relay '{}': {}",
+                            domain.as_ref(),
+                            err
+                        );
+                        let _ = self.ranker.downvote(domain.as_ref());
+                        continue;
                         // bail!("could not send message to relay '{}': {}", domain, err)
                     }
                 };
@@ -55,10 +64,10 @@ where
                 if resp.status() != StatusCode::ACCEPTED {
                     log::warn!(
                         "received relay '{}' did not accept the message: {}",
-                        domain,
+                        domain.as_ref(),
                         resp.status()
                     );
-                    break;
+                    continue;
                     /* bail!(
                         "received relay '{}' did not accept the message: {}",
                         domain,
@@ -66,7 +75,7 @@ where
                     ); */
                 }
 
-                return Ok(domain);
+                return Ok(domain.as_ref());
             }
         }
         bail!("relays '{:?}' was not reachable in time", domains);
@@ -83,7 +92,9 @@ where
         let domains = twin
             .relay
             .ok_or_else(|| anyhow::anyhow!("relay is not set for this twin"))?;
-        let result = self.try_send(&domains, msg).await;
+        let mut sorted_doamin = domains.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+        let _ = self.ranker.reorder(&mut sorted_doamin);
+        let result = self.try_send(&sorted_doamin, msg).await;
         match result {
             Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
             Err(ref err) => {

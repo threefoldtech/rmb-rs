@@ -101,7 +101,11 @@ async fn retainer<S: Signer>(
         let (ws, _) = match tokio_tungstenite::connect_async(&u).await {
             Ok(v) => v,
             Err(err) => {
-                log::error!("failed to establish connection: {:#}", err);
+                log::error!(
+                    "failed to establish connection to {:?} : {:#}",
+                    u.domain(),
+                    err
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 log::info!("retrying connection");
                 continue;

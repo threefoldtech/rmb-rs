@@ -12,6 +12,7 @@ use bb8_redis::{
 use prometheus::{IntCounterVec, Opts, Registry};
 use workers::WorkerPool;
 
+pub mod ranker;
 mod router;
 
 lazy_static::lazy_static! {
