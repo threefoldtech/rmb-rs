@@ -154,10 +154,17 @@ where
     }
 }
 
-/* #[cfg(test)]
+#[cfg(test)]
 mod test {
-    use crate::{relay::switch::Sink, twin::SubstrateTwinDB, cache::RedisCache};
+    use std::time::Duration;
+
+    use crate::{
+        cache::{Cache, MemCache},
+        relay::{ranker::RelayRanker, switch::Sink},
+        twin::{RelayDomains, SubstrateTwinDB, Twin},
+    };
     use protobuf::Message;
+    use subxt::utils::AccountId32;
 
     use super::*;
     use crate::{
@@ -168,27 +175,37 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_router() {
         use httpmock::prelude::*;
+        let server = MockServer::start();
         let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
         let sink = Sink::new(pool.clone());
-        let twins = SubstrateTwinDB::<RedisCache>::new(
-            &args.substrate,
-            RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
-        )
-        .await
-        .context("cannot create substrate twin db object")?;
+        let mem: MemCache<Twin> = MemCache::new();
+        let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
+            .parse()
+            .unwrap();
+        let twin_id = 1;
+        let twin = Twin {
+            id: twin_id,
+            account: account_id,
+            relay: Some(RelayDomains::new(&[server.address().to_string()])),
+            pk: None,
+        };
+        let _ = mem.set(1, twin.clone()).await;
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
+            .await
+            .unwrap();
+        let ranker = RelayRanker::new(Duration::from_secs(3600));
         let federation = FederationOptions::new(pool)
             .with_registry(reg)
             .with_workers(10)
-            .build(sink, twins)
+            .build(sink, db, ranker)
             .unwrap();
 
         let federator = federation.start();
 
-        let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(POST).path("/");
-            then.status(200)
+            then.status(202)
                 .header("content-type", "text/html")
                 .body("ohi");
         });
@@ -198,7 +215,7 @@ mod test {
             env.tags = None;
             env.signature = None;
             env.schema = None;
-            env.federation = Some(server.address().to_string());
+            env.destination = Some(twin_id.into()).into();
             env.stamp();
             let msg = env.write_to_bytes().unwrap();
             federator.send(msg).await.unwrap();
@@ -208,4 +225,3 @@ mod test {
         mock.assert_hits(10);
     }
 }
- */

@@ -140,11 +140,16 @@ where
         }
     }
 }
-/* #[cfg(test)]
+#[cfg(test)]
 mod test {
     use super::*;
-    use crate::types::{Envelope, EnvelopeExt};
-    use std::sync::Arc;
+    use crate::{
+        cache::{Cache, MemCache},
+        twin::{RelayDomains, SubstrateTwinDB, Twin},
+        types::{Envelope, EnvelopeExt},
+    };
+    use std::{sync::Arc, time::Duration};
+    use subxt::utils::AccountId32;
     use workers::WorkerPool;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -153,7 +158,22 @@ mod test {
 
         // Start a lightweight mock server.
         let server = MockServer::start();
-
+        let mem: MemCache<Twin> = MemCache::new();
+        let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
+            .parse()
+            .unwrap();
+        let twin_id = 1;
+        let twin = Twin {
+            id: twin_id,
+            account: account_id,
+            relay: Some(RelayDomains::new(&[server.address().to_string()])),
+            pk: None,
+        };
+        let _ = mem.set(1, twin.clone()).await;
+        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
+            .await
+            .unwrap();
+        let ranker = RelayRanker::new(Duration::from_secs(3600));
         // Create a mock on the server.
         let federation = server.mock(|when, then| {
             when.method(POST).path("/");
@@ -161,14 +181,18 @@ mod test {
                 .header("content-type", "text/html")
                 .body("ohi");
         });
-        let work_runner = Router { sink: None };
+        let work_runner = Router {
+            sink: None,
+            twins: db,
+            ranker: ranker,
+        };
         let mut worker_pool = WorkerPool::new(Arc::new(work_runner), 2);
         let mut env = Envelope::new();
 
         env.tags = None;
         env.signature = None;
         env.schema = None;
-        env.federation = Some(server.address().to_string());
+        env.destination = Some(twin_id.into()).into();
         env.stamp();
 
         let worker_handler = worker_pool.get().await;
@@ -178,4 +202,3 @@ mod test {
         federation.assert()
     }
 }
- */
