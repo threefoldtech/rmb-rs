@@ -104,8 +104,7 @@ impl RelayRanker {
                 rng.gen::<bool>().cmp(&rng.gen::<bool>())
             } else {
                 a_failure_rate
-                    .partial_cmp(&b_failure_rate)
-                    .unwrap_or(Ordering::Equal)
+                    .total_cmp(&b_failure_rate)
             }
         });
         log::debug!("ranking system hint: {:?}", domains);
