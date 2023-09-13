@@ -191,7 +191,7 @@ mod test {
             pk: None,
         };
         let _ = mem.set(1, twin.clone()).await;
-        let db = SubstrateTwinDB::new("wss://tfchain.dev.grid.tf:443", Some(mem.clone()))
+        let db = SubstrateTwinDB::new(vec![String::from("wss://tfchain.dev.grid.tf:443")], Some(mem.clone()))
             .await
             .unwrap();
         let ranker = RelayRanker::new(Duration::from_secs(3600));
