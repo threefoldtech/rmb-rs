@@ -50,9 +50,14 @@ struct Params {
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
     redis: String,
 
-    /// substrate address please make sure the url also include the port number
-    #[clap(short, long, default_value_t = String::from("wss://tfchain.grid.tf:443"))]
-    substrate: String,
+    /// substrate addresses please make sure the url also include the port number
+    #[clap(
+        short,
+        long,
+        default_value = "wss://tfchain.grid.tf:443",
+        num_args = 1..,
+    )]
+    substrate: Vec<String>,
 
     /// set of relay Urls (max 3) please ensure url contain a domain
     #[clap(long, num_args = 1..=3 , default_values = ["wss://relay.grid.tf:443"])]
@@ -147,7 +152,7 @@ async fn app(args: Params) -> Result<()> {
     // cache is a little bit tricky because while it improves performance it
     // makes changes to twin data takes at least 5 min before they are detected
     let db = SubstrateTwinDB::<RedisCache>::new(
-        &args.substrate,
+        args.substrate,
         RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
     )
     .await
@@ -184,9 +189,11 @@ async fn app(args: Params) -> Result<()> {
             log::info!("update twin details on the chain");
 
             let pk = pair.public();
-            db.update_twin(&signer.pair(), provided_relays, Some(&pk))
+            let hash = db.update_twin(&signer.pair(), provided_relays, Some(&pk))
                 .await
                 .context("failed to update twin information")?;
+
+            log::debug!("hash: {:?}", hash);
         }
     }
 
