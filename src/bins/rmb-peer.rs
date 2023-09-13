@@ -189,7 +189,8 @@ async fn app(args: Params) -> Result<()> {
             log::info!("update twin details on the chain");
 
             let pk = pair.public();
-            let hash = db.update_twin(&signer.pair(), provided_relays, Some(&pk))
+            let hash = db
+                .update_twin(&signer.pair(), provided_relays, Some(&pk))
                 .await
                 .context("failed to update twin information")?;
 

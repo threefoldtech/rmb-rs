@@ -191,9 +191,12 @@ mod test {
             pk: None,
         };
         let _ = mem.set(1, twin.clone()).await;
-        let db = SubstrateTwinDB::new(vec![String::from("wss://tfchain.dev.grid.tf:443")], Some(mem.clone()))
-            .await
-            .unwrap();
+        let db = SubstrateTwinDB::new(
+            vec![String::from("wss://tfchain.dev.grid.tf:443")],
+            Some(mem.clone()),
+        )
+        .await
+        .unwrap();
         let ranker = RelayRanker::new(Duration::from_secs(3600));
         let federation = FederationOptions::new(pool)
             .with_registry(reg)

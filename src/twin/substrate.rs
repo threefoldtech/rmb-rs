@@ -40,7 +40,7 @@ where
         relay: RelayDomains,
         pk: Option<&[u8]>,
     ) -> Result<Hash> {
-    let mut client = self.client.lock().await;
+        let mut client = self.client.lock().await;
         let hash = client.update_twin(kp, Some(relay.to_string()), pk).await?;
         Ok(hash)
     }
