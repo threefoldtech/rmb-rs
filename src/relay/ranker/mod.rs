@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rand::Rng;
@@ -10,7 +10,7 @@ use rand::Rng;
 pub const HOUR: Duration = Duration::from_secs(3600);
 #[derive(Debug, Clone)]
 struct RelayStats {
-    pub failure_times: Vec<SystemTime>,
+    pub failure_times: Vec<Instant>,
 }
 
 impl RelayStats {
@@ -24,43 +24,38 @@ impl RelayStats {
     fn _clean(&mut self, retain: Duration) {
         let count = self.failure_times.len();
         self.failure_times.retain(|t| {
-            t.elapsed().unwrap_or({
-                log::warn!("the system experience system time error, ranker may malfunction.");
-                retain.saturating_add(Duration::from_secs(1))
-            }) < retain
+            t.elapsed() < retain
         });
         log::trace!("cleaning {:?} entires", count - self.failure_times.len());
     }
 
     fn add_failure(&mut self, retain: Duration) {
-        self.failure_times.push(SystemTime::now());
+        self.failure_times.push(Instant::now());
         self._clean(retain);
     }
 
     /// Return the count of the failures that happened during the specified recent period.
-    fn failures_last(&self, period: Duration) -> Result<usize> {
+    fn failures_last(&self, period: Duration) -> usize {
         let mut count = 0;
         for failure_time in &self.failure_times {
             if failure_time
-                .elapsed()
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                < period
+                .elapsed() < period
             {
                 break;
             }
             count += 1;
         }
-        Ok(self.failure_times.len() - count)
+        self.failure_times.len() - count
     }
 
     /// Return the mean failure rate per hour based on the known failures happened during the specified recent period.
-    fn mean_failure_rate(&self, period: Duration) -> Result<f64> {
-        let failures = self.failures_last(period)?;
+    fn mean_failure_rate(&self, period: Duration) -> f64 {
+        let failures = self.failures_last(period);
 
         if failures == 0 {
-            return Ok(0.0);
+            return 0.0;
         }
-        Ok(failures as f64 / (period.as_secs_f64() / 3600.0))
+        failures as f64 / (period.as_secs_f64() / 3600.0)
     }
 }
 
@@ -102,8 +97,8 @@ impl RelayRanker {
         };
 
         domains.sort_by(|a, b| {
-            let a_failure_rate = self._mean_failure_rate(*a, &guard).unwrap_or_default();
-            let b_failure_rate = self._mean_failure_rate(*b, &guard).unwrap_or_default();
+            let a_failure_rate = self._mean_failure_rate(*a, &guard);
+            let b_failure_rate = self._mean_failure_rate(*b, &guard);
             if a_failure_rate == b_failure_rate {
                 let mut rng = rand::thread_rng();
                 rng.gen::<bool>().cmp(&rng.gen::<bool>())
@@ -121,12 +116,12 @@ impl RelayRanker {
         &self,
         domain: impl Into<String>,
         guard: &MutexGuard<'_, RefCell<HashMap<String, RelayStats>>>,
-    ) -> Result<f64> {
+    ) -> f64 {
         let inner = guard.borrow();
         if let Some(stats) = inner.get(&domain.into()) {
             stats.mean_failure_rate(self.max_duration)
         } else {
-            Ok(0.0)
+            0.0
         }
     }
 }
@@ -171,9 +166,9 @@ mod tests {
         let mut inner = binding.borrow_mut();
         let ds = inner.get_mut("bing.com").unwrap();
         if let Some(first) = ds.failure_times.get_mut(0) {
-            *first = SystemTime::checked_sub(&SystemTime::now(), HOUR * 2).unwrap();
+            *first = Instant::checked_sub(&Instant::now(), HOUR * 2).unwrap();
         }
-        let failure_rate = ds.mean_failure_rate(HOUR).unwrap();
+        let failure_rate = ds.mean_failure_rate(HOUR);
         assert_eq!(failure_rate, 0.0);
     }
 }
