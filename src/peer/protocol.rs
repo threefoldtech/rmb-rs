@@ -291,7 +291,6 @@ where
         );
         // we will keep trying all registered sockets till we succeed
         for (index, socket) in self.inner.iter().enumerate().cycle() {
-            log::debug!("trying socket {} to send the message", index);
             if socket
                 .write(
                     Message::Binary(bytes.clone()),
@@ -300,7 +299,6 @@ where
                 .await
                 .is_ok()
             {
-                log::debug!("using socket {} succeeded", index);
                 if index != 0 {
                     self.inner.swap(index, 0);
                 }

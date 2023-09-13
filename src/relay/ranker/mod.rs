@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -23,9 +22,7 @@ impl RelayStats {
     /// Keep only the failures that happened during the specified recent period.
     fn _clean(&mut self, retain: Duration) {
         let count = self.failure_times.len();
-        self.failure_times.retain(|t| {
-            t.elapsed() < retain
-        });
+        self.failure_times.retain(|t| t.elapsed() < retain);
         log::trace!("cleaning {:?} entires", count - self.failure_times.len());
     }
 
@@ -38,9 +35,7 @@ impl RelayStats {
     fn failures_last(&self, period: Duration) -> usize {
         let mut count = 0;
         for failure_time in &self.failure_times {
-            if failure_time
-                .elapsed() < period
-            {
+            if failure_time.elapsed() < period {
                 break;
             }
             count += 1;
@@ -103,8 +98,7 @@ impl RelayRanker {
                 let mut rng = rand::thread_rng();
                 rng.gen::<bool>().cmp(&rng.gen::<bool>())
             } else {
-                a_failure_rate
-                    .total_cmp(&b_failure_rate)
+                a_failure_rate.total_cmp(&b_failure_rate)
             }
         });
         log::debug!("ranking system hint: {:?}", domains);
