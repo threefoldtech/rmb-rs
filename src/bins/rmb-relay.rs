@@ -62,7 +62,7 @@ struct Args {
 
     /// period in seconds used by ranker to determine the recent period of time during which failures will be considered.
     /// failures that occurred outside this specified period will be disregarded.
-    #[clap(short, long, default_value_t = 3600)]
+    #[clap(short = 'p', long, default_value_t = 3600)]
     ranker_period: u64,
 }
 
