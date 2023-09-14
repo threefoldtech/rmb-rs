@@ -1,6 +1,6 @@
 use crate::{
     relay::switch::{Sink, StreamID},
-    types::Envelope,
+    types::{Envelope, EnvelopeExt},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -71,6 +71,8 @@ impl Router {
 
                 if let Some(ref sink) = self.sink {
                     let mut msg = Envelope::new();
+                    msg.expiration = 300;
+                    msg.stamp();
                     msg.uid = env.uid;
                     let e = msg.mut_error();
                     e.message = err.to_string();
