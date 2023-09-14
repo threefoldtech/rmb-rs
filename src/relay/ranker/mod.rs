@@ -1,10 +1,9 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use rand::Rng;
+use tokio::sync::RwLock;
 
 pub const HOUR: Duration = Duration::from_secs(3600);
 #[derive(Debug, Clone)]
@@ -56,28 +55,24 @@ impl RelayStats {
 
 #[derive(Debug, Clone)]
 pub struct RelayRanker {
-    relay_stats: Arc<Mutex<RefCell<HashMap<String, RelayStats>>>>,
+    relay_stats: Arc<RwLock<HashMap<String, RelayStats>>>,
     max_duration: Duration,
 }
 
 impl RelayRanker {
     pub fn new(retain: Duration) -> RelayRanker {
         RelayRanker {
-            relay_stats: Arc::new(Mutex::new(RefCell::new(HashMap::new()))),
+            relay_stats: Arc::new(RwLock::new(HashMap::new())),
             max_duration: retain,
         }
     }
 
     /// report a service failure to the ranker
-    pub fn downvote(&self, domain: impl Into<String>) -> Result<()> {
-        let guard = match self.relay_stats.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(anyhow::anyhow!("failed to acquire lock")),
-        };
-        let mut inner = guard.borrow_mut();
-        let stats = inner.entry(domain.into()).or_insert(RelayStats::new());
+    pub async fn downvote(&self, domain: impl Into<String>) {
+        let mut map = self.relay_stats.write().await;
+
+        let stats = map.entry(domain.into()).or_insert(RelayStats::new());
         stats.add_failure(self.max_duration);
-        Ok(())
     }
 
     /// Sort the domains of relays in ascending order based on their recent failure rate.
@@ -85,15 +80,18 @@ impl RelayRanker {
     /// The ranking of relays is determined by the number of failures that occur during a specified period of time.
     /// This ensures that the affected relay’s rank will improve over time, and messages will be routed to it again if the service recovers.
     /// If multiple relays have the same failure rate, their order will be randomized
-    pub fn reorder(&self, domains: &mut Vec<&str>) -> Result<()> {
-        let guard = match self.relay_stats.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(anyhow::anyhow!("failed to acquire lock")),
-        };
-
+    pub async fn reorder(&self, domains: &mut Vec<&str>) {
+        let map = self.relay_stats.read().await;
         domains.sort_by(|a, b| {
-            let a_failure_rate = self._mean_failure_rate(*a, &guard);
-            let b_failure_rate = self._mean_failure_rate(*b, &guard);
+            let a_failure_rate = map
+                .get(*a)
+                .map(|v| v.mean_failure_rate(self.max_duration))
+                .unwrap_or(0.0);
+            let b_failure_rate = map
+                .get(*b)
+                .map(|v| v.mean_failure_rate(self.max_duration))
+                .unwrap_or(0.0);
+
             if a_failure_rate == b_failure_rate {
                 let mut rng = rand::thread_rng();
                 rng.gen::<bool>().cmp(&rng.gen::<bool>())
@@ -102,20 +100,6 @@ impl RelayRanker {
             }
         });
         log::debug!("ranking system hint: {:?}", domains);
-        Ok(())
-    }
-
-    fn _mean_failure_rate(
-        &self,
-        domain: impl Into<String>,
-        guard: &MutexGuard<'_, RefCell<HashMap<String, RelayStats>>>,
-    ) -> f64 {
-        let inner = guard.borrow();
-        if let Some(stats) = inner.get(&domain.into()) {
-            stats.mean_failure_rate(self.max_duration)
-        } else {
-            0.0
-        }
     }
 }
 
@@ -124,40 +108,39 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_downvoted_at_last() {
+    #[tokio::test]
+    async fn test_downvoted_at_last() {
         let ranking_system = RelayRanker::new(HOUR);
 
-        let _ = ranking_system.downvote("bing.com");
+        ranking_system.downvote("bing.com").await;
         let mut domains = vec!["example.com", "bing.com", "google.com"];
-        let _ = ranking_system.reorder(&mut domains);
+        ranking_system.reorder(&mut domains).await;
 
         assert_eq!(*domains.last().unwrap(), "bing.com");
     }
 
-    #[test]
-    fn test_order_by_failure_rate() {
+    #[tokio::test]
+    async fn test_order_by_failure_rate() {
         let ranking_system = RelayRanker::new(HOUR);
 
-        let _ = ranking_system.downvote("bing.com");
-        let _ = ranking_system.downvote("example.com");
-        let _ = ranking_system.downvote("example.com");
+        ranking_system.downvote("bing.com").await;
+        ranking_system.downvote("example.com").await;
+        ranking_system.downvote("example.com").await;
 
         let mut domains = vec!["example.com", "bing.com", "google.com"];
-        let _ = ranking_system.reorder(&mut domains);
+        ranking_system.reorder(&mut domains).await;
 
         assert_eq!(domains, vec!("google.com", "bing.com", "example.com"));
     }
 
-    #[test]
-    fn test_rank_healing() {
+    #[tokio::test]
+    async fn test_rank_healing() {
         let ranking_system = RelayRanker::new(HOUR);
 
-        let _ = ranking_system.downvote("bing.com");
+        ranking_system.downvote("bing.com").await;
 
-        let binding = ranking_system.relay_stats.lock().unwrap();
-        let mut inner = binding.borrow_mut();
-        let ds = inner.get_mut("bing.com").unwrap();
+        let mut map = ranking_system.relay_stats.write().await;
+        let ds = map.get_mut("bing.com").unwrap();
         if let Some(first) = ds.failure_times.get_mut(0) {
             *first = Instant::checked_sub(&Instant::now(), HOUR * 2).unwrap();
         }

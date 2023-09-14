@@ -55,7 +55,7 @@ where
                             domain.as_ref(),
                             err
                         );
-                        let _ = self.ranker.downvote(domain.as_ref());
+                        self.ranker.downvote(domain.as_ref()).await;
                         continue;
                         // bail!("could not send message to relay '{}': {}", domain, err)
                     }
@@ -67,7 +67,7 @@ where
                         domain.as_ref(),
                         resp.status()
                     );
-                    let _ = self.ranker.downvote(domain.as_ref());
+                    self.ranker.downvote(domain.as_ref()).await;
                     continue;
                 }
 
@@ -89,7 +89,7 @@ where
             .relay
             .ok_or_else(|| anyhow::anyhow!("relay is not set for this twin"))?;
         let mut sorted_doamin = domains.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
-        let _ = self.ranker.reorder(&mut sorted_doamin);
+        self.ranker.reorder(&mut sorted_doamin).await;
         let result = self.try_send(&sorted_doamin, msg).await;
         match result {
             Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
