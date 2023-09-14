@@ -67,6 +67,7 @@ where
                         domain.as_ref(),
                         resp.status()
                     );
+                    let _ = self.ranker.downvote(domain.as_ref());
                     continue;
                 }
 
