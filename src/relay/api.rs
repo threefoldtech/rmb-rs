@@ -1,6 +1,6 @@
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
-use crate::types::{Envelope, Pong};
+use crate::types::{Envelope, EnvelopeExt, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
 use futures::Future;
@@ -415,6 +415,8 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
 
     async fn send_error<E: Display>(&self, envelope: Envelope, err: E) {
         let mut resp = Envelope::new();
+        resp.expiration = 300;
+        resp.stamp();
         resp.uid = envelope.uid;
         resp.destination = Some((&self.id).into()).into();
         let e = resp.mut_error();

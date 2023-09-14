@@ -4,7 +4,7 @@ use crate::{
     relay::ranker::RelayRanker,
     relay::switch::{Sink, StreamID},
     twin::TwinDB,
-    types::Envelope,
+    types::{Envelope, EnvelopeExt},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -100,6 +100,8 @@ where
 
                 if let Some(ref sink) = self.sink {
                     let mut msg = Envelope::new();
+                    msg.expiration = 300;
+                    msg.stamp();
                     msg.uid = env.uid;
                     let e = msg.mut_error();
                     e.message = err.to_string();
