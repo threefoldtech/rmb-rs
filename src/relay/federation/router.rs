@@ -68,11 +68,6 @@ where
                         resp.status()
                     );
                     continue;
-                    /* bail!(
-                        "received relay '{}' did not accept the message: {}",
-                        domain,
-                        resp.status()
-                    ); */
                 }
 
                 return Ok(domain.as_ref());
@@ -98,15 +93,9 @@ where
         match result {
             Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
             Err(ref err) => {
-                super::MESSAGE_ERROR
-                    .with_label_values(
-                        domains
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<&str>>()
-                            .as_slice(),
-                    )
-                    .inc();
+                for d in domains.iter() {
+                    super::MESSAGE_ERROR.with_label_values(&[d]).inc();
+                }
 
                 if let Some(ref sink) = self.sink {
                     let mut msg = Envelope::new();
