@@ -144,7 +144,10 @@ where
 
     async fn verify(&self, envelope: &mut Envelope) -> Result<(), ProtocolError> {
         envelope.valid()?;
-
+        if envelope.source.twin == 0 {
+            // if source twin id is 0 then this is unsigned message from the relay ( an error report)
+            return Ok(());
+        }
         let twin = self
             .twins
             .get_twin(envelope.source.twin)
