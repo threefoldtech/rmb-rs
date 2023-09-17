@@ -1,6 +1,6 @@
 use crate::identity::Signer;
 use crate::twin::TwinDB;
-use crate::types::Envelope;
+use crate::types::{Envelope, EnvelopeExt};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -309,7 +309,7 @@ where
 
                     let e = reply.mut_error();
                     e.message = err.to_string();
-
+                    reply.stamp();
                     if let Err(err) = self.up.send(Bag::one(reply)).await {
                         log::error!("failed to send error response to caller: {}", err);
                     }
