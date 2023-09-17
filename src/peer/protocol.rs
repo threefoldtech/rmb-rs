@@ -211,7 +211,7 @@ where
                         let e = reply.mut_error();
                         e.code = err.code();
                         e.message = e.to_string();
-
+                        reply.stamp();
                         if let Err(err) = self.writer.write(reply).await {
                             log::error!("failed to send error response to sender: {}", err);
                         }
