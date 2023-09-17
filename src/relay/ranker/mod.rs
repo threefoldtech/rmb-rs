@@ -80,7 +80,7 @@ impl RelayRanker {
     /// The ranking of relays is determined by the number of failures that occur during a specified period of time.
     /// This ensures that the affected relay’s rank will improve over time, and messages will be routed to it again if the service recovers.
     /// If multiple relays have the same failure rate, their order will be randomized
-    pub async fn reorder(&self, domains: &mut Vec<&str>) {
+    pub async fn reorder(&self, domains: &mut [&str]) {
         let map = self.relay_stats.read().await;
         domains.sort_by(|a, b| {
             let a_failure_rate = map
