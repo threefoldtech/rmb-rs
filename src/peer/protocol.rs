@@ -176,51 +176,51 @@ where
     }
 
     pub async fn read(&mut self) -> Option<Envelope> {
-        let mut sockets = self.inner.lock().await;
-        let mut futures = FuturesUnordered::new();
-        for socket in sockets.iter_mut() {
-            futures.push(socket.read());
-        }
-        while let Some(msg) = futures.select_next_some().await {
-            let mut envelope = match self.parse(msg) {
-                Ok(env) => env.clone(),
-                Err(err) => {
-                    // if parse failed there is nothing we can do except
-                    // logging the error.
-                    log::error!("received invalid message: {}", err);
-                    continue;
-                }
-            };
+        loop {
+            let mut sockets = self.inner.lock().await;
+            let mut futures = FuturesUnordered::new();
+            for socket in sockets.iter_mut() {
+                futures.push(socket.read());
+            }
+            if let Some(Some(msg)) = futures.next().await {
+                let mut envelope = match self.parse(msg) {
+                    Ok(env) => env.clone(),
+                    Err(err) => {
+                        // if parse failed there is nothing we can do except
+                        // logging the error.
+                        log::error!("received invalid message: {}", err);
+                        continue;
+                    }
+                };
 
-            // okay, no envelope has been parse correctly we "should"
-            // have enough information to send an error if validation of this
-            // envelope failed!
-            match self.verify(&mut envelope).await {
-                Ok(_) => return Some(envelope),
-                Err(err) => {
-                    log::error!("failed to process incoming message: {}", err);
+                // okay, no envelope has been parse correctly we "should"
+                // have enough information to send an error if validation of this
+                // envelope failed!
+                match self.verify(&mut envelope).await {
+                    Ok(_) => return Some(envelope),
+                    Err(err) => {
+                        log::error!("failed to process incoming message: {}", err);
 
-                    if envelope.has_request() {
-                        let mut reply = Envelope {
-                            uid: envelope.uid,
-                            destination: envelope.source,
-                            expiration: envelope.expiration,
-                            ..Default::default()
-                        };
+                        if envelope.has_request() {
+                            let mut reply = Envelope {
+                                uid: envelope.uid,
+                                destination: envelope.source,
+                                expiration: envelope.expiration,
+                                ..Default::default()
+                            };
 
-                        let e = reply.mut_error();
-                        e.code = err.code();
-                        e.message = e.to_string();
-                        reply.stamp();
-                        if let Err(err) = self.writer.write(reply).await {
-                            log::error!("failed to send error response to sender: {}", err);
+                            let e = reply.mut_error();
+                            e.code = err.code();
+                            e.message = e.to_string();
+                            reply.stamp();
+                            if let Err(err) = self.writer.write(reply).await {
+                                log::error!("failed to send error response to sender: {}", err);
+                            }
                         }
                     }
                 }
             }
         }
-
-        None
     }
 }
 
