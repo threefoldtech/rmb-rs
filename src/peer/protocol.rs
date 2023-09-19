@@ -7,12 +7,13 @@ use crate::{
     types::{Envelope, EnvelopeExt, ValidationError},
 };
 use anyhow::Context;
-use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
+use async_stream::stream;
 use protobuf::Message as ProtoMessage;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
+use tokio_stream::{Stream, StreamExt, StreamMap};
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(thiserror::Error, Debug)]
@@ -79,6 +80,9 @@ where
     }
 }
 
+type Streams =
+    StreamMap<usize, Pin<Box<dyn futures_util::Stream<Item = Message> + std::marker::Send>>>;
+
 /// Protocol works on top of the low level
 /// socket connection and implement Envelope protocol
 /// it takes care of serialization/deserialization of messages
@@ -94,7 +98,7 @@ where
     DB: TwinDB,
     S: Signer,
 {
-    inner: Arc<Mutex<Vec<Socket>>>,
+    inner: Arc<Mutex<Streams>>,
     twins: DB,
     peer: Peer<S>,
 
@@ -113,9 +117,19 @@ where
             identity: peer.clone(),
             twins: twins.clone(),
         };
+        let mut streams = StreamMap::new();
+
+        sockets.into_iter().enumerate().for_each(|(i, mut socket)| {
+            let s = Box::pin(stream! {
+                while let Some(msg) = socket.read().await {
+                    yield msg
+                }
+            }) as Pin<Box<dyn Stream<Item = Message> + Send>>;
+            streams.insert(i, s);
+        });
 
         Self {
-            inner: Arc::new(Mutex::new(sockets)),
+            inner: Arc::new(Mutex::new(streams)),
             twins,
             peer,
             writer,
@@ -176,51 +190,47 @@ where
     }
 
     pub async fn read(&mut self) -> Option<Envelope> {
-        loop {
-            let mut sockets = self.inner.lock().await;
-            let mut futures = FuturesUnordered::new();
-            for socket in sockets.iter_mut() {
-                futures.push(socket.read());
-            }
-            if let Some(Some(msg)) = futures.next().await {
-                let mut envelope = match self.parse(msg) {
-                    Ok(env) => env.clone(),
-                    Err(err) => {
-                        // if parse failed there is nothing we can do except
-                        // logging the error.
-                        log::error!("received invalid message: {}", err);
-                        continue;
-                    }
-                };
+        let mut streams = self.inner.lock().await;
 
-                // okay, no envelope has been parse correctly we "should"
-                // have enough information to send an error if validation of this
-                // envelope failed!
-                match self.verify(&mut envelope).await {
-                    Ok(_) => return Some(envelope),
-                    Err(err) => {
-                        log::error!("failed to process incoming message: {}", err);
+        while let Some(msg) = streams.next().await {
+            let mut envelope = match self.parse(msg.1) {
+                Ok(env) => env.clone(),
+                Err(err) => {
+                    // if parse failed there is nothing we can do except
+                    // logging the error.
+                    log::error!("received invalid message: {}", err);
+                    continue;
+                }
+            };
 
-                        if envelope.has_request() {
-                            let mut reply = Envelope {
-                                uid: envelope.uid,
-                                destination: envelope.source,
-                                expiration: envelope.expiration,
-                                ..Default::default()
-                            };
+            // okay, no envelope has been parse correctly we "should"
+            // have enough information to send an error if validation of this
+            // envelope failed!
+            match self.verify(&mut envelope).await {
+                Ok(_) => return Some(envelope),
+                Err(err) => {
+                    log::error!("failed to process incoming message: {}", err);
 
-                            let e = reply.mut_error();
-                            e.code = err.code();
-                            e.message = e.to_string();
-                            reply.stamp();
-                            if let Err(err) = self.writer.write(reply).await {
-                                log::error!("failed to send error response to sender: {}", err);
-                            }
+                    if envelope.has_request() {
+                        let mut reply = Envelope {
+                            uid: envelope.uid,
+                            destination: envelope.source,
+                            expiration: envelope.expiration,
+                            ..Default::default()
+                        };
+
+                        let e = reply.mut_error();
+                        e.code = err.code();
+                        e.message = e.to_string();
+                        reply.stamp();
+                        if let Err(err) = self.writer.write(reply).await {
+                            log::error!("failed to send error response to sender: {}", err);
                         }
                     }
                 }
             }
         }
+        None
     }
 }
 
