@@ -139,7 +139,10 @@ where
 
     async fn verify(&self, envelope: &mut Envelope) -> Result<(), ProtocolError> {
         envelope.valid()?;
-
+        if envelope.source.twin == 0 {
+            // if source twin id is 0 then this is unsigned message from the relay ( an error report)
+            return Ok(());
+        }
         let twin = self
             .twins
             .get_twin(envelope.source.twin)
@@ -198,7 +201,7 @@ where
                         let e = reply.mut_error();
                         e.code = err.code();
                         e.message = e.to_string();
-
+                        reply.stamp();
                         if let Err(err) = self.writer.write(reply).await {
                             log::error!("failed to send error response to sender: {}", err);
                         }
