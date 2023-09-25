@@ -1,3 +1,8 @@
+use std::marker::PhantomData;
+
+use self::router::Router;
+use super::{ranker::RelayRanker, switch::Sink};
+use crate::twin::TwinDB;
 use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
@@ -6,9 +11,6 @@ use bb8_redis::{
 };
 use prometheus::{IntCounterVec, Opts, Registry};
 use workers::WorkerPool;
-
-use self::router::Router;
-use super::switch::Sink;
 
 mod router;
 
@@ -33,18 +35,23 @@ pub enum FederationError {
     RedisError(#[from] RedisError),
 }
 
-pub struct FederationOptions {
+pub struct FederationOptions<D: TwinDB> {
     pool: Pool<RedisConnectionManager>,
     workers: usize,
     registry: Registry,
+    _marker: PhantomData<D>,
 }
 
-impl FederationOptions {
+impl<D> FederationOptions<D>
+where
+    D: TwinDB + Clone,
+{
     pub fn new(pool: Pool<RedisConnectionManager>) -> Self {
         Self {
             pool,
             workers: DEFAULT_WORKERS,
             registry: prometheus::default_registry().clone(),
+            _marker: PhantomData,
         }
     }
 
@@ -58,14 +65,14 @@ impl FederationOptions {
         self
     }
 
-    pub(crate) fn build(self, sink: Sink) -> Result<Federation> {
-        Federation::new(self, sink)
+    pub(crate) fn build(self, sink: Sink, twins: D, ranker: RelayRanker) -> Result<Federation<D>> {
+        Federation::new(self, sink, twins, ranker)
     }
 }
 
-pub struct Federation {
+pub struct Federation<D: TwinDB> {
     pool: Pool<RedisConnectionManager>,
-    workers: WorkerPool<Router>,
+    workers: WorkerPool<Router<D>>,
 }
 
 #[derive(Clone)]
@@ -88,13 +95,16 @@ impl Federator {
     }
 }
 
-impl Federation {
+impl<D> Federation<D>
+where
+    D: TwinDB,
+{
     /// create a new federation router
-    fn new(opts: FederationOptions, sink: Sink) -> Result<Self> {
+    fn new(opts: FederationOptions<D>, sink: Sink, twins: D, ranker: RelayRanker) -> Result<Self> {
         opts.registry.register(Box::new(MESSAGE_SUCCESS.clone()))?;
         opts.registry.register(Box::new(MESSAGE_ERROR.clone()))?;
 
-        let runner = Router::new(sink);
+        let runner = Router::new(sink, twins, ranker);
         let workers = WorkerPool::new(runner, opts.workers);
 
         Ok(Self {
@@ -146,8 +156,15 @@ impl Federation {
 
 #[cfg(test)]
 mod test {
-    use crate::relay::switch::Sink;
+    use std::time::Duration;
+
+    use crate::{
+        cache::{Cache, MemCache},
+        relay::{ranker::RelayRanker, switch::Sink},
+        twin::{RelayDomains, SubstrateTwinDB, Twin},
+    };
     use protobuf::Message;
+    use subxt::utils::AccountId32;
 
     use super::*;
     use crate::{
@@ -158,22 +175,40 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_router() {
         use httpmock::prelude::*;
+        let server = MockServer::start();
         let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
         let sink = Sink::new(pool.clone());
-
+        let mem: MemCache<Twin> = MemCache::new();
+        let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
+            .parse()
+            .unwrap();
+        let twin_id = 1;
+        let twin = Twin {
+            id: twin_id,
+            account: account_id,
+            relay: Some(RelayDomains::new(&[server.address().to_string()])),
+            pk: None,
+        };
+        let _ = mem.set(1, twin.clone()).await;
+        let db = SubstrateTwinDB::new(
+            vec![String::from("wss://tfchain.dev.grid.tf:443")],
+            Some(mem.clone()),
+        )
+        .await
+        .unwrap();
+        let ranker = RelayRanker::new(Duration::from_secs(3600));
         let federation = FederationOptions::new(pool)
             .with_registry(reg)
             .with_workers(10)
-            .build(sink)
+            .build(sink, db, ranker)
             .unwrap();
 
         let federator = federation.start();
 
-        let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(POST).path("/");
-            then.status(200)
+            then.status(202)
                 .header("content-type", "text/html")
                 .body("ohi");
         });
@@ -183,7 +218,7 @@ mod test {
             env.tags = None;
             env.signature = None;
             env.schema = None;
-            env.federation = Some(server.address().to_string());
+            env.destination = Some(twin_id.into()).into();
             env.stamp();
             let msg = env.write_to_bytes().unwrap();
             federator.send(msg).await.unwrap();

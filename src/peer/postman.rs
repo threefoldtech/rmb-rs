@@ -86,7 +86,7 @@ where
         Self { writer, storage }
     }
 
-    async fn push_bag(&self, mut bag: Bag) -> Result<()> {
+    async fn push_bag(&mut self, mut bag: Bag) -> Result<()> {
         if let Some(ref mut backlog) = bag.backlog {
             // a backlog help the system figure out where to route
             // a message if we received a response with that id.
@@ -153,7 +153,7 @@ where
         Ok(())
     }
 
-    async fn push(self, mut rx: Receiver<Bag>) {
+    async fn push(mut self, mut rx: Receiver<Bag>) {
         while let Some(bag) = rx.recv().await {
             let spawn = bag
                 .envelops
@@ -166,7 +166,7 @@ where
 
             if spawn {
                 log::trace!("spawning postman send for a bag");
-                let p = self.clone();
+                let mut p = self.clone();
                 tokio::spawn(async move {
                     if let Err(err) = p.push_bag(bag).await {
                         log::error!("failed to push message: {:#}", err);

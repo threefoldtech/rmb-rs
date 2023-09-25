@@ -59,6 +59,11 @@ struct Args {
     /// limits used by the rate limiter. basically a user will be only permited to send <count> messages with size <size> in a time window (usually a minute).
     #[clap(long, num_args=2, value_names=["count", "size"])]
     limit: Vec<usize>,
+
+    /// period in seconds used by ranker to determine the recent period of time during which failures will be considered.
+    /// failures that occurred outside this specified period will be disregarded.
+    #[clap(short = 'p', long, default_value_t = 3600)]
+    ranker_period: u64,
 }
 
 fn set_limits() -> Result<()> {
@@ -162,8 +167,8 @@ async fn app(args: Args) -> Result<()> {
             },
         )
     };
-
-    let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter)
+    let ranker = relay::ranker::RelayRanker::new(Duration::from_secs(args.ranker_period));
+    let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter, ranker)
         .await
         .unwrap();
     r.start(&args.listen).await.unwrap();

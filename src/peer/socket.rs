@@ -35,8 +35,12 @@ pub struct SocketWriter {
 }
 
 impl SocketWriter {
-    pub async fn write(&self, message: Message) -> Result<()> {
-        self.tx.send(message).await?;
+    pub async fn write(&self, message: Message, timeout: Option<Duration>) -> Result<()> {
+        if let Some(duration) = timeout {
+            self.tx.send_timeout(message, duration).await?;
+        } else {
+            self.tx.send(message).await?;
+        }
         Ok(())
     }
 }
@@ -67,13 +71,14 @@ impl Socket {
 
         let u = u.into();
         let builder = token::TokenBuilder::new(id, None, signer);
+        log::info!("connecting to relay {:?} ....", &u.domain());
         tokio::spawn(retainer(u, builder, up_rx, down_tx));
         // we also auto send ping messages to detect stall connections
         let pinger = connection.writer();
         tokio::spawn(async move {
             loop {
                 log::trace!("sending a ping");
-                if let Err(err) = pinger.write(Message::Ping(Vec::default())).await {
+                if let Err(err) = pinger.write(Message::Ping(Vec::default()), None).await {
                     log::error!("ping error: {}", err);
                 }
                 tokio::time::sleep(PING_INTERVAL).await;
@@ -97,12 +102,17 @@ async fn retainer<S: Signer>(
         let (ws, _) = match tokio_tungstenite::connect_async(&u).await {
             Ok(v) => v,
             Err(err) => {
-                log::error!("failed to establish connection: {:#}", err);
+                log::trace!(
+                    "failed to establish connection to {:?} : {:#}",
+                    u.domain(),
+                    err
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                log::info!("retrying connection");
+                log::trace!("retrying connection");
                 continue;
             }
         };
+        log::info!("now connected to relay {:?}", &u.domain());
 
         let (mut write, read) = ws.split();
         let mut read = read_stream(read);
@@ -116,24 +126,24 @@ async fn retainer<S: Signer>(
             // period of READ_TIMEOUT, we can safely assume connection is stalling
             // and we can try to reconnect
             if Instant::now().duration_since(last) > READ_TIMEOUT {
-                log::debug!("reading timeout trying to reconnect");
+                log::error!("reading timeout trying to reconnect");
                 // the problem is on break this message will be lost!
                 break 'receive;
             }
 
             tokio::select! {
                 Some(message) = up_rx.recv() => {
-                    log::trace!("sending message to relay");
+                    log::trace!("sending message to relay {:?}", &u.domain());
                     if let Err(err) = write.send(message).await {
                         // probably connection closed as well, we need to renew!
-                        log::error!("error while sending message: {}", err);
+                        log::error!("disconnected: error while sending message: {}", err);
                         break 'receive;
                     }
                 },
                 message = read.recv() => {
                     let message = match message {
                         None=> {
-                            log::debug!("read stream ended")  ;
+                            log::error!("disconnected: read stream ended")  ;
                             break 'receive;
                         },
                         Some(message) => message,
@@ -141,7 +151,7 @@ async fn retainer<S: Signer>(
 
                     // we take a note with when a message was received
                     last = Instant::now();
-                    log::trace!("received a message from relay");
+                    log::trace!("received a message from relay {:?}", &u.domain());
                     let message = match message {
                         Ok(Message::Pong(_)) => {
                             log::trace!("received a pong");
@@ -151,7 +161,7 @@ async fn retainer<S: Signer>(
                         Err(err) => {
                             // todo: those errors probably mean we need to re-connect
                             // we will see what to do later.
-                            log::error!("error while receiving message: {}", err);
+                            log::error!("disconnected: error while receiving message: {}", err);
                             break 'receive;
                         }
                     };
@@ -162,9 +172,7 @@ async fn retainer<S: Signer>(
                 }
             }
         }
-
         tokio::time::sleep(Duration::from_secs(2)).await;
-        log::info!("retrying connection");
     }
 }
 

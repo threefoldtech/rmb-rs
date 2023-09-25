@@ -49,13 +49,16 @@ where
     S: Signer,
     R: Storage,
 {
-    pub fn new(relay: Url, peer: Peer<S>, twins: DB, storage: R) -> Self {
+    pub fn new(relays: Vec<Url>, peer: Peer<S>, twins: DB, storage: R) -> Self {
         // create low level socket, this takes care of the relay connection and reconnecting if connection
         // is lost. this include authentication with the relay and proving identity
-        let socket = Socket::connect(relay, peer.id, peer.signer.clone());
+        let sockets: Vec<Socket> = relays
+            .iter()
+            .map(|relay: &Url| Socket::connect(relay.to_owned(), peer.id, peer.signer.clone()))
+            .collect();
 
         // create a higher level protocol (Envelope) on top of the socket
-        let protocol = Protocol::new(socket, peer, twins);
+        let protocol = Protocol::new(sockets, peer, twins);
 
         Self {
             protocol,

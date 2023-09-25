@@ -138,6 +138,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
             Arc::clone(&data.switch),
             Arc::clone(&data.federator),
             metrics,
+            data.twins.clone(),
         );
 
         tokio::spawn(async move {
@@ -202,20 +203,13 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
-    match envelope.federation {
-        Some(federation) if federation == data.domain => {
-            // correct federation, accept the message
-            let dst: StreamID = (&envelope.destination).into();
-            data.switch.send(&dst, &body).await?;
+    let dst: StreamID = (&envelope.destination).into();
+    data.switch.send(&dst, &body).await?;
 
-            // check for federation information
-            Response::builder()
-                .status(http::StatusCode::ACCEPTED)
-                .body(Body::empty())
-                .map_err(HttpError::Http)
-        }
-        _ => Err(HttpError::BadRequest("invalid federation".into())),
-    }
+    Response::builder()
+        .status(http::StatusCode::ACCEPTED)
+        .body(Body::empty())
+        .map_err(HttpError::Http)
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -255,20 +249,22 @@ impl Hook for RelayHook {
     }
 }
 
-struct Stream<M: Metrics> {
+struct Stream<M: Metrics, D: TwinDB> {
     id: StreamID,
     domain: String,
     switch: Arc<Switch<RelayHook>>,
     federator: Arc<Federator>,
     metrics: M,
+    twins: D,
 }
-impl<M: Metrics> Stream<M> {
+impl<M: Metrics, D: TwinDB> Stream<M, D> {
     fn new(
         claims: Claims,
         domain: String,
         switch: Arc<Switch<RelayHook>>,
         federator: Arc<Federator>,
         metrics: M,
+        twins: D,
     ) -> Self {
         let id: StreamID = (claims.id, claims.sid).into();
         Self {
@@ -277,6 +273,7 @@ impl<M: Metrics> Stream<M> {
             switch,
             federator,
             metrics,
+            twins,
         }
     }
 
@@ -290,7 +287,6 @@ impl<M: Metrics> Stream<M> {
             // if ping just change it to pong and send back
             envelope.set_pong(Pong::default());
             std::mem::swap(&mut envelope.source, &mut envelope.destination);
-            envelope.federation = None;
             let plain = envelope.mut_plain();
             plain.extend_from_slice("hello world".as_bytes());
             // override the serialized data
@@ -307,11 +303,21 @@ impl<M: Metrics> Stream<M> {
         //  if federation is not empty and does not match the domain
         //  of this server, we need to schedule this message to be
         //  federated to the right relay (according to specs)
-        if matches!(&envelope.federation, Some(fed) if fed != &self.domain) {
+        let twin = self
+            .twins
+            .get_twin(envelope.destination.twin)
+            .await?
+            .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
+
+        if !twin
+            .relay
+            .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
+            .contains(&self.domain)
+        {
+            log::debug!("got an foreign message");
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);
         }
-
         // we don't return an error because when we return an error
         // we will send this error back to the sender user. Hence
         // calling the switch.send again
