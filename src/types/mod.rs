@@ -325,6 +325,10 @@ impl Challengeable for Envelope {
             write!(hash, "{}", schema)?;
         }
 
+        if let Some(ref federation) = self.federation {
+            write!(hash, "{}", federation)?;
+        }
+
         match self.payload {
             None => {}
             Some(types::envelope::Payload::Plain(ref data)) => {
