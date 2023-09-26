@@ -55,12 +55,12 @@ struct Params {
         short,
         long,
         default_value = "wss://tfchain.grid.tf:443",
-        num_args = 1..,
+        action=ArgAction::Append,
     )]
     substrate: Vec<String>,
 
     /// set of relay Urls (max 3) please ensure url contain a domain
-    #[clap(long, num_args = 1..=3 , default_values = ["wss://relay.grid.tf:443"])]
+    #[clap(long, action=ArgAction::Append, default_values = ["wss://relay.grid.tf:443"])]
     relay: Vec<String>,
 
     /// enable debugging logs
