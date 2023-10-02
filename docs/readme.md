@@ -8,18 +8,19 @@ The point behind using RMB is to allow the clients to not know much about the ot
   - implementation of the command need then to interpret this data as intended (out of scope of rmb)
 
 Twins are stored on tfchain. hence identity of twins is granted not to be spoofed, or phished. When a twin is created he needs to define 2 things:
-- RMB Relay
+- RMB RELAYS
 - His Elliptic Curve public key (we use secp256k1 (K-256) elliptic curve)
 
 Once all twins has their data set correctly on the chain. Any 2 twins can communicate with full end-to-end encryption as follows:
-- A twin establish a WS connection to his relay
+- A twin establish a WS connection to his relays
 - A twin create an `envelope` as defined by the protobuf schema
 - Twin fill end all envelope information (more about this later)
-- Twin pushes the envelope to the relay
-  - If the destination twin is also using the same relay, message is directly forwarded to this twin
-  - If federation is needed (twin using different relay), message is forwarded to the proper twin.
+- Twin pushes the envelope to one of his relays
+When received by the relay, it will determine whether to deliver the message to one of its directly connected clients or to a remote relay. the message processed as follows:
+  - If the destination twin is also using the same relay, local route will have priority over others and message is directly forwarded to this twin.
+  - If federation is needed (twin using different relay), message is forwarded to one of the twin's relays.
 
-Any new messages that is designated to this twin, is pushed over the websocket to this twin. The twin can NOT maintain multiple connections to the relay hence a small tool (rmb-peer) is provided that runs as a dispatcher for a single twin identity.
+Any new messages that is designated to this twin, is pushed over the websocket to this twin. The twin can NOT maintain multiple connections to same relay hence a small tool (rmb-peer) is provided that runs as a dispatcher for a single twin identity.
 
 This rmb-peer tool makes it possible to run multiple services behind this twin and push replies back to their initiators
 
@@ -30,6 +31,22 @@ This rmb-peer tool makes it possible to run multiple services behind this twin a
 The relay can maintain **MULTIPLE** connections per peer given that each connection has a unique **SID** (session id). But for each (twin-id, session-id) combo there can be only one connection. if a new connection with the same (twin-id, session-id) is created, the older connection is dropped.
 
 The `rmb-peer` process reserved the `None` sid. It connection with No session id, hence you can only run one `rmb-peer` per `twin` (identity). But the same twin (identity) can make other connection with other rmb clients (for example rmb-sdk-go direct client) to establish more connections with unique session ids.
+
+### Federations
+Starting from version 1.1.0, the federation field has been deprecated, and the logic of federation has moved to happen in the relays. Relay is now responsible for determining whether to deliver the message to one of its directly connected clients or to a remote relay.
+
+Relay now has an in-memory ranking system to rank its known relays according to their known mean failure rate over a recent configured period of time (time window).
+
+The ranking system used to give a hint to the router (when a twin has multiple configured relays on-chain) to try the relays that have a higher chance of working first, minimizing routing messages to services that failed recently (minimizing the latency).
+
+The rank of a relay will heal over time because the system will only consider failures in the recent time frame, allowing the router to revisit the relay and distribute the load between all working services. For relays with the same failure rate, the order will be randomized.
+
+The ranker time window can be configured when starting the relay by specifying the period in seconds after the `--ranker_period` option. If the option is omitted, the default value of one hour will be used.
+
+Example:
+```
+rmb-relay --substrate wss://tfchain.dev.grid.tf:443 --domain r1.3x0.me --ranker-period 1800
+```
 
 ### Peer
 Any language or code that can open `WebSocket` connection to the relay can work as a peer. A peer need to do the following:
@@ -43,7 +60,7 @@ Each message is an object of type `Envelope` serialized as with protobuf. Type d
 This project already have a peer implementation that works as local peer gateway. By running this peer instance it allows you to
 run multiple services (and clients) behind that gateway and they appear to the world as a single twin.
 
-- The peer gateway (rmb-peer) starts and connects to realy
+- The peer gateway (rmb-peer) starts and connects to his relays
 - If requests are received, they are verified, decrypted and pushed to a redis queue that as command specific (from the envelope)
 - A service can then be waiting on this redis queue for new messages
   - The service can process the command, and push a response back to a specific redis queue for responses.
@@ -221,3 +238,15 @@ Example:
 It's important to note the only one substrate client is held at a time, and the other urls are only used in the case of a network failure.\
 This way, if a substrate connection failed, other urls are used to try to connect to substrate.\
 The client uses iterates between urls in a Round Robin fashion, and tries to reconnect. If a specified number of trials is done (currently 2x the number of urls) and none of them was successful, the client fails and returns and error.
+
+## redundancy and failover
+Starting from version 1.1.0, RMB has integrated redundancy and failover into the system to achieve high availability.
+This is done by allowing RMB-peer to set more than one relay domain for a twin on-chain and establish connections with several redundant relays at the same time.
+
+Enabling failover ensures that communication between twins can continue even if one of the relays fails, as the client will eventually route the message to its destination through another operational relay.
+
+Example:
+
+```bash
+  rmb-peer -m "{MNEMONIC}" --substrate wss://tfchain.dev.grid.tf:443 --relay wss://r1.dev.grid.tf --relay wss://r2.dev.grid.tf
+```
