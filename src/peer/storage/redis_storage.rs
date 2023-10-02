@@ -16,6 +16,8 @@ use bb8_redis::{
 
 struct BacklogKey<'a>(&'a str);
 
+const MAX_COMMANDS: isize = 10000;
+
 impl<'a> ToRedisArgs for BacklogKey<'a> {
     fn write_redis_args<W>(&self, out: &mut W)
     where
@@ -95,7 +97,7 @@ impl RedisStorageBuilder {
     pub fn new(pool: Pool<RedisConnectionManager>) -> RedisStorageBuilder {
         RedisStorageBuilder {
             pool,
-            max_commands: 500,
+            max_commands: MAX_COMMANDS,
         }
     }
 
