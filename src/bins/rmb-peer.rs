@@ -59,7 +59,7 @@ struct Params {
     )]
     substrate: Vec<String>,
 
-    /// set of relay Urls (max 3) please ensure url contain a domain
+    /// set of relay Urls (max 4) please ensure url contain a domain
     #[clap(long, action=ArgAction::Append, default_values = ["wss://relay.grid.tf:443"])]
     relay: Vec<String>,
 
@@ -166,6 +166,10 @@ async fn app(args: Params) -> Result<()> {
 
     let relays_urls: Vec<url::Url> =
         parse_urls(&args.relay).context("failed to parse relays urls")?;
+
+    if relays_urls.len() > 4 {
+        anyhow::bail!("the number of relays should not exceed 4");
+    }
 
     if !args.no_update {
         // try to check and update the twin info on chain
