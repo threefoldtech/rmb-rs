@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 const DEFAULT_TTL: u64 = 300;
+const MAX_TTL: u64 = 1800;
+
 /// SPAWN_THRESHOLD if a single bag contains more than 10 messages
 /// we can spawn a separate sender so other senders don't starve
 const SPAWN_THRESHOLD: u64 = 10;
@@ -93,6 +95,9 @@ where
             if backlog.ttl == 0 {
                 backlog.ttl = DEFAULT_TTL;
             }
+            if backlog.ttl > MAX_TTL {
+                backlog.ttl = MAX_TTL
+            }
             self.storage
                 .track(backlog)
                 .await
@@ -113,7 +118,11 @@ where
             );
 
             if envelope.expiration == 0 {
-                envelope.expiration = 300;
+                envelope.expiration = DEFAULT_TTL;
+            }
+
+            if envelope.expiration > MAX_TTL {
+                envelope.expiration = MAX_TTL;
             }
 
             if let Err(err) = self.writer.write(envelope).await {
