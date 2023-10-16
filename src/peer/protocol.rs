@@ -302,7 +302,7 @@ where
             envelope.uid,
             envelope.destination
         );
-        // we will keep trying all registered sockets till we succeed
+        // we will keep trying all registered sockets till we succeed or message expired
         for (index, socket) in self.inner.iter().enumerate().cycle() {
             if socket
                 .write(
@@ -321,6 +321,9 @@ where
             // calm down after trying all sockets before repeating
             if index == self.inner.len() - 1 {
                 sleep(Duration::from_secs(1)).await;
+                envelope
+                    .ttl()
+                    .context("response has expired before sending!")?;
             }
         }
 
