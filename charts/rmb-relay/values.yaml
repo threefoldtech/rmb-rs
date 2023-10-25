@@ -43,6 +43,8 @@ service:
   port: 80
 
 global:
+  redis:
+    password: redis-password
   ingress:
     certresolver: le
   storageClass: rook-cephfs
