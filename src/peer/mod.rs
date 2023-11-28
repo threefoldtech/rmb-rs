@@ -250,6 +250,8 @@ where
             Some(bl) => bl,
             None => {
                 log::warn!("received reply of an expired message");
+                log::debug!("envelope {:#?}", envelope);
+
                 return Ok(());
             }
         };
