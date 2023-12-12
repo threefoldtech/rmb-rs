@@ -126,7 +126,7 @@ where
 
     type Output = ();
 
-    async fn run(&self, msg: Self::Input) {
+    async fn run(&mut self, msg: Self::Input) {
         if let Err(err) = self.process(msg).await {
             log::debug!("failed to federation message: {:#}", err);
         }
@@ -140,7 +140,7 @@ mod test {
         twin::{RelayDomains, SubstrateTwinDB, Twin},
         types::{Envelope, EnvelopeExt},
     };
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
     use subxt::utils::AccountId32;
     use workers::WorkerPool;
 
@@ -181,7 +181,7 @@ mod test {
             twins: db,
             ranker: ranker,
         };
-        let mut worker_pool = WorkerPool::new(Arc::new(work_runner), 2);
+        let mut worker_pool = WorkerPool::new(work_runner, 2);
         let mut env = Envelope::new();
 
         env.tags = None;
