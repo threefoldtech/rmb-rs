@@ -120,7 +120,7 @@ async fn retainer<S: Signer>(
                 let message = match message {
                     Ok(message) => message,
                     Err(err) => {
-                        if let Err(_) = close.send(err).await {
+                        if close.send(err).await.is_err() {
                             log::error!("failed to notify of socket connection loss");
                         }
                         return;
