@@ -154,7 +154,6 @@ async fn retainer<S: Signer>(
                     let now = timestamp();
                     if now - ts.load(Ordering::Relaxed) > READ_TIMEOUT {
                         // we have timed out! we need to reconnect then
-                        handler.abort();
                         log::info!("connection timeout! retrying");
                         break 'receive
                     }
@@ -184,6 +183,8 @@ async fn retainer<S: Signer>(
 
             }
         }
+        // make sure read routine is fully closed
+        handler.abort();
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
