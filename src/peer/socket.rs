@@ -127,8 +127,9 @@ async fn retainer<S: Signer>(
                     }
                 };
 
+                ts.store(timestamp(), Ordering::Relaxed);
+
                 if message.is_pong() {
-                    ts.store(timestamp(), Ordering::Relaxed);
                     log::debug!("received a pong");
                     continue;
                 }
