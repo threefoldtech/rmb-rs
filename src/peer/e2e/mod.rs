@@ -13,6 +13,8 @@ pub const NONCE_KEY_SIZE: usize = 12;
 pub enum Error {
     #[error("invalid bip39 phrase")]
     InvalidPhrase,
+    #[error("invalid entropy")]
+    InvalidEntropy,
     #[error("invalid seed")]
     InvalidSeed,
     #[error("invalid cipher data")]
@@ -32,17 +34,12 @@ impl FromStr for Pair {
         let kp: KeyPair = match s.strip_prefix("0x") {
             None => {
                 // no prefix, we assume this is a bip39 Mnemonic
-                let mnemonic = Mnemonic::from_phrase(s, Language::English)
+                let mnemonic = Mnemonic::parse_in_normalized(Language::English, s)
                     .map_err(|_| Error::InvalidPhrase)?;
-
-                let seed = bip39::Seed::new(&mnemonic, "");
-                // note: the secpk seed is only 32 bytes, so we take the first 32 bytes
-                // from the seed.
-                if seed.as_bytes().len() < 32 {
-                    return Err(Error::InvalidPhrase);
-                }
-
-                KeyPair::from_seckey_slice(&secp, &seed.as_bytes()[..32])?
+                let (entropy, entropy_len) = mnemonic.to_entropy_array();
+                let seed = substrate_bip39::seed_from_entropy(&entropy[0..entropy_len], "")
+                    .map_err(|_| Error::InvalidEntropy)?;
+                KeyPair::from_seckey_slice(&secp, &seed[..32])?
             }
             Some(h) => {
                 let seed = hex::decode(h).map_err(|_| Error::InvalidSeed)?;

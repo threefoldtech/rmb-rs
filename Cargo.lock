@@ -578,6 +578,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bip39"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93f2635620bf0b9d4576eb7bb9a38a55df78bd1205d26fa994b25911a69f212f"
+dependencies = [
+ "bitcoin_hashes",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -591,6 +600,12 @@ name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90064b8dee6815a6470d60bad07bbbaee885c0e12d04177138fa3291a01b7bc4"
 
 [[package]]
 name = "bitflags"
@@ -3814,6 +3829,7 @@ dependencies = [
  "async-trait",
  "base64 0.13.1",
  "bb8-redis",
+ "bip39",
  "clap",
  "futures",
  "futures-util",
@@ -3845,10 +3861,10 @@ dependencies = [
  "serde_json",
  "sha2 0.10.8",
  "simple_logger",
+ "substrate-bip39",
  "subxt",
  "tfchain-client",
  "thiserror",
- "tiny-bip39",
  "tokio",
  "tokio-retry",
  "tokio-stream",
