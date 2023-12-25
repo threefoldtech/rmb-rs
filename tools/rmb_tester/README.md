@@ -64,7 +64,26 @@ python3 ./msg_handler.py -h
 ```
 
 ## Recipes:
-- Test all online nodes (based on up reports) to ensure that they are reachable over RMB
+### Simple method for testing live nodes:
+- For simplicity, you can install this tool's dependencies by running the ``install.sh` script:
+```sh
+./install
+```
+
+you can start testing live nodes if it is reachable over rmb by running `test-live-nodes.sh` script. it takes only one argument, the network name (one of `dev`, `qa`, `test`, `main`) and required to pass set you mnemonic as env var `MNEMONIC`. for testing dev network nodes:
+```sh
+MNEMONIC="[YOUR MNEMONIC]" ./test_live_nodes.sh dev
+```
+optionally, set `TIMEOUT` and/or `RMB_BIN`.
+`TIMEOUT` : set message ttl and client timeout. default to 60 (for large number of destinations use appropriate value)
+`RMB_BIN` : set the path of the rmb_peer binary file. default to `../../target/x86_64-unknown-linux-musl/release/rmb-peer`
+
+```sh
+MNEMONIC="[YOUR MNEMONIC]" TIMEOUT=500 ./test_live_nodes.sh main
+```
+
+### More Customized method:
+- Test all dest twins to ensure that they are reachable over RMB
 ```sh
 # The nodes.sh script when used with `--likely-up` option will output the IDs of the online nodes in the network using the gridproxy API.
 python3 ./rmb_tester.py -d $(./scripts/twins.sh --likely-up main) -c "rmb.version" -t 600 -e 600
