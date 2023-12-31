@@ -18,7 +18,7 @@ esac
 if [[ "$1" == "main" ]]; then
   gridproxy_url="https://gridproxy.grid.tf"
 else
-  gridproxy_url="https://gridproxy.$2.grid.tf"
+  gridproxy_url="https://gridproxy.$1.grid.tf"
 fi
 
 
