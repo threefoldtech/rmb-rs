@@ -87,7 +87,7 @@ async fn retainer<S: Signer>(
     down_tx: mpsc::Sender<Message>,
 ) {
     loop {
-        let token = b.token(60).context("failed to create jwt token").unwrap();
+        let token = b.token(300).context("failed to create jwt token").unwrap();
 
         u.set_query(Some(token.as_str()));
 
