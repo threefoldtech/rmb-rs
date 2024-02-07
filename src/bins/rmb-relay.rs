@@ -64,6 +64,10 @@ struct Args {
     /// failures that occurred outside this specified period will be disregarded.
     #[clap(short = 'p', long, default_value_t = 3600)]
     ranker_period: u64,
+
+    /// how long to cache twin information in redis in minutes
+    #[clap(long, default_value_t = 10*60)]
+    cache: u64,
 }
 
 fn set_limits() -> Result<()> {
@@ -142,7 +146,7 @@ async fn app(args: Args) -> Result<()> {
     // and we only need twin public key for validation only.
     let twins = SubstrateTwinDB::<RedisCache>::new(
         args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
+        RedisCache::new(pool.clone(), "twin", Duration::from_secs(args.cache * 60)),
     )
     .await
     .context("cannot create substrate twin db object")?;
