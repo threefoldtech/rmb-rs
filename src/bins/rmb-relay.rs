@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
+use rmb::events;
 use rmb::redis;
 use rmb::relay::{
     self,
@@ -142,14 +143,13 @@ async fn app(args: Args) -> Result<()> {
         .await
         .context("failed to initialize redis pool")?;
 
-    // we use 6 hours cache for twin information because twin id will not change anyway
-    // and we only need twin public key for validation only.
-    let twins = SubstrateTwinDB::<RedisCache>::new(
-        args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(args.cache * 60)),
-    )
-    .await
-    .context("cannot create substrate twin db object")?;
+    let redis_cache = RedisCache::new(pool.clone(), "twin");
+
+    redis_cache.flush().await?;
+
+    let twins = SubstrateTwinDB::<RedisCache>::new(args.substrate.clone(), redis_cache.clone())
+        .await
+        .context("cannot create substrate twin db object")?;
 
     let max_users = args.workers as usize * args.user_per_worker as usize;
     let opt = relay::SwitchOptions::new(pool.clone())
@@ -175,6 +175,14 @@ async fn app(args: Args) -> Result<()> {
     let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter, ranker)
         .await
         .unwrap();
+
+    let l = events::Listener::new(args.substrate[0].as_str(), redis_cache).await?;
+    tokio::spawn(async move {
+        if let Err(e) = l.listen().await {
+            log::error!("failed to listen to events: {:#}", e);
+        }
+    });
+
     r.start(&args.listen).await.unwrap();
     Ok(())
 }

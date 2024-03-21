@@ -71,4 +71,6 @@ message Envelope {
     bytes plain = 13;
     bytes cipher = 14;
   }
+
+  optional string relays = 17;
 }

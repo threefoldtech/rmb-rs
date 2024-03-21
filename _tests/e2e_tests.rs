@@ -44,6 +44,9 @@ impl TwinDB for InMemoryDB {
     ) -> anyhow::Result<Option<u32>> {
         unimplemented!()
     }
+    async fn set_twin(&self, twin: Twin) -> anyhow::Result<()> {
+        unimplemented!()
+    }
 }
 
 fn new_message(

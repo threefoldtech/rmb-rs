@@ -338,6 +338,9 @@ impl Challengeable for Envelope {
                 hash.write_all(data)?;
             }
         }
+        if let Some(ref relays) = self.relays {
+            write!(hash, "{}", relays)?;
+        }
 
         Ok(())
     }

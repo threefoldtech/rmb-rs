@@ -1,5 +1,5 @@
 use crate::token::{self, Claims};
-use crate::twin::TwinDB;
+use crate::twin::{RelayDomains, TwinDB};
 use crate::types::{Envelope, EnvelopeExt, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
@@ -17,6 +17,7 @@ use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
 use std::fmt::Display;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -203,6 +204,27 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
+    if let Some(relays) = &envelope.relays {
+        let mut twin = data
+            .twins
+            .get_twin(envelope.source.twin)
+            .await
+            .map_err(|err| HttpError::FailedToGetTwin(err.to_string()))?
+            .ok_or_else(|| HttpError::TwinNotFound(envelope.source.twin))?;
+        let envelope_relays = match RelayDomains::from_str(relays) {
+            Ok(r) => r,
+            Err(_) => return Err(HttpError::BadRequest("invalid relays".to_string())),
+        };
+        if let Some(twin_relays) = twin.relay {
+            if twin_relays != envelope_relays {
+                twin.relay = Some(envelope_relays);
+                data.twins
+                    .set_twin(twin)
+                    .await
+                    .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
+            }
+        }
+    }
     let dst: StreamID = (&envelope.destination).into();
     data.switch.send(&dst, &body).await?;
 
@@ -308,6 +330,25 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .get_twin(envelope.destination.twin)
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
+
+        if let Some(relays) = &envelope.relays {
+            let mut twin = self
+                .twins
+                .get_twin(envelope.source.twin)
+                .await?
+                .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
+
+            let envelope_relays = match RelayDomains::from_str(relays) {
+                Ok(r) => r,
+                Err(_) => anyhow::bail!("invalid relays"),
+            };
+            if let Some(twin_relays) = twin.relay {
+                if twin_relays != envelope_relays {
+                    twin.relay = Some(envelope_relays);
+                    self.twins.set_twin(twin.clone()).await?;
+                }
+            }
+        }
 
         if !twin
             .relay
