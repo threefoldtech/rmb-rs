@@ -11,6 +11,7 @@ use std::marker::{Send, Sync};
 pub trait Cache<T>: Send + Sync + 'static {
     async fn set<S: ToString + Send + Sync>(&self, id: S, obj: T) -> Result<()>;
     async fn get<S: ToString + Send + Sync>(&self, id: S) -> Result<Option<T>>;
+    async fn flush(&self) -> Result<()>;
 }
 
 #[async_trait]
@@ -31,6 +32,12 @@ where
             None => Ok(None),
         }
     }
+    async fn flush(&self) -> Result<()> {
+        match self {
+            Some(cache) => cache.flush().await,
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -46,5 +53,8 @@ where
     }
     async fn get<S: ToString + Send + Sync>(&self, _id: S) -> Result<Option<T>> {
         Ok(None)
+    }
+    async fn flush(&self) -> Result<()> {
+        Ok(())
     }
 }

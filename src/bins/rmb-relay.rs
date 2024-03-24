@@ -145,8 +145,6 @@ async fn app(args: Args) -> Result<()> {
 
     let redis_cache = RedisCache::new(pool.clone(), "twin");
 
-    redis_cache.flush().await?;
-
     let twins = SubstrateTwinDB::<RedisCache>::new(args.substrate.clone(), redis_cache.clone())
         .await
         .context("cannot create substrate twin db object")?;
@@ -176,7 +174,7 @@ async fn app(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-    let l = events::Listener::new(args.substrate[0].as_str(), redis_cache).await?;
+    let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {
         if let Err(e) = l.listen().await {
             log::error!("failed to listen to events: {:#}", e);

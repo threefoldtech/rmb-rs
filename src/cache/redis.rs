@@ -39,12 +39,6 @@ impl RedisCache {
 
         Ok(conn)
     }
-    pub async fn flush(&self) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -82,6 +76,12 @@ where
             }
             None => Ok(None),
         }
+    }
+    async fn flush(&self) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+        cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
+
+        Ok(())
     }
 }
 
