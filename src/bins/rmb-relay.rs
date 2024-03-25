@@ -176,9 +176,10 @@ async fn app(args: Args) -> Result<()> {
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {
-        if let Err(e) = l.listen().await {
-            log::error!("failed to listen to events: {:#}", e);
-        }
+        l.listen()
+            .await
+            .context("failed to listen to chain events")
+            .unwrap();
     });
 
     r.start(&args.listen).await.unwrap();
