@@ -3850,6 +3850,7 @@ dependencies = [
  "mpart-async",
  "nix",
  "openssl",
+ "parity-scale-codec",
  "prometheus",
  "protobuf 3.3.0",
  "protobuf-codegen",

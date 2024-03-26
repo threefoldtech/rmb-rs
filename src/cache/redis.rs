@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use super::Cache;
 
 use anyhow::{Context, Result};
@@ -22,19 +20,13 @@ use serde::{de::DeserializeOwned, Serialize};
 pub struct RedisCache {
     pool: Pool<RedisConnectionManager>,
     prefix: String,
-    ttl: Duration,
 }
 
 impl RedisCache {
-    pub fn new<P: Into<String>>(
-        pool: Pool<RedisConnectionManager>,
-        prefix: P,
-        ttl: Duration,
-    ) -> Self {
+    pub fn new<P: Into<String>>(pool: Pool<RedisConnectionManager>, prefix: P) -> Self {
         Self {
             pool,
             prefix: prefix.into(),
-            ttl,
         }
     }
 
@@ -57,12 +49,10 @@ where
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
-        let key = format!("{}.{}", self.prefix, key.to_string());
-        cmd("SET")
-            .arg(key)
+        cmd("HSET")
+            .arg(&self.prefix)
+            .arg(key.to_string())
             .arg(obj)
-            .arg("EX")
-            .arg(self.ttl.as_secs())
             .query_async(&mut *conn)
             .await?;
 
@@ -70,9 +60,12 @@ where
     }
     async fn get<S: ToString + Send + Sync>(&self, key: S) -> Result<Option<T>> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}.{}", self.prefix, key.to_string());
 
-        let ret: Option<Vec<u8>> = cmd("GET").arg(key).query_async(&mut *conn).await?;
+        let ret: Option<Vec<u8>> = cmd("HGET")
+            .arg(&self.prefix)
+            .arg(key.to_string())
+            .query_async(&mut *conn)
+            .await?;
 
         match ret {
             Some(val) => {
@@ -84,6 +77,12 @@ where
             None => Ok(None),
         }
     }
+    async fn flush(&self) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+        cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -93,7 +92,6 @@ mod tests {
     use super::*;
 
     const PREFIX: &str = "twin";
-    const TTL: u64 = 20;
 
     async fn create_redis_cache() -> RedisCache {
         let manager = RedisConnectionManager::new("redis://127.0.0.1/")
@@ -105,7 +103,7 @@ mod tests {
             .context("unable to build pool or redis connection manager")
             .unwrap();
 
-        RedisCache::new(pool, PREFIX, Duration::from_secs(TTL))
+        RedisCache::new(pool, PREFIX)
     }
 
     #[tokio::test]

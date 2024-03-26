@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Args, Parser};
@@ -151,12 +150,10 @@ async fn app(args: Params) -> Result<()> {
 
     // cache is a little bit tricky because while it improves performance it
     // makes changes to twin data takes at least 5 min before they are detected
-    let db = SubstrateTwinDB::<RedisCache>::new(
-        args.substrate,
-        RedisCache::new(pool.clone(), "twin", Duration::from_secs(60)),
-    )
-    .await
-    .context("cannot create substrate twin db object")?;
+    let db =
+        SubstrateTwinDB::<RedisCache>::new(args.substrate, RedisCache::new(pool.clone(), "twin"))
+            .await
+            .context("cannot create substrate twin db object")?;
 
     let id = db
         .get_twin_with_account(signer.account())

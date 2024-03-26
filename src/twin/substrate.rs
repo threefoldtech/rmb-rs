@@ -78,6 +78,11 @@ where
 
         Ok(id)
     }
+
+    async fn set_twin(&self, twin: Twin) -> Result<()> {
+        self.cache.set(twin.id, twin).await?;
+        Ok(())
+    }
 }
 
 /// ClientWrapper is basically a substrate client.

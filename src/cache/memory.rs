@@ -45,6 +45,12 @@ where
             Some(v) => Ok(Some(v.clone())),
         }
     }
+    async fn flush(&self) -> Result<()> {
+        let mut mem = self.mem.write().await;
+        mem.clear();
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
