@@ -68,15 +68,11 @@ where
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
             }
-            match self.handle_events().await {
-                Err(err) => {
-                    if let Some(subxt::Error::Rpc(_)) = err.downcast_ref::<subxt::Error>() {
-                        self.api = Self::connect(&mut self.substrate_urls).await?;
-                    } else {
-                        log::error!("error listening to events {}", err);
-                    }
+            if let Err(err) = self.handle_events().await {
+                log::error!("error listening to events {}", err);
+                if let Some(subxt::Error::Rpc(_)) = err.downcast_ref::<subxt::Error>() {
+                    self.api = Self::connect(&mut self.substrate_urls).await?;
                 }
-                Ok(_) => {}
             }
         }
     }
