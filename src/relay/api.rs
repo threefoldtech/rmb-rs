@@ -219,17 +219,21 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
     if envelope.relays.len() == 0 {
         return Ok(());
     }
-    let twin = twin_db
+    let mut twin = twin_db
         .get_twin(envelope.source.twin)
         .await?
         .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
     let envelope_relays = RelayDomains::new(&envelope.relays);
-    if let Some(twin_relays) = twin.relay.clone() {
-        if twin_relays != envelope_relays {
-            twin_db.set_twin(twin).await?;
+    match twin.relay {
+        Some(twin_relays) => {
+            if twin_relays == envelope_relays {
+                return Ok(());
+            }
+            twin.relay = Some(envelope_relays);
         }
+        None => twin.relay = Some(envelope_relays),
     }
-    Ok(())
+    twin_db.set_twin(twin).await
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
