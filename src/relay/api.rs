@@ -216,7 +216,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
 }
 
 async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Result<()> {
-    if envelope.relays.len() == 0 {
+    if envelope.relays.is_empty() {
         return Ok(());
     }
     let mut twin = twin_db
@@ -333,7 +333,7 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
-        update_cache_relays(&envelope, &self.twins).await?;
+        update_cache_relays(envelope, &self.twins).await?;
 
         if !twin
             .relay
