@@ -87,6 +87,8 @@ pub enum HttpError {
     InvalidJWT(#[from] token::Error),
     #[error("failed to get twin: {0}")]
     FailedToGetTwin(String),
+    #[error("failed to set twin: {0}")]
+    FailedToSetTwin(String),
     #[error("twin not found {0}")]
     TwinNotFound(u32),
     #[error("{0}")]
@@ -109,6 +111,7 @@ impl HttpError {
             Self::MissingJWT => Codes::BAD_REQUEST,
             Self::InvalidJWT(_) => Codes::UNAUTHORIZED,
             Self::FailedToGetTwin(_) => Codes::INTERNAL_SERVER_ERROR,
+            Self::FailedToSetTwin(_) => Codes::INTERNAL_SERVER_ERROR,
             Self::TwinNotFound(_) => Codes::UNAUTHORIZED,
             Self::WebsocketError(_) => Codes::INTERNAL_SERVER_ERROR,
             Self::NotFound => Codes::NOT_FOUND,

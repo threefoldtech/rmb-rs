@@ -338,6 +338,9 @@ impl Challengeable for Envelope {
                 hash.write_all(data)?;
             }
         }
+        for relay in &self.relays {
+            write!(hash, "{}", relay)?;
+        }
 
         Ok(())
     }

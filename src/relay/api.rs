@@ -1,5 +1,5 @@
 use crate::token::{self, Claims};
-use crate::twin::TwinDB;
+use crate::twin::{RelayDomains, TwinDB};
 use crate::types::{Envelope, EnvelopeExt, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
@@ -203,6 +203,9 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
+    update_cache_relays(&envelope, &data.twins)
+        .await
+        .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
     let dst: StreamID = (&envelope.destination).into();
     data.switch.send(&dst, &body).await?;
 
@@ -210,6 +213,27 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         .status(http::StatusCode::ACCEPTED)
         .body(Body::empty())
         .map_err(HttpError::Http)
+}
+
+async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Result<()> {
+    if envelope.relays.is_empty() {
+        return Ok(());
+    }
+    let mut twin = twin_db
+        .get_twin(envelope.source.twin)
+        .await?
+        .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
+    let envelope_relays = RelayDomains::new(&envelope.relays);
+    match twin.relay {
+        Some(twin_relays) => {
+            if twin_relays == envelope_relays {
+                return Ok(());
+            }
+            twin.relay = Some(envelope_relays);
+        }
+        None => twin.relay = Some(envelope_relays),
+    }
+    twin_db.set_twin(twin).await
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -308,6 +332,8 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .get_twin(envelope.destination.twin)
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
+
+        update_cache_relays(envelope, &self.twins).await?;
 
         if !twin
             .relay
