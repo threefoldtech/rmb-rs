@@ -65,10 +65,6 @@ struct Args {
     /// failures that occurred outside this specified period will be disregarded.
     #[clap(short = 'p', long, default_value_t = 3600)]
     ranker_period: u64,
-
-    /// how long to cache twin information in redis in minutes
-    #[clap(long, default_value_t = 10*60)]
-    cache: u64,
 }
 
 fn set_limits() -> Result<()> {
