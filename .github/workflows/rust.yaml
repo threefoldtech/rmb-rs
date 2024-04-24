@@ -5,7 +5,7 @@ on: [push]
 jobs:
   build:
     name: Test-Clippy-Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Prepare
         run: |
