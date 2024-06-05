@@ -41,6 +41,7 @@ jwt = "0.16"
 subxt = { version = "0.28.0", features = ["substrate-compat"]}
 codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive", "full", "bit-vec"] }
 itertools = "0.11"
+ttl_cache = "0.5"
 
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }

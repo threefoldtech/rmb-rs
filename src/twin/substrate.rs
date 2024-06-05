@@ -195,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_mem_cache() {
-        let mem: MemCache<Twin> = MemCache::new();
+        let mem: MemCache<Twin> = MemCache::default();
 
         let db = SubstrateTwinDB::new(
             vec![String::from("wss://tfchain.dev.grid.tf:443")],
@@ -255,6 +255,37 @@ mod tests {
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_ashraf_twin() {
+        let db = SubstrateTwinDB::new(vec![String::from("wss://tfchain.grid.tf:443")], NoCache)
+            .await
+            .context("cannot create substrate twin db object")
+            .unwrap();
+
+        let twin = db
+            .get_twin(4307)
+            .await
+            .context("can't get twin from substrate")
+            .unwrap()
+            .unwrap();
+
+        // NOTE: this currently checks against devnet substrate
+        // as provided by the url wss://tfchain.dev.grid.tf.
+        // if this environment was reset at some point. those
+        // values won't match anymore.
+
+        assert!(!matches!(twin.relay, None));
+        let relay = twin.relay.unwrap();
+        assert_eq!(relay.0.len(), 1);
+        assert!(relay.0.contains("relay.02.grid.tf"));
+        assert!(twin.pk.is_some());
+
+        assert_eq!(
+            twin.account.to_string(),
+            "5GYtsF9XyaWUEa1zZMhZRe1p9XRMkF21wGyg4G7pPrJok942"
         );
     }
 

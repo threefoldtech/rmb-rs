@@ -137,7 +137,7 @@ impl JsonOutgoingRequest {
         backlog.reference = self.reference;
 
         let mut env = Envelope::new();
-        env.uid = backlog.uid.clone();
+        env.uid.clone_from(&backlog.uid);
         env.set_plain(base64::decode(self.data).context("invalid data base64 encoding")?);
         env.tags = self.tags;
         env.timestamp = self.timestamp;
