@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Args, Parser};
-use rmb::cache::RedisCache;
+use rmb::cache::MemCache;
 use rmb::identity::KeyType;
 use rmb::identity::{Identity, Signer};
 use rmb::peer::Pair;
@@ -149,11 +149,10 @@ async fn app(args: Params) -> Result<()> {
         .context("failed to initialize redis pool")?;
 
     // cache is a little bit tricky because while it improves performance it
-    // makes changes to twin data takes at least 5 min before they are detected
-    let db =
-        SubstrateTwinDB::<RedisCache>::new(args.substrate, RedisCache::new(pool.clone(), "twin"))
-            .await
-            .context("cannot create substrate twin db object")?;
+    // makes changes to twin data takes at least 2 min before they are detected
+    let db = SubstrateTwinDB::new(args.substrate, MemCache::default())
+        .await
+        .context("cannot create substrate twin db object")?;
 
     let id = db
         .get_twin_with_account(signer.account())

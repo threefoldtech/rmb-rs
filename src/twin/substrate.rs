@@ -195,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_twin_with_mem_cache() {
-        let mem: MemCache<Twin> = MemCache::new();
+        let mem: MemCache<Twin> = MemCache::default();
 
         let db = SubstrateTwinDB::new(
             vec![String::from("wss://tfchain.dev.grid.tf:443")],

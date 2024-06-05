@@ -68,7 +68,7 @@ impl From<&StreamID> for Address {
     fn from(value: &StreamID) -> Self {
         let mut address = Address::new();
         address.twin = value.0;
-        address.connection = value.1.clone();
+        address.connection.clone_from(&value.1);
 
         address
     }

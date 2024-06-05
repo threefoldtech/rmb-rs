@@ -150,7 +150,7 @@ mod test {
 
         // Start a lightweight mock server.
         let server = MockServer::start();
-        let mem: MemCache<Twin> = MemCache::new();
+        let mem: MemCache<Twin> = MemCache::default();
         let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
             .parse()
             .unwrap();
