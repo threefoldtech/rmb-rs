@@ -18,6 +18,7 @@ pub(crate) struct Router<D: TwinDB> {
     sink: Option<Sink>,
     twins: D,
     ranker: RelayRanker,
+    client: Client,
 }
 
 impl<D> Router<D>
@@ -29,6 +30,7 @@ where
             sink: Some(sink),
             twins,
             ranker,
+            client: Client::new(),
         }
     }
 
@@ -46,8 +48,7 @@ where
                     format!("https://{}/", domain.as_ref())
                 };
                 log::debug!("federation to: {}", url);
-                let client = Client::new();
-                let resp = match client.post(&url).body(msg.clone()).send().await {
+                let resp = match self.client.post(&url).body(msg.clone()).send().await {
                     Ok(resp) => resp,
                     Err(err) => {
                         log::warn!(
@@ -179,7 +180,8 @@ mod test {
         let work_runner = Router {
             sink: None,
             twins: db,
-            ranker: ranker,
+            ranker,
+            client: Client::new(),
         };
         let mut worker_pool = WorkerPool::new(work_runner, 2);
         let mut env = Envelope::new();
