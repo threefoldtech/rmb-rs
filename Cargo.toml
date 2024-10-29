@@ -17,20 +17,20 @@ anyhow = "1.0.56"
 async-trait = "0.1"
 base64 = "0.13.0"
 bb8-redis = "0.13"
-clap = {version = "4", features = ["derive"]}
+clap = { version = "4", features = ["derive"] }
 futures = "0.3"
-hex = {version = "0.4", features = ["alloc"]}
+hex = { version = "0.4", features = ["alloc"] }
 http = "0.2.7"
 log = "0.4"
 md5 = "0.7.0"
 nix = "0.24.1"
-serde = {version = "1.0.136", features = ["derive"]}
-serde_json = {version = "1.0.81"}
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = { version = "1.0.81" }
 simple_logger = "2.1"
 thiserror = "1.0.31"
-tokio = {version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
 tokio-retry = "0.3"
-uuid = {version = "1.1.0", features = ["v4"]}
+uuid = { version = "1.1.0", features = ["v4"] }
 jsonrpsee-core = "0.14.0"
 mime = "0.3"
 mpart-async = "0.6.0"
@@ -38,29 +38,33 @@ url = "2.3.1"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 futures-util = "0.3.25"
 jwt = "0.16"
-subxt = { version = "0.28.0", features = ["substrate-compat"]}
-codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive", "full", "bit-vec"] }
+subxt = { version = "0.28.0", features = ["substrate-compat"] }
+codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = [
+  "derive",
+  "full",
+  "bit-vec",
+] }
 itertools = "0.11"
 ttl_cache = "0.5"
 
 # for static build
 openssl = { version = "0.10", features = ["vendored"] }
-workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main"}
-protobuf = { version = "3.2.0", features = ["with-bytes"]}
+workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main" }
+protobuf = { version = "3.2.0", features = ["with-bytes"] }
 
-hyper = {version = "0.14", features = ["full"]}
+hyper = { version = "0.14", features = ["full"] }
 hyper-tungstenite = "0.11"
 lazy_static = "1.4.0"
-prometheus = {version = "0.13.3", features=["process"]}
+prometheus = { version = "0.13.3", features = ["process"] }
 
-tfchain-client = { git="https://github.com/threefoldtech/tfchain.git", version="0.2.0", branch="development" }
+tfchain-client = { git = "https://github.com/threefoldtech/tfchain.git", version = "0.2.0", branch = "development" }
 reqwest = "0.11"
 
 # for e2e
 bip39 = { version = "2.0.0", default-features = false }
-substrate-bip39 = { version = "0.4.4"}
+substrate-bip39 = { version = "=0.4.5" }
 secp256k1 = "0.26"
-aes-gcm = { version = "0.10", features=["aes", "alloc"] }
+aes-gcm = { version = "0.10", features = ["aes", "alloc"] }
 sha2 = "0.10"
 rand_core = "0.6"
 
