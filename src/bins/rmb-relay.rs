@@ -173,7 +173,7 @@ async fn app(args: Args, tx: tokio::sync::oneshot::Sender<()>) -> Result<()> {
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {
-        let max_retries = 7;// max wait is 2^7 = 128 seconds ( 2 minutes)
+        let max_retries = 7; // max wait is 2^7 = 128 seconds ( 2 minutes)
         let mut attempt = 0;
         let mut backoff = Duration::from_secs(1);
 
@@ -225,5 +225,4 @@ async fn main() {
             std::process::exit(1);
         }
     }
-    
 }
