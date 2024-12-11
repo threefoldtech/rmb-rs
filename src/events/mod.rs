@@ -60,7 +60,7 @@ where
         anyhow::bail!("failed to connect to substrate using the provided urls")
     }
 
-    pub async fn listen(&mut self) -> Result<()> {
+    pub async fn listen(&mut self, got_hit: &mut bool) -> Result<()> {
         loop {
             // always flush in case some blocks were finalized before reconnecting
             if let Err(err) = self.cache.flush().await {
@@ -73,6 +73,8 @@ where
                 if let Some(subxt::Error::Rpc(_)) = err.downcast_ref::<subxt::Error>() {
                     self.api = Self::connect(&mut self.substrate_urls).await?;
                 }
+            } else {
+                *got_hit = true
             }
         }
     }
