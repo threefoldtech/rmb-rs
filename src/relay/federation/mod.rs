@@ -6,10 +6,11 @@ use crate::twin::TwinDB;
 use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
-    redis::{cmd, RedisError},
+    redis::{aio::ConnectionLike, cmd, RedisError},
     RedisConnectionManager,
 };
 use prometheus::{IntCounterVec, Opts, Registry};
+use tokio::select;
 use workers::WorkerPool;
 
 mod router;
@@ -127,28 +128,38 @@ where
         let mut workers = self.workers;
 
         loop {
-            let mut con = match self.pool.get().await {
-                Ok(con) => con,
-                Err(err) => {
-                    log::error!("could not get redis connection from pool, {}", err);
-                    continue;
-                }
-            };
-            let worker_handler = workers.get().await;
-            let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
-                .arg(FEDERATION_QUEUE)
-                .arg(0.0)
-                .query_async(&mut *con)
-                .await
-            {
-                Ok(msg) => msg,
-                Err(err) => {
-                    log::error!("could not get message from redis {}", err);
-                    continue;
-                }
-            };
-            if let Err(err) = worker_handler.send(msg) {
-                log::error!("failed to send job to worker: {}", err);
+            select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("shutting down fedartor gracefully");
+                    workers.close().await;
+                    break;
+                },
+                result = self.pool.get() => {
+                    let mut con = match result {
+                        Ok(con) => con,
+                        Err(err) => {
+                            log::error!("could not get redis connection from pool, {}", err);
+                            continue;
+                        }
+                    };
+                    let worker_handler = workers.get().await;
+                    let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
+                        .arg(FEDERATION_QUEUE)
+                        .arg(0.0)
+                        .query_async(&mut *con)
+                        .await
+                    {
+                        Ok(msg) => msg,
+                        Err(err) => {
+                            log::error!("could not get message from redis {}", err);
+                            continue;
+                        }
+                    };
+                    if let Err(err) = worker_handler.send(msg) {
+                        log::error!("failed to send job to worker: {}", err);
+                    }
+
+                },
             }
         }
     }

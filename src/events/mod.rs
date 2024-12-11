@@ -5,6 +5,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use log;
 use subxt::{OnlineClient, PolkadotConfig};
+use tokio::select;
 
 #[derive(Clone)]
 pub struct Listener<C>
@@ -62,21 +63,35 @@ where
 
     pub async fn listen(&mut self, got_hit: &mut bool) -> Result<()> {
         loop {
-            // always flush in case some blocks were finalized before reconnecting
-            if let Err(err) = self.cache.flush().await {
-                log::error!("failed to flush redis cache {}", err);
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-            if let Err(err) = self.handle_events().await {
-                log::error!("error listening to events {}", err);
-                if let Some(subxt::Error::Rpc(_)) = err.downcast_ref::<subxt::Error>() {
-                    self.api = Self::connect(&mut self.substrate_urls).await?;
+            select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("shutting down listener gracefully");
+                    if let Err(err) = self.cache.flush().await {
+                        log::error!("failed to flush redis cache {}", err);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                    break;
+                },
+                result = self.cache.flush() => {
+                    // always flush in case some blocks were finalized before reconnecting
+                    if let Err(err) = result {
+                        log::error!("failed to flush redis cache {}", err);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                    if let Err(err) = self.handle_events().await {
+                        log::error!("error listening to events {}", err);
+                        if let Some(subxt::Error::Rpc(_)) = err.downcast_ref::<subxt::Error>() {
+                            self.api = Self::connect(&mut self.substrate_urls).await?;
+                        }
+                    } else {
+                        *got_hit = true
+                    }
                 }
-            } else {
-                *got_hit = true
             }
         }
+        Ok(())
     }
 
     async fn handle_events(&self) -> Result<()> {
