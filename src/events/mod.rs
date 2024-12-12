@@ -72,6 +72,11 @@ where
             select! {
                 _ = tokio::signal::ctrl_c() => {
                     log::info!("shutting down listener gracefully");
+                    if let Err(err) = self.cache.flush().await {
+                        log::error!("failed to flush redis cache {}", err);
+                    }else {
+                        log::info!("Succesful flush of redis cache");
+                    }
                     break;
                 },
                 result = self.handle_events() => {
