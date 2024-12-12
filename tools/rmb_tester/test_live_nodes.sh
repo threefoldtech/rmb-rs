@@ -20,7 +20,7 @@ fi
 RMB_LOG_FILE="./rmb-peer.log"
 TIMEOUT="${TIMEOUT:-60}"
 RMB_BIN="${RMB_BIN:-../../target/x86_64-unknown-linux-musl/release/rmb-peer}"
-
+VERBOSE="${VERBOSE:-false}"
 cleanup() {
     echo "stop all bash managed jobs"
     jlist=$(jobs -p)
@@ -36,7 +36,7 @@ trap cleanup SIGHUP	SIGINT SIGQUIT SIGABRT SIGTERM
 set +e
 echo "redis-server starting .."
 
-redis-server --port 6379 2>&1 > /dev/null&
+redis-server --port 6379 > /dev/null 2>&1 &
 sleep 3
 set -e
 
@@ -45,12 +45,12 @@ echo "rmb-peer starting .."
 $RMB_BIN -m "$MNEMONIC" --substrate "$SUBSTRATE_URL" --relay "$RELAY_URL" --redis "redis://localhost:6379" --debug &> $RMB_LOG_FILE &
 
 # wait till peer establish connection to a relay
-timeout --preserve-status 10 tail -f -n0 $RMB_LOG_FILE | grep -qe 'now connected' || (echo "rmb-peer taking too much time to start! check the log at $RMB_LOG_FILE for more info." && cleanup)
+timeout --preserve-status 20 tail -f -n0 $RMB_LOG_FILE | grep -qe 'now connected' || (echo "rmb-peer taking too much time to start! check the log at $RMB_LOG_FILE for more info." && cleanup)
 
 # start rmb_tester
 source venv/bin/activate
 echo "rmb_tester starting .."
-python3 ./rmb_tester.py -d $(./scripts/twins.sh --likely-up $1) -c "rmb.version" -t $TIMEOUT -e $TIMEOUT --short
+python3 ./rmb_tester.py -d $(./scripts/twins.sh --likely-up $1) -c "zos.system.version" -t "$TIMEOUT" -e "$TIMEOUT" "$(if [[ "$VERBOSE" == "false" ]]; then echo "--short"; fi)"
 deactivate
 
 cleanup
