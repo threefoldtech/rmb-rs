@@ -87,7 +87,7 @@ python3 ./msg_handler.py -h
 - For simplicity, you can install this tool's dependencies by running the ``install.sh` script:
 
 ```sh
-./install
+./install.sh
 ```
 
 you can start testing live nodes if it is reachable over rmb by running `test-live-nodes.sh` script. it takes only one argument, the network name (one of `dev`, `qa`, `test`, `main`) and required to pass set you mnemonic as env var `MNEMONIC`. for testing dev network nodes:
