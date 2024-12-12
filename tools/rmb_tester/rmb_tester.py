@@ -88,6 +88,7 @@ def wait_all(responses_expected, return_queues, timeout):
     err_count = 0
     success_count = 0
     start_time = timer()
+    timedout = False
 
     with alive_bar(responses_expected, title='Waiting ..', title_length=12) as bar:
         while responses_expected > 0:
@@ -95,7 +96,7 @@ def wait_all(responses_expected, return_queues, timeout):
             remaining_time = timeout - elapsed_time
             
             if remaining_time <= 0:
-                print("Timeout reached, stopping waiting for responses.")
+                timedout = True
                 break
             
             # Use the remaining time for the blpop timeout
@@ -111,6 +112,8 @@ def wait_all(responses_expected, return_queues, timeout):
                     bar.text(f'received a response from twin {response.twin_src} ✅')
                 bar()
                 responses_expected -= 1
+    if timedout:
+        print("Timeout reached, stopping waiting for responses.")
 
     return responses, err_count, success_count
 
@@ -150,6 +153,12 @@ def main():
     not_responding = set(args.dest) - responding
     print(f"twins not responding (twin IDs): {' '.join(map(str, not_responding))}")
     print(f"elapsed time: {elapsed_time}")
+    if responses_expected == success_count:
+        print("🎉 All responses received successfully! 🎉")
+    else:
+        missing_responses = (no_responses / responses_expected) * 100
+        print(f"⚠️ Warning: {missing_responses:.2f}% of responses are missing! ⚠️")
+        
     print("=======================")
     if not args.short:
         print("Responses:")
