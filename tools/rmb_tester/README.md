@@ -100,7 +100,7 @@ optionally, set `TIMEOUT` and/or `RMB_BIN`.
 `TIMEOUT` : set message ttl and client timeout. default to 60 (for large number of destinations use appropriate value)
 `RMB_BIN` : set the path of the rmb_peer binary file. default to `../../target/x86_64-unknown-linux-musl/release/rmb-peer`
 
-Additionally, you can set VERBOSE to true (or any non-empty value) to display detailed response and error messages.
+Additionally, you can set `VERBOSE` to true (or any non-empty value) to display detailed response and error messages and/or `DEBUG` can be configured to enable debug output.
 
 ```sh
 MNEMONIC="[YOUR MNEMONIC]" TIMEOUT=500 ./test_live_nodes.sh main
