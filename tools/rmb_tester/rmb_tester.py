@@ -157,7 +157,7 @@ def main():
         print("\033[92m🎉 All responses received successfully! 🎉\033[0m")
     else:
         missing_responses = (no_responses / responses_expected) * 100
-        print("\033[93m⚠️ Warning: {missing_responses:.2f}% of responses are missing! ⚠️\033[0m")
+        print(f"\033[93m⚠️ Warning: {missing_responses:.2f}% of responses are missing! ⚠️\033[0m")
         
     print("=======================")
     if not args.short:
