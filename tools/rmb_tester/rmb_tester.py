@@ -154,10 +154,10 @@ def main():
     print(f"twins not responding (twin IDs): {' '.join(map(str, not_responding))}")
     print(f"elapsed time: {elapsed_time}")
     if responses_expected == success_count:
-        print("🎉 All responses received successfully! 🎉")
+        print("\033[92m🎉 All responses received successfully! 🎉\033[0m")
     else:
         missing_responses = (no_responses / responses_expected) * 100
-        print(f"⚠️ Warning: {missing_responses:.2f}% of responses are missing! ⚠️")
+        print("\033[93m⚠️ Warning: {missing_responses:.2f}% of responses are missing! ⚠️\033[0m")
         
     print("=======================")
     if not args.short:
