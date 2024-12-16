@@ -9,6 +9,12 @@ case $1 in
   exit 1
 esac
 
+if [ -z "$MNEMONIC" ]; then
+  echo "MNEMONIC is not set"
+  echo "Please set the MNEMONIC environment variable"
+  echo "Example: MNEMONIC='...' ./test_live_nodes.sh <NETWORK-ALIAS>"
+  exit 1
+fi
 
 if [[ "$1" == "main" ]]; then
   SUBSTRATE_URL="wss://tfchain.grid.tf:443"
@@ -23,27 +29,31 @@ RMB_BIN="${RMB_BIN:-../../target/x86_64-unknown-linux-musl/release/rmb-peer}"
 VERBOSE="${VERBOSE:-false}"
 cleanup() {
   set +e
-  if command -v deactivate &> /dev/null; then
+  echo "cleaning up initiated"
+  if [ -n "$VIRTUAL_ENV" ]; then
+    echo "deactivating virtual environment"
     deactivate
   fi
-  jlist=$(jobs -p)
+  # close redis-server
+  echo "closing redis-server ..."
+  redis-cli -p 6379 shutdown
+  jlist=$(jobs -pr)
   plist=$(ps --ppid $$ | awk '/[0-9]/{print $1}' | grep -v -E "^$$|^$(pgrep -f 'ps')|^$(pgrep -f 'awk')|^$(pgrep -f 'grep')$")
   pids=${jlist:-$plist}
   if [ -n "$pids" ]; then
-    echo "stop all bash managed jobs"
+    echo "stop rmb-peer and all bash managed jobs"
     kill $pids
   else
-    echo "No processes to stop."
+    echo "All jobs in this bash session have completed or stoped, so there are none left to clean up."
   fi
-  exit
 }
 
 trap cleanup SIGHUP	SIGINT SIGQUIT SIGABRT SIGTERM
 
-
+echo "starting live nodes rmb test version $(git describe --tags)"
 # start redis in backgroud and skip errors in case alreday running
 set +e
-echo "redis-server starting .."
+echo "redis-server starting ..."
 
 redis-server --port 6379 > /dev/null 2>&1 &
 sleep 3
@@ -66,7 +76,11 @@ echo "rmb-peer starting ("$1"net).."
 $RMB_BIN -m "$MNEMONIC" --substrate "$SUBSTRATE_URL" --relay "$RELAY_URL" --redis "redis://localhost:6379" --debug &> $RMB_LOG_FILE &
 
 # wait till peer establish connection to a relay
-timeout --preserve-status 20 tail -f -n0 $RMB_LOG_FILE | grep -qe 'now connected' || (echo "rmb-peer taking too much time to start! check the log at $RMB_LOG_FILE for more info." && cleanup)
+if ! timeout --preserve-status 20 tail -f -n0 $RMB_LOG_FILE | grep -qe 'now connected'; then
+    echo "rmb-peer taking too much time to start! check the log at $RMB_LOG_FILE for more info."
+    cleanup
+    exit 1
+fi
 
 # start rmb_tester
 source venv/bin/activate
