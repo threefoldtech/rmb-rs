@@ -29,6 +29,13 @@ RMB_BIN="${RMB_BIN:-../../target/x86_64-unknown-linux-musl/release/rmb-peer}"
 VERBOSE="${VERBOSE:-false}"
 DEBUG="${DEBUG:-false}"
 
+if [ -f "$RMB_BIN" ]; then
+  binary_version_output=$( "$RMB_BIN" --version )
+else
+  echo "rmb-peer binary not found at $RMB_BIN"
+  exit 1
+fi
+
 cleanup() {
   set +e
   debug 'cleaning up initiated'
@@ -58,8 +65,10 @@ debug() {
 
 trap cleanup SIGHUP	SIGINT SIGQUIT SIGABRT SIGTERM
 
-echo "starting live nodes rmb test script version $(git describe --tags)"
-echo "network used: $1net"
+echo 'starting live nodes rmb test script ...'
+echo "network: $1net"
+debug "script version: $(git describe --tags)"
+debug "rmb-peer version: $binary_version_output"
 # start redis in backgroud and skip errors in case alreday running
 set +e
 debug 'redis-server starting ...'
