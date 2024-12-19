@@ -5,6 +5,8 @@ use hyper::server::conn::Http;
 use hyper_tungstenite::tungstenite::error::ProtocolError;
 use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
+use tokio::select;
+use tokio::signal;
 
 mod api;
 mod federation;
@@ -63,19 +65,28 @@ where
             self.limiter,
         ));
         loop {
-            let (tcp_stream, _) = tcp_listener.accept().await?;
-            let http = http.clone();
-            tokio::task::spawn(async move {
-                if let Err(http_err) = Http::new()
-                    .http1_keep_alive(true)
-                    .serve_connection(tcp_stream, http)
-                    .with_upgrades()
-                    .await
-                {
-                    eprintln!("Error while serving HTTP connection: {}", http_err);
-                }
-            });
+            select! {
+                _ = signal::ctrl_c() => {
+                    log::info!("shutting down relay gracefully");
+                    break;
+                },
+                result = tcp_listener.accept() => {
+                    let (tcp_stream, _) = result?;
+                    let http = http.clone();
+                    tokio::task::spawn(async move {
+                        if let Err(http_err) = Http::new()
+                            .http1_keep_alive(true)
+                            .serve_connection(tcp_stream, http)
+                            .with_upgrades()
+                            .await
+                        {
+                            eprintln!("Error while serving HTTP connection: {}", http_err);
+                        }
+                    });
+                },
+            }
         }
+        Ok(())
     }
 }
 
