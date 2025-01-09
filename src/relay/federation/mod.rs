@@ -6,11 +6,12 @@ use crate::twin::TwinDB;
 use anyhow::Result;
 use bb8_redis::{
     bb8::{Pool, RunError},
-    redis::{aio::ConnectionLike, cmd, RedisError},
+    redis::{cmd, RedisError},
     RedisConnectionManager,
 };
 use prometheus::{IntCounterVec, Opts, Registry};
 use tokio::select;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use workers::WorkerPool;
 
 mod router;
@@ -115,40 +116,46 @@ where
     }
 
     /// start the federation router
-    pub fn start(self) -> Federator {
+    pub fn start(
+        self,
+        federator_cancellation_token: CancellationToken,
+        tracker: &TaskTracker,
+    ) -> Federator {
         let federator = Federator {
             pool: self.pool.clone(),
         };
 
-        tokio::spawn(self.run());
+        tracker.spawn(self.run(federator_cancellation_token));
         federator
     }
 
-    async fn run(self) {
+    async fn run(self, federator_cancellation_token: CancellationToken) {
         let mut workers = self.workers;
 
         loop {
+            let mut con = match self.pool.get().await {
+                Ok(con) => con,
+                Err(err) => {
+                    log::error!("could not get redis connection from pool, {}", err);
+                    continue;
+                }
+            };
+            let worker_handler = workers.get().await;
             select! {
-                _ = tokio::signal::ctrl_c() => {
+                _ = federator_cancellation_token.cancelled() => {
                     log::info!("shutting down fedartor gracefully");
-                    workers.close().await;
+                    //workers.close().await;
+                    log::info!("shutting down fedartor gracefully end");
                     break;
                 },
-                result = self.pool.get() => {
-                    let mut con = match result {
-                        Ok(con) => con,
-                        Err(err) => {
-                            log::error!("could not get redis connection from pool, {}", err);
-                            continue;
-                        }
-                    };
-                    let worker_handler = workers.get().await;
-                    let (_, msg): (String, Vec<u8>) = match cmd("BRPOP")
-                        .arg(FEDERATION_QUEUE)
-                        .arg(0.0)
-                        .query_async(&mut *con)
-                        .await
-                    {
+                result = async {
+                    cmd("BRPOP")
+                    .arg(FEDERATION_QUEUE)
+                    .arg(0.0)
+                    .query_async(&mut *con).await
+
+                } => {
+                    let (_, msg): (String, Vec<u8>) = match result {
                         Ok(msg) => msg,
                         Err(err) => {
                             log::error!("could not get message from redis {}", err);
@@ -158,7 +165,6 @@ where
                     if let Err(err) = worker_handler.send(msg) {
                         log::error!("failed to send job to worker: {}", err);
                     }
-
                 },
             }
         }
@@ -215,7 +221,9 @@ mod test {
             .build(sink, db, ranker)
             .unwrap();
 
-        let federator = federation.start();
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let federator = federation.start(token, &tracker);
 
         let mock = server.mock(|when, then| {
             when.method(POST).path("/");

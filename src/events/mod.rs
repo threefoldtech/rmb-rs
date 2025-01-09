@@ -6,6 +6,7 @@ use futures::StreamExt;
 use log;
 use subxt::{OnlineClient, PolkadotConfig};
 use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct Listener<C>
@@ -61,7 +62,11 @@ where
         anyhow::bail!("failed to connect to substrate using the provided urls")
     }
 
-    pub async fn listen(&mut self, got_hit: &mut bool) -> Result<()> {
+    pub async fn listen(
+        &mut self,
+        got_hit: &mut bool,
+        listener_cancellation_token: CancellationToken,
+    ) -> Result<()> {
         loop {
             // always flush in case some blocks were finalized before reconnecting
             if let Err(err) = self.cache.flush().await {
@@ -70,10 +75,10 @@ where
                 continue;
             }
             select! {
-                _ = tokio::signal::ctrl_c() => {
+                _ = listener_cancellation_token.cancelled() => {
                     log::info!("shutting down listener gracefully");
                     if let Err(err) = self.cache.flush().await {
-                        log::error!("failed to flush redis cache {}", err);
+                        log::info!("failed to flush redis cache {}", err);
                     }else {
                         log::info!("Succesful flush of redis cache");
                     }
