@@ -38,7 +38,6 @@ url = "2.3.1"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 futures-util = "0.3.25"
 jwt = "0.16"
-subxt = { version = "0.28.0", features = ["substrate-compat"] }
 codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = [
   "derive",
   "full",
@@ -57,16 +56,16 @@ hyper-tungstenite = "0.11"
 lazy_static = "1.4.0"
 prometheus = { version = "0.13.3", features = ["process"] }
 
-tfchain-client = { git = "https://github.com/threefoldtech/tfchain.git", version = "0.2.0", branch = "development" }
-reqwest = "0.11"
+reqwest = { version = "0.11", features = ["json"] }
 
 # for e2e
 bip39 = { version = "2.0.0", default-features = false }
-substrate-bip39 = { version = "=0.4.5" }
 secp256k1 = "0.26"
 aes-gcm = { version = "0.10", features = ["aes", "alloc"] }
 sha2 = "0.10"
 rand_core = "0.6"
+chrono = "0.4"
+sp-core = "35.0"
 
 # for limiters
 lru = "0.9.0"

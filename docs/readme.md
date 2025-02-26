@@ -9,12 +9,12 @@ The point behind using RMB is to allow the clients to not know much about the ot
 - The request "body" which is binary blob that is passed to the command as is
   - implementation of the command need then to interpret this data as intended (out of scope of rmb)
 
-Twins are stored on tfchain. hence identity of twins is granted not to be spoofed, or phished. When a twin is created he needs to define 2 things:
+Twins are stored on registrar. hence identity of twins is granted not to be spoofed, or phished. When a twin is created he needs to define 2 things:
 
 - RMB RELAYS
 - His Elliptic Curve public key (we use secp256k1 (K-256) elliptic curve)
 
-Once all twins has their data set correctly on the chain. Any 2 twins can communicate with full end-to-end encryption as follows:
+Once all twins has their data set correctly on the registrar. Any 2 twins can communicate with full end-to-end encryption as follows:
 
 - A twin establish a WS connection to his relays
 - A twin create an `envelope` as defined by the protobuf schema
@@ -44,7 +44,7 @@ Starting from version 1.1.0, the federation field has been deprecated, and the l
 
 Relay now has an in-memory ranking system to rank its known relays according to their known mean failure rate over a recent configured period of time (time window).
 
-The ranking system used to give a hint to the router (when a twin has multiple configured relays on-chain) to try the relays that have a higher chance of working first, minimizing routing messages to services that failed recently (minimizing the latency).
+The ranking system used to give a hint to the router (when a twin has multiple configured relays on-registrar) to try the relays that have a higher chance of working first, minimizing routing messages to services that failed recently (minimizing the latency).
 
 The rank of a relay will heal over time because the system will only consider failures in the recent time frame, allowing the router to revisit the relay and distribute the load between all working services. For relays with the same failure rate, the order will be randomized.
 
@@ -53,7 +53,7 @@ The ranker time window can be configured when starting the relay by specifying t
 Example:
 
 ```
-rmb-relay --substrate wss://tfchain.dev.grid.tf:443 --domain r1.3x0.me --ranker-period 1800
+rmb-relay --registrar https://registrar.prod4.grid.tf --domain r1.3x0.me --ranker-period 1800
 ```
 
 ### Peer
@@ -61,7 +61,7 @@ rmb-relay --substrate wss://tfchain.dev.grid.tf:443 --domain r1.3x0.me --ranker-
 Any language or code that can open `WebSocket` connection to the relay can work as a peer. A peer need to do the following:
 
 - Authenticate with the relay. This is by providing a `JWT` that is signed by the twin key (more on that later)
-- Handle received binary mesasge
+- Handle received binary message
 - Send binary messages
 
 Each message is an object of type `Envelope` serialized as with protobuf. Type definition can be found under `proto/types.proto`
@@ -219,7 +219,7 @@ not fully trust the relay or whoever is hosting it. Hence e2e was needed
 
 As you already understand e2e is completely up to the peers to implement, and even other implementations of the peers can agree on a completely different encryption algorithm and key sharing algorithm (again, relay does not care). But in our implementation of the e2e (rmb-peer) things goes like this
 
-- Each twin has a `pk` field on tfchain. when rmb-peer start, it generates an `secp256k1` key from the same seed as the user tfchain mnemonics. Note that this will not make the encryption key and the signing key any related, they just are driven from the same seed.
+- Each twin has a `public_key` field on registrar. when rmb-peer start, it generates an `secp256k1` key from the same private key as the user registrar private key. Note that this will not make the encryption key and the signing key any related, they just are driven from the same private key.
 - On start, if the key is not already set on the twin object, the key is updated.
 - If a peer A is trying to send a message to peer B. but peer B does not has his `pk` set, peer A will send the message in plain-text format (please check the protobuf envelope type for details)
 - If peer B has public key set, peer A will prefer e2e encryption and will does the following:
@@ -245,30 +245,25 @@ Currently there are two implementations of the rate limiter:
 - `NoLimit` which imposes no limits on users.
 - `FixedWindowLimiter` which breaks the timeline into fixed time windows, and allows a twin to send a fixed number of messages, with a fixed total size, in each time window. If a twin exceeded their limits in some time window, their message is dropped, an error message is sent back to the user, the relay dumps a log about this twin, and the user gets to keep their connection with the relay.
 
-## Substrate connections
+## Registrar connections
 
-To make the relay and peer more reliable, the substrate client accepts multiple substrate urls.
-> To provide multiple urls use the `--substrate <url>` command line argument multiple times.
+> To provide url use the `--registrar <url>` command line argument multiple times.
 
 Example:
 
 ```bash
-  rmb-peer --substrate wss://tfchain.grid.tf:443 --substrate wss://02.tfchain.grid.tf:443 --substrate wss://03.tfchain.grid.tf:443
+  rmb-peer --registrar https://registrar.prod4.grid.tf
 ```
-
-It's important to note the only one substrate client is held at a time, and the other urls are only used in the case of a network failure.\
-This way, if a substrate connection failed, other urls are used to try to connect to substrate.\
-The client uses iterates between urls in a Round Robin fashion, and tries to reconnect. If a specified number of trials is done (currently 2x the number of urls) and none of them was successful, the client fails and returns and error.
 
 ## redundancy and failover
 
 Starting from version 1.1.0, RMB has integrated redundancy and failover into the system to achieve high availability.
-This is done by allowing RMB-peer to set more than one relay domain for a twin on-chain and establish connections with several redundant relays at the same time.
+This is done by allowing RMB-peer to set more than one relay domain for a twin on-registrar and establish connections with several redundant relays at the same time.
 
 Enabling failover ensures that communication between twins can continue even if one of the relays fails, as the client will eventually route the message to its destination through another operational relay.
 
 Example:
 
 ```bash
-  rmb-peer -m "{MNEMONIC}" --substrate wss://tfchain.dev.grid.tf:443 --relay wss://r1.dev.grid.tf --relay wss://r2.dev.grid.tf
+  rmb-peer -m "{MNEMONIC}" --registrar https://registrar.prod4.grid.tf --relay wss://r1.dev.grid.tf --relay wss://r2.dev.grid.tf
 ```

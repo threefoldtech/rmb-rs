@@ -60,7 +60,7 @@ impl ProtocolError {
 
 /// Peer holds the identity information about this peer
 /// this include signing and crypt keys, and also the
-/// id as registered on the chain
+/// id as registered on the registrar
 #[derive(Clone)]
 pub struct Peer<S>
 where

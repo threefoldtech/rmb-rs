@@ -356,7 +356,6 @@ pub fn initialize_logger() {
             .with_level(log::LevelFilter::Warn)
             .with_module_level("hyper", log::LevelFilter::Off)
             .with_module_level("ws", log::LevelFilter::Off)
-            .with_module_level("substrate_api_client", log::LevelFilter::Off)
             .init()
             .unwrap();
     });

@@ -138,11 +138,11 @@ mod test {
     use super::*;
     use crate::{
         cache::{Cache, MemCache},
-        twin::{RelayDomains, SubstrateTwinDB, Twin},
+        twin::{RegistrarTwinDB, RelayDomains, Twin},
         types::{Envelope, EnvelopeExt},
     };
+    use sp_core::crypto::AccountId32;
     use std::time::Duration;
-    use subxt::utils::AccountId32;
     use workers::WorkerPool;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -163,8 +163,8 @@ mod test {
             pk: None,
         };
         let _ = mem.set(1, twin.clone()).await;
-        let db = SubstrateTwinDB::new(
-            vec![String::from("wss://tfchain.dev.grid.tf:443")],
+        let db = RegistrarTwinDB::new(
+            String::from("https://registrar.dev4.grid.tf"),
             Some(mem.clone()),
         )
         .await

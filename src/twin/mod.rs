@@ -1,15 +1,15 @@
-mod substrate;
+mod registrar;
 
 use anyhow::Result;
 use async_trait::async_trait;
+pub use registrar::*;
 use serde::{Deserialize, Serialize};
+use sp_core::crypto::AccountId32;
 use std::{
     collections::HashSet,
     fmt::{Display, Formatter},
     str::FromStr,
 };
-pub use substrate::*;
-use subxt::utils::AccountId32;
 
 #[async_trait]
 pub trait TwinDB: Send + Sync + Clone + 'static {
@@ -18,44 +18,12 @@ pub trait TwinDB: Send + Sync + Clone + 'static {
     async fn set_twin(&self, twin: Twin) -> Result<()>;
 }
 
-use tfchain_client::client::Twin as TwinData;
-
-use crate::tfchain;
-
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Twin {
     pub id: u32,
     pub account: AccountId32,
     pub relay: Option<RelayDomains>,
     pub pk: Option<Vec<u8>>,
-}
-
-impl From<TwinData> for Twin {
-    fn from(twin: TwinData) -> Self {
-        Twin {
-            id: twin.id,
-            account: twin.account_id,
-            relay: twin.relay.map(|v| {
-                let string: String = String::from_utf8_lossy(&v.0).into();
-                RelayDomains::from_str(&string).unwrap_or_default()
-            }),
-            pk: twin.pk.map(|v| v.0),
-        }
-    }
-}
-
-impl From<tfchain::Twin> for Twin {
-    fn from(twin: tfchain::Twin) -> Self {
-        Twin {
-            id: twin.id,
-            account: twin.account_id,
-            relay: twin.relay.map(|v| {
-                let string: String = String::from_utf8_lossy(&v.0).into();
-                RelayDomains::from_str(&string).unwrap_or_default()
-            }),
-            pk: twin.pk.map(|v| v.0),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq)]

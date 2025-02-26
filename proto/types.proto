@@ -10,7 +10,7 @@ message Request {
 // A Response annotate this message as a response message
 message Response { reserved 1, 2; }
 
-// A Error annotiate this message as an error message
+// An Error annotate this message as an error message
 message Error {
   // error code (app specific)
   uint32 code = 1;
@@ -39,15 +39,15 @@ message Envelope {
   string uid = 1;
   // client specific tags
   optional string tags = 2;
-  // timestamp of sending the envlope
+  // timestamp of sending the envelope
   uint64 timestamp = 3;
   // message TTL from the time of send
   uint64 expiration = 4;
   // sender id
   Address source = 5;
-  // destination of the envlope
+  // destination of the envelope
   Address destination = 6;
-  // message inside the envlope
+  // message inside the envelope
   oneof message {
     Request request = 7;
     Response response = 8;
@@ -58,14 +58,14 @@ message Envelope {
   // signature
   optional bytes signature = 9;
 
-  // schema of the payload of either the request or the resposne message.
+  // schema of the payload of either the request or the response message.
   optional string schema = 10;
 
   // a federation url (domain)
-  // this filed ignored by relays but left for back compatibilty with old peers
+  // this filed ignored by relays but left for back compatibility with old peers
   optional string federation = 11;
 
-  // pyload of the message is interpreted differently based
+  // payload of the message is interpreted differently based
   // on the message filed
   oneof payload {
     bytes plain = 13;

@@ -1,13 +1,13 @@
 use super::{validate_signature_len, Identity, Signer, SIGNATURE_LENGTH};
 use anyhow::Result;
 
-use std::convert::From;
-use subxt::ext::sp_core::{
+use hex::decode;
+use sp_core::crypto::{AccountId32, CryptoBytes};
+use sp_core::{
     sr25519::{Pair as SrPair, Public},
     Pair,
 };
-use subxt::utils::AccountId32;
-use tfchain_client::client::KeyPair;
+use std::convert::From;
 
 pub const PREFIX: u8 = 0x73; // ascii s for sr
 
@@ -45,10 +45,6 @@ impl Signer for Sr25519Signer {
 
         sig
     }
-
-    fn pair(&self) -> KeyPair {
-        KeyPair::Sr25519(self.pair.clone())
-    }
 }
 
 impl Identity for Sr25519Signer {
@@ -64,9 +60,16 @@ impl Identity for Sr25519Signer {
 impl TryFrom<&str> for Sr25519Signer {
     type Error = anyhow::Error;
 
-    fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
-        let pair: SrPair = Pair::from_string(s, None).map_err(|err| anyhow!("{:?}", err))?;
+    fn try_from(private_key_hex: &str) -> std::result::Result<Self, Self::Error> {
+        let private_key_bytes = decode(private_key_hex)?;
+        let private_key_array: [u8; 64] = private_key_bytes
+            .try_into()
+            .expect("Failed to convert to fixed-size array");
 
+        // Extract the first 32 bytes as the secret key
+        let secret_key = &private_key_array[0..32];
+
+        let pair: SrPair = SrPair::from_seed_slice(secret_key)?;
         Ok(Self { pair })
     }
 }
@@ -80,7 +83,9 @@ fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> Re
         bail!("invalid signature type (expected sr25519)");
     }
 
-    if !SrPair::verify_weak(&sig[1..], message, pk) {
+    let crypto_signature: CryptoBytes<64, _> =
+        sig[1..].try_into().expect("invalid signature length");
+    if !SrPair::verify(&crypto_signature, message, pk) {
         bail!("sr25519 signature verification failed")
     }
 
@@ -91,23 +96,13 @@ fn verify<P: AsRef<[u8]>, M: AsRef<[u8]>>(pk: &Public, sig: P, message: M) -> Re
 mod tests {
     use super::*;
 
-    const WORDS: &str =
-        "volume behind cable present pull exchange wish loyal avocado snap film increase";
-    const SEED: &str = "0xb37231837527c7173dc212bb23a7fe795d5dae540e7c21366a5fb9f4cc398a36";
+    const PRIVATE_KEY: &str = "56ad3b7b0925fbb9b6d43f8db2a9b199b28c4c8cfdbbf8ecbfb5f20dfd09009e15f85563edc6e9b456b31e7d7cf720c7d3d897cc54ef61c28f3a0d52de9296b1";
 
     #[test]
-    fn test_load_from_mnemonics() {
-        Sr25519Signer::try_from(WORDS).expect("key must be loaded");
+    fn test_load_from_private_key() {
+        Sr25519Signer::try_from(PRIVATE_KEY).expect("key must be loaded");
 
-        let err = Sr25519Signer::try_from("invalid words");
-        assert_eq!(err.is_err(), true);
-    }
-
-    #[test]
-    fn test_load_from_seed() {
-        Sr25519Signer::try_from(SEED).expect("key must be loaded");
-
-        let err = Sr25519Signer::try_from("0xinvalidseed");
+        let err = Sr25519Signer::try_from("invalid");
         assert_eq!(err.is_err(), true);
     }
 }

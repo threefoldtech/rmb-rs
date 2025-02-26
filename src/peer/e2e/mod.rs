@@ -1,5 +1,4 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use bip39::{Language, Mnemonic};
 use rand_core::{OsRng, RngCore};
 use secp256k1::constants;
 use secp256k1::{KeyPair, PublicKey, Secp256k1};
@@ -31,21 +30,8 @@ impl FromStr for Pair {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let secp = Secp256k1::new();
-        let kp: KeyPair = match s.strip_prefix("0x") {
-            None => {
-                // no prefix, we assume this is a bip39 Mnemonic
-                let mnemonic = Mnemonic::parse_in_normalized(Language::English, s)
-                    .map_err(|_| Error::InvalidPhrase)?;
-                let (entropy, entropy_len) = mnemonic.to_entropy_array();
-                let seed = substrate_bip39::seed_from_entropy(&entropy[0..entropy_len], "")
-                    .map_err(|_| Error::InvalidEntropy)?;
-                KeyPair::from_seckey_slice(&secp, &seed[..32])?
-            }
-            Some(h) => {
-                let seed = hex::decode(h).map_err(|_| Error::InvalidSeed)?;
-                KeyPair::from_seckey_slice(&secp, &seed)?
-            }
-        };
+        let seed = hex::decode(s).map_err(|_| Error::InvalidSeed)?;
+        let kp = KeyPair::from_seckey_slice(&secp, &seed)?;
 
         Ok(Self(kp))
     }
@@ -54,7 +40,7 @@ impl FromStr for Pair {
 impl Pair {
     /// get public key of the key pair. it's okay to share this public key
     /// with other peers. actually it's the only way to use this for encryption
-    /// is by making your public key accessable for other peers
+    /// is by making your public key accessible for other peers
     pub fn public(&self) -> [u8; PUBLIC_KEY_SIZE] {
         self.0.public_key().serialize()
     }
@@ -132,17 +118,19 @@ mod test {
 
     #[test]
     fn test_shared_key() {
-        let sk1: Pair = "0x340f7341b312bcc61aeea7a76d759d809b8601cbc6d22cb2817278e346137a5d"
+        let sk1: Pair = "0x95dd1ebb906afb7fcf2688ff380c4f3b634080c58908ee627837912ec4160281"
             .parse()
             .unwrap();
 
         let sk2: Pair =
-            "tackle blouse grain dawn adult loyal tattoo price access tilt chimney silk"
+            "winner giant reward damage expose pulse recipe manual brand volcano dry avoid"
                 .parse()
                 .unwrap();
 
         let shared1 = sk1.shared(&sk2.public()).unwrap();
         let shared2 = sk2.shared(&sk1.public()).unwrap();
+        println!("{:?}", sk1.public());
+        println!("{:?}", sk2.public());
 
         assert_eq!(shared1, shared2);
 

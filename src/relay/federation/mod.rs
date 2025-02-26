@@ -161,10 +161,10 @@ mod test {
     use crate::{
         cache::{Cache, MemCache},
         relay::{ranker::RelayRanker, switch::Sink},
-        twin::{RelayDomains, SubstrateTwinDB, Twin},
+        twin::{RegistrarTwinDB, RelayDomains, Twin},
     };
     use protobuf::Message;
-    use subxt::utils::AccountId32;
+    use sp_core::crypto::AccountId32;
 
     use super::*;
     use crate::{
@@ -191,8 +191,8 @@ mod test {
             pk: None,
         };
         let _ = mem.set(1, twin.clone()).await;
-        let db = SubstrateTwinDB::new(
-            vec![String::from("wss://tfchain.dev.grid.tf:443")],
+        let db = RegistrarTwinDB::new(
+            String::from("https://registrar.dev4.grid.tf"),
             Some(mem.clone()),
         )
         .await

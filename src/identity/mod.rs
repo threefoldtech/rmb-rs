@@ -1,6 +1,7 @@
 mod ed25519;
 mod sr25519;
 
+use sp_core::crypto::AccountId32;
 use std::{fmt::Display, str::FromStr};
 
 pub use ed25519::{Ed25519Identity, Ed25519Signer, PREFIX as ED_PREFIX};
@@ -10,8 +11,6 @@ use jwt::algorithm::{AlgorithmType, SigningAlgorithm, VerifyingAlgorithm};
 
 use anyhow::Result;
 
-use subxt::utils::AccountId32;
-use tfchain_client::client::KeyPair;
 pub const SIGNATURE_LENGTH: usize = 65;
 
 pub trait Identity: Clone + Send + Sync {
@@ -23,7 +22,6 @@ pub trait Signer: Identity + 'static {
     /// sign a message. the returned signature is a 64 bytes signature prefixed with
     /// one byte which indicates the type of the key.
     fn sign<M: AsRef<[u8]>>(&self, message: M) -> [u8; SIGNATURE_LENGTH];
-    fn pair(&self) -> KeyPair;
 }
 
 pub fn validate_signature_len<S: AsRef<[u8]>>(sig: &S) -> Result<()> {
@@ -158,13 +156,6 @@ impl Signer for Signers {
         match self {
             Signers::Ed25519(ref sk) => sk.sign(message),
             Signers::Sr25519(ref sk) => sk.sign(message),
-        }
-    }
-
-    fn pair(&self) -> KeyPair {
-        match self {
-            Signers::Ed25519(ref sk) => sk.pair(),
-            Signers::Sr25519(ref sk) => sk.pair(),
         }
     }
 }

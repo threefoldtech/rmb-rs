@@ -4,17 +4,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
 use rmb::cache::RedisCache;
-use rmb::events;
 use rmb::redis;
 use rmb::relay::{
     self,
     limiter::{FixedWindowOptions, Limiters},
 };
-use rmb::twin::SubstrateTwinDB;
+use rmb::twin::RegistrarTwinDB;
 use tokio::sync::oneshot;
-
-/// A peer requires only which rely to connect to, and
-/// which identity (mnemonics)
 
 /// the reliable message bus
 #[derive(Parser, Debug)]
@@ -29,14 +25,9 @@ struct Args {
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
     redis: String,
 
-    /// substrate addresses please make sure the url also include the port number
-    #[clap(
-        short,
-        long,
-        default_value = "wss://tfchain.grid.tf:443",
-        num_args = 1..,
-    )]
-    substrate: Vec<String>,
+    /// registrar url
+    #[clap(short, long, default_value = "https://registrar.prod4.grid.tf")]
+    registrar: String,
 
     /// number of switch users. Each worker maintains a single connection to
     /// redis used for waiting on user messages. hence this need to be sain value
@@ -58,7 +49,7 @@ struct Args {
     #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
 
-    /// limits used by the rate limiter. basically a user will be only permited to send <count> messages with size <size> in a time window (usually a minute).
+    /// limits used by the rate limiter. basically a user will be only permitted to send <count> messages with size <size> in a time window (usually a minute).
     #[clap(long, num_args=2, value_names=["count", "size"])]
     limit: Vec<usize>,
 
@@ -93,7 +84,7 @@ fn set_limits() -> Result<()> {
     Ok(())
 }
 
-async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
+async fn app(args: Args, _tx: oneshot::Sender<()>) -> Result<()> {
     if args.workers == 0 {
         anyhow::bail!("number of workers cannot be zero");
     }
@@ -112,14 +103,13 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         })
         .with_module_level("hyper", log::LevelFilter::Off)
         .with_module_level("ws", log::LevelFilter::Off)
-        .with_module_level("substrate_api_client", log::LevelFilter::Off)
         .with_module_level("mpart_async", log::LevelFilter::Off)
         .with_module_level("jsonrpsee_core", log::LevelFilter::Off)
         .init()?;
 
     set_limits()?;
     // we know that a worker requires one connection so pool must be min of number of workers
-    // to have good preformance. but we also need a connection when a user sends a message to
+    // to have good performance. but we also need a connection when a user sends a message to
     // push to the queue that depends on how fast messages are sent but we can assume an extra 10%
     // of number of workers is needed
 
@@ -142,9 +132,9 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
 
     let redis_cache = RedisCache::new(pool.clone(), "twin");
 
-    let twins = SubstrateTwinDB::<RedisCache>::new(args.substrate.clone(), redis_cache.clone())
+    let twins = RegistrarTwinDB::<RedisCache>::new(args.registrar.clone(), redis_cache.clone())
         .await
-        .context("cannot create substrate twin db object")?;
+        .context("cannot create registrar twin db object")?;
 
     let max_users = args.workers as usize * args.user_per_worker as usize;
     let opt = relay::SwitchOptions::new(pool.clone())
@@ -170,46 +160,6 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
     let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter, ranker)
         .await
         .unwrap();
-
-    let mut l = events::Listener::new(args.substrate, redis_cache).await?;
-    tokio::spawn(async move {
-        let max_retries = 9; // max wait is 2^9 = 512 seconds ( 5 minutes )
-        let mut attempt = 0;
-        let mut backoff = Duration::from_secs(1);
-        let mut got_hit = false;
-
-        loop {
-            match l
-                .listen(&mut got_hit)
-                .await
-                .context("failed to listen to chain events")
-            {
-                Ok(_) => break,
-                Err(e) => {
-                    if got_hit {
-                        log::warn!("Listener got a hit, but failed to listen to chain events before no attempts will be reset");
-                        got_hit = false;
-                        attempt = 0;
-                        backoff = Duration::from_secs(1);
-                    }
-                    attempt += 1;
-                    if attempt > max_retries {
-                        log::error!("Listener failed after {} attempts: {:?}", attempt - 1, e);
-                        let _ = tx.send(());
-                        break;
-                    }
-                    log::warn!(
-                        "Listener failed on attempt {}: {:?}. Retrying in {:?}...",
-                        attempt,
-                        e,
-                        backoff
-                    );
-                    tokio::time::sleep(backoff).await;
-                    backoff *= 2;
-                }
-            }
-        }
-    });
 
     r.start(&args.listen).await.unwrap();
     Ok(())

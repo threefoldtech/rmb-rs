@@ -191,7 +191,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     //     the signature (if the message is fake) but will produce a lot of traffic never the less
     //   - there is no check on the message size
     //   - there is no check if federation information is actually correct. we don't check
-    //     if twin data on the chain (federation) is actually matching to this message for
+    //     if twin data on the registrar (federation) is actually matching to this message for
     //     performance.
     //
     // this method trust whoever call it to provide correct federation information and proper message
