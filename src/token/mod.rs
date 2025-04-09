@@ -92,6 +92,10 @@ impl FromStr for Claims {
 
         let claims = token.claims();
         let now = now()?;
+        log::debug!("s: {:?}", s);
+        log::debug!("now: {:?}", now);
+        log::debug!("claims.expiration: {:?}", claims.expiration);
+        log::debug!("claims: {:?}", claims);
         if now > claims.expiration {
             return Err(Error::Expired);
         }
