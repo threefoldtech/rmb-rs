@@ -1,10 +1,7 @@
 use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, ToRedisArgs, Value};
 use std::fmt::Display;
 use std::num::ParseIntError;
-use std::{
-    str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::str::FromStr;
 
 use crate::twin::TwinID;
 use crate::types::Address;
@@ -144,21 +141,6 @@ impl FromRedisValue for SessionID {
         Err((ErrorKind::TypeError, "invalid stream id type").into())
     }
 }
-/// ConnectionID is a unique id per connection. this way we can tell
-/// if a user connection was reset (user lost connection and then reconnected)
-/// it's needed to make sure multiple workers don't endup serving the same user
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct ConnectionID(u128);
-
-impl ConnectionID {
-    pub fn new() -> Self {
-        let d = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap() // todo: may be return an error
-            .as_nanos();
-        Self(d)
-    }
-}
 /// MessageID is id of last message delivered to a user
 #[derive(Default, Debug, Copy, Clone)]
 pub struct MessageID(u64, u64);
@@ -206,29 +188,6 @@ impl FromRedisValue for MessageID {
         }
 
         Err((ErrorKind::TypeError, "invalid message-id type").into())
-    }
-}
-/// A connection is defined mainly by a connection id, but it also track
-/// las message id received
-pub struct Connection(ConnectionID, MessageID);
-
-impl Connection {
-    pub fn id(&self) -> &ConnectionID {
-        &self.0
-    }
-
-    pub fn set_last(&mut self, id: MessageID) {
-        self.1 = id;
-    }
-
-    pub fn last(&self) -> &MessageID {
-        &self.1
-    }
-}
-
-impl From<ConnectionID> for Connection {
-    fn from(value: ConnectionID) -> Self {
-        Self(value, MessageID::default())
     }
 }
 

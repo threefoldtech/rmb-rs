@@ -12,7 +12,7 @@ pub mod limiter;
 mod switch;
 use self::limiter::RateLimiter;
 use self::ranker::RelayRanker;
-use api::RelayCallback;
+use api::WriterCallback;
 use federation::Federation;
 pub use federation::FederationOptions;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub use switch::SwitchOptions;
 pub mod ranker;
 
 pub struct Relay<D: TwinDB, R: RateLimiter> {
-    switch: Arc<Switch<RelayCallback>>,
+    switch: Arc<Switch<WriterCallback>>,
     twins: D,
     domain: String,
     federation: Federation<D>,

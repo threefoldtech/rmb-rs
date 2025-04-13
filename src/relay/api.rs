@@ -18,7 +18,9 @@ use protobuf::Message as ProtoMessage;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_util::sync::CancellationToken;
 
 use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
@@ -26,7 +28,7 @@ use super::switch::{Callback, CallbackError, MessageID, SessionID, Switch};
 use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
-    switch: Arc<Switch<RelayCallback>>,
+    switch: Arc<Switch<WriterCallback>>,
     twins: D,
     domain: String,
     federator: Arc<Federator>,
@@ -40,7 +42,7 @@ where
 {
     pub(crate) fn new<S: Into<String>>(
         domain: S,
-        switch: Arc<Switch<RelayCallback>>,
+        switch: Arc<Switch<WriterCallback>>,
         twins: D,
         federator: Federator,
         limiter: R,
@@ -241,49 +243,80 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
 
-pub(crate) struct RelayCallback {
+pub(crate) struct ConnectionWriter {
     peer: SessionID,
-    switch: Arc<Switch<Self>>,
-    writer: Arc<Mutex<Writer>>,
+    cancellation: CancellationToken,
+    writer: Writer,
+    switch: Arc<Switch<WriterCallback>>,
 }
 
-impl RelayCallback {
-    fn new(peer: SessionID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+impl ConnectionWriter {
+    fn new(
+        peer: SessionID,
+        cancellation: CancellationToken,
+        switch: Arc<Switch<WriterCallback>>,
+        writer: Writer,
+    ) -> Self {
         Self {
             peer,
+            cancellation,
             switch,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
         }
+    }
+
+    fn start(self) -> WriterCallback {
+        // todo: make the channel size configurable
+        let (tx, rx) = mpsc::channel(20);
+
+        tokio::spawn(self.run(rx));
+
+        WriterCallback { tx }
+    }
+
+    async fn run(mut self, mut rx: Receiver<(MessageID, Vec<u8>)>) {
+        let drop_guard = self.cancellation.clone().drop_guard();
+
+        while let Some(Some((id, data))) = self.cancellation.run_until_cancelled(rx.recv()).await {
+            log::trace!("relaying message {} to peer {}", id, self.peer);
+            match self
+                .cancellation
+                .run_until_cancelled(self.writer.send(Message::Binary(data)))
+                .await
+            {
+                // cancelled
+                None => return,
+                // failed to write
+                Some(Err(err)) => {
+                    let _ = self.writer.close();
+                    log::debug!("failed to forward message to peer: {}", err);
+                    return;
+                }
+                // written
+                Some(_) => {}
+            }
+
+            _ = self.switch.ack(&self.peer, &[id]).await;
+        }
+
+        drop(drop_guard);
     }
 }
 
-impl Callback for RelayCallback {
-    async fn handle(&self, id: MessageID, data: &[u8]) -> Result<(), CallbackError> {
-        log::trace!("relaying message {} to peer {}", id, self.peer);
-        let mut writer = self.writer.lock().await;
-        // todo: Suggestion
-        // Imagine running the writer behind a tokio bound channel. Means that on write
-        // the worker will immediately detect if the underlying socket writer is already dead (channel is closed)
-        // and will skip immediately (and remove this connection from its own connection subset). Or it detect
-        // that the channel is full in that case it can also assume connection is stalling and can be removed
-        // from its own subset.
-        if let Err(err) = writer.send(Message::Binary(data.as_ref().into())).await {
-            let _ = writer.close();
-            log::debug!("failed to forward message to peer: {}", err);
-            return Err(CallbackError);
-        }
+pub(crate) struct WriterCallback {
+    tx: Sender<(MessageID, Vec<u8>)>,
+}
 
-        self.switch
-            .ack(&self.peer, &[id])
-            .await
-            .map_err(|_| CallbackError)
+impl Callback for WriterCallback {
+    fn handle(&self, id: MessageID, data: Vec<u8>) -> Result<(), CallbackError> {
+        self.tx.try_send((id, data)).map_err(|_| CallbackError)
     }
 }
 
 struct Session<M: Metrics, D: TwinDB> {
     id: SessionID,
     domain: String,
-    switch: Arc<Switch<RelayCallback>>,
+    switch: Arc<Switch<WriterCallback>>,
     federator: Arc<Federator>,
     metrics: M,
     twins: D,
@@ -293,7 +326,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
     fn new(
         claims: Claims,
         domain: String,
-        switch: Arc<Switch<RelayCallback>>,
+        switch: Arc<Switch<WriterCallback>>,
         federator: Arc<Federator>,
         metrics: M,
         twins: D,
@@ -377,13 +410,24 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         // handler is kept alive to keep the registration alive
         // once dropped (connection closed) registration stops
         log::debug!("got connection from '{}'", self.id);
-        let mut registration = self
-            .switch
+        let cancellation = CancellationToken::new();
+
+        self.switch
             .register(
                 self.id.clone(),
-                RelayCallback::new(self.id.clone(), Arc::clone(&self.switch), writer),
+                cancellation.clone(),
+                ConnectionWriter::new(
+                    self.id.clone(),
+                    cancellation.clone(),
+                    Arc::clone(&self.switch),
+                    writer,
+                )
+                .start(),
             )
             .await?;
+
+        let drop_guard = cancellation.clone().drop_guard();
+        let mut cancelled = std::pin::pin!(cancellation.cancelled());
 
         loop {
             tokio::select! {
@@ -391,8 +435,8 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                 // if the same twin with the same sid (session id)
                 // registered again.
                 // we need to drop the connection then
-                _ = registration.cancelled() => {
-                    return Ok(());
+                _ = &mut cancelled => {
+                    break;
                 }
                 // received a message from the peer
                 Some(message) = reader.next()=> {
@@ -400,7 +444,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                         Ok(message) => message,
                         Err(err) => {
                             log::debug!("error receiving a message: {}", err);
-                            return Ok(());
+                            break;
                         }
                     };
 
@@ -450,6 +494,8 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             }
         }
 
+        self.switch.unregister(self.id).await;
+        drop(drop_guard);
         Ok(())
     }
 

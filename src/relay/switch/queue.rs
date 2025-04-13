@@ -33,7 +33,7 @@ impl<T> Queue<T> {
         loop {
             let mut queue = self.inner.lock().await;
 
-            if queue.len() > 0 {
+            if !queue.is_empty() {
                 let at = queue.len().saturating_sub(count);
                 let popped = queue.split_off(at);
 
