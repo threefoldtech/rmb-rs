@@ -120,7 +120,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
 
         let twin = data
             .twins
-            .get_twin(claims.id)
+            .get_twin(claims.id.into())
             .await
             .map_err(|err| HttpError::FailedToGetTwin(err.to_string()))?
             .ok_or(HttpError::TwinNotFound(claims.id))?;
@@ -223,7 +223,7 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
         return Ok(());
     }
     let mut twin = twin_db
-        .get_twin(envelope.source.twin)
+        .get_twin(envelope.source.twin.into())
         .await?
         .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
     let envelope_relays = RelayDomains::new(&envelope.relays);
@@ -298,7 +298,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         metrics: M,
         twins: D,
     ) -> Self {
-        let id: SessionID = (claims.id, claims.sid).into();
+        let id = SessionID::new(claims.id.into(), claims.sid);
         Self {
             id,
             domain,
@@ -326,7 +326,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         }
 
         let dst: SessionID = (&envelope.destination).into();
-        if dst.zero() {
+        if dst.is_empty() {
             anyhow::bail!("message with missing destination");
         }
 
@@ -342,7 +342,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         //  federated to the right relay (according to specs)
         let twin = self
             .twins
-            .get_twin(envelope.destination.twin)
+            .get_twin(envelope.destination.twin.into())
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 

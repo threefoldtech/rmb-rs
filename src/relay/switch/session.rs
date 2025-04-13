@@ -6,6 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::twin::TwinID;
 use crate::types::Address;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,11 +19,15 @@ pub enum ParseError {
 /// SessionID is a type alias for a user id. can be replaced later
 /// but for now we using numeric ids
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct SessionID(u32, Option<String>);
+pub struct SessionID(TwinID, Option<String>);
 
 impl SessionID {
-    pub fn zero(&self) -> bool {
-        self.0 == 0
+    pub fn new(twin_id: TwinID, session_id: Option<String>) -> Self {
+        Self(twin_id, session_id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0 == TwinID::EMPTY
     }
 }
 
@@ -47,12 +52,12 @@ impl FromStr for SessionID {
         match s.split_once(':') {
             None => {
                 let id: u32 = s.parse()?;
-                Ok(Self(id, None))
+                Ok(Self(id.into(), None))
             }
             Some((id, sid)) => {
                 let id: u32 = id.parse()?;
 
-                Ok(Self(id, Some(sid.into())))
+                Ok(Self(id.into(), Some(sid.into())))
             }
         }
     }
@@ -60,14 +65,14 @@ impl FromStr for SessionID {
 
 impl From<&Address> for SessionID {
     fn from(value: &Address) -> Self {
-        Self(value.twin, value.connection.clone())
+        Self(value.twin.into(), value.connection.clone())
     }
 }
 
 impl From<&SessionID> for Address {
     fn from(value: &SessionID) -> Self {
         let mut address = Address::new();
-        address.twin = value.0;
+        address.twin = value.0.into();
         address.connection.clone_from(&value.1);
 
         address
@@ -78,25 +83,25 @@ impl PartialEq<protobuf::MessageField<Address>> for SessionID {
     fn eq(&self, other: &protobuf::MessageField<Address>) -> bool {
         match other.0 {
             None => false,
-            Some(ref addr) => addr.twin == self.0 && addr.connection == self.1,
+            Some(ref addr) => addr.twin == u32::from(self.0) && addr.connection == self.1,
         }
     }
 }
 
 impl From<&protobuf::MessageField<Address>> for SessionID {
     fn from(value: &protobuf::MessageField<Address>) -> Self {
-        Self(value.twin, value.connection.clone())
+        Self(value.twin.into(), value.connection.clone())
     }
 }
 
 impl From<u32> for SessionID {
     fn from(value: u32) -> Self {
-        Self(value, None)
+        Self(value.into(), None)
     }
 }
 
-impl From<(u32, Option<String>)> for SessionID {
-    fn from((id, sid): (u32, Option<String>)) -> Self {
+impl From<(TwinID, Option<String>)> for SessionID {
+    fn from((id, sid): (TwinID, Option<String>)) -> Self {
         Self(id, sid)
     }
 }
@@ -229,6 +234,8 @@ impl From<ConnectionID> for Connection {
 
 #[cfg(test)]
 mod test {
+    use crate::twin::TwinID;
+
     use super::{MessageID, SessionID};
     use std::num::ParseIntError;
 
@@ -255,11 +262,11 @@ mod test {
     #[test]
     fn parse_stream_id() {
         let id: SessionID = "10".parse().unwrap();
-        assert_eq!(id.0, 10);
+        assert_eq!(id.0, TwinID::from(10));
         assert_eq!(id.1, None);
 
         let id: SessionID = "10:con".parse().unwrap();
-        assert_eq!(id.0, 10);
+        assert_eq!(id.0, TwinID::from(10));
         assert!(matches!(id.1, Some(ref sid) if sid == "con"));
 
         let mut arg = id.to_redis_args();
@@ -270,7 +277,7 @@ mod test {
         let v = Value::Data(arg.pop().unwrap());
         let id: SessionID = SessionID::from_redis_value(&v).unwrap();
 
-        assert_eq!(id.0, 10);
+        assert_eq!(id.0, TwinID::from(10));
         assert!(matches!(id.1, Some(ref sid) if sid == "con"));
     }
 }

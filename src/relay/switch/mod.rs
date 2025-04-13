@@ -194,6 +194,7 @@ where
         }
     }
 }
+
 impl<H> Switch<H>
 where
     H: Callback,

@@ -82,7 +82,7 @@ where
         let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
         let twin = self
             .twins
-            .get_twin(env.destination.twin)
+            .get_twin(env.destination.twin.into())
             .await
             .context("failed to get twin details")?
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
@@ -157,7 +157,7 @@ mod test {
             .unwrap();
         let twin_id = 1;
         let twin = Twin {
-            id: twin_id,
+            id: twin_id.into(),
             account: account_id,
             relay: Some(RelayDomains::new(&[server.address().to_string()])),
             pk: None,

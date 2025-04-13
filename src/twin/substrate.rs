@@ -1,6 +1,7 @@
 use super::RelayDomains;
 use super::Twin;
 use super::TwinDB;
+use super::TwinID;
 use crate::cache::Cache;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -51,7 +52,7 @@ impl<C> TwinDB for SubstrateTwinDB<C>
 where
     C: Cache<Twin> + Clone,
 {
-    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>> {
+    async fn get_twin(&self, twin_id: TwinID) -> Result<Option<Twin>> {
         // we can hit the cache as fast as we can here
         if let Some(twin) = self.cache.get(twin_id).await? {
             return Ok(Some(twin));
@@ -59,7 +60,7 @@ where
 
         let mut client = self.client.lock().await;
 
-        let twin = client.get_twin_by_id(twin_id).await?;
+        let twin = client.get_twin_by_id(twin_id.into()).await?;
 
         // but if we wanna hit the grid we get throttled by the workers pool
         // the pool has a limited size so only X queries can be in flight.
@@ -206,7 +207,7 @@ mod tests {
         .unwrap();
 
         let twin = db
-            .get_twin(1)
+            .get_twin(1.into())
             .await
             .context("can't get twin from substrate")
             .unwrap()
@@ -240,7 +241,7 @@ mod tests {
             .unwrap();
 
         let twin = db
-            .get_twin(1)
+            .get_twin(1.into())
             .await
             .context("can't get twin from substrate")
             .unwrap()
