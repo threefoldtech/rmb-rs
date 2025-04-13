@@ -53,7 +53,7 @@ where
             .arg(&self.prefix)
             .arg(key.to_string())
             .arg(obj)
-            .query_async(&mut *conn)
+            .query_async::<_, ()>(&mut *conn)
             .await?;
 
         Ok(())
@@ -79,7 +79,7 @@ where
     }
     async fn flush(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
+        let _: () = cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
 
         Ok(())
     }
