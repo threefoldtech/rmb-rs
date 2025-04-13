@@ -436,7 +436,7 @@ where
             c = c.arg(id);
         }
 
-        c.query_async(&mut *con).await?;
+        let _: () = c.query_async(&mut *con).await?;
 
         Ok(())
     }
@@ -493,7 +493,7 @@ async fn send<'a>(
         .query_async(&mut *con)
         .await?;
 
-    cmd("EXPIRE")
+    let _: () = cmd("EXPIRE")
         .arg(stream_id)
         .arg(QUEUE_EXPIRE)
         .query_async(&mut *con)
