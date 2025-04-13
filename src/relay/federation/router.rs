@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     relay::ranker::RelayRanker,
-    relay::switch::{Sink, StreamID},
+    relay::switch::{SessionID, Sink},
     twin::TwinDB,
     types::{Envelope, EnvelopeExt},
 };
@@ -106,7 +106,7 @@ where
                     msg.uid = env.uid;
                     let e = msg.mut_error();
                     e.message = err.to_string();
-                    let dst: StreamID = (&env.source).into();
+                    let dst: SessionID = (&env.source).into();
 
                     let _ = sink.send(&dst, msg.write_to_bytes()?).await;
                     // after this point we don't care if the error was not reported back

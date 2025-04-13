@@ -19,10 +19,10 @@ use bb8_redis::{
 };
 use queue::Queue;
 use session::*;
-pub use session::{MessageID, StreamID};
-use std::cmp::min;
+pub use session::{MessageID, SessionID};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::{cmp::min, future::Future};
 use tokio::sync::oneshot;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
@@ -90,30 +90,35 @@ impl From<RunError<RedisError>> for SwitchError {
 
 type Result<T> = std::result::Result<T, SwitchError>;
 
-#[async_trait::async_trait]
-pub trait Hook: Send + Sync + 'static {
-    async fn received<T>(&self, id: MessageID, data: T)
-    where
-        T: AsRef<[u8]> + Send + Sync;
+#[derive(thiserror::Error, Debug)]
+#[error("callback error")]
+pub struct CallbackError;
+
+pub trait Callback: Send + Sync + 'static {
+    fn handle(
+        &self,
+        id: MessageID,
+        data: &[u8],
+    ) -> impl Future<Output = std::result::Result<(), CallbackError>> + Send;
 }
 
 struct User<H>
 where
-    H: Hook,
+    H: Callback,
 {
     connection: ConnectionID,
-    hook: H,
+    callback: H,
     ch: oneshot::Sender<()>,
 }
 
 impl<H> User<H>
 where
-    H: Hook,
+    H: Callback,
 {
     fn new(connection: ConnectionID, hook: H, ch: oneshot::Sender<()>) -> Self {
         Self {
             connection,
-            hook,
+            callback: hook,
             ch,
         }
     }
@@ -123,7 +128,7 @@ where
     }
 }
 
-type UserMap<S> = HashMap<StreamID, User<S>>;
+type UserMap<S> = HashMap<SessionID, User<S>>;
 
 pub struct SwitchOptions {
     pool: Pool<RedisConnectionManager>,
@@ -160,7 +165,7 @@ impl SwitchOptions {
         self
     }
 
-    pub async fn build<H: Hook>(self) -> Result<Switch<H>> {
+    pub async fn build<H: Callback>(self) -> Result<Switch<H>> {
         Switch::new(self).await
     }
 }
@@ -168,7 +173,7 @@ impl SwitchOptions {
 /// Rely is main rely object
 pub struct Switch<H>
 where
-    H: Hook,
+    H: Callback,
 {
     pool: Pool<RedisConnectionManager>,
     users: Arc<RwLock<UserMap<H>>>,
@@ -178,7 +183,7 @@ where
 
 impl<H> Clone for Switch<H>
 where
-    H: Hook,
+    H: Callback,
 {
     fn clone(&self) -> Self {
         Switch {
@@ -191,7 +196,7 @@ where
 }
 impl<H> Switch<H>
 where
-    H: Hook,
+    H: Callback,
 {
     /// create a new instance of the switch with given redis connection info and
     /// pool size. The pool size determine the number of workers who are pulling
@@ -244,7 +249,7 @@ where
         Ok(rely)
     }
 
-    async fn process(&self, connections: &mut HashMap<StreamID, Connection>) -> Result<()> {
+    async fn process(&self, connections: &mut HashMap<SessionID, Connection>) -> Result<()> {
         let users = self.users.read().await;
 
         connections.retain(|k, v| matches!(users.get(k), Some(u) if &u.connection == v.id()));
@@ -254,7 +259,7 @@ where
 
         drop(users);
         // build command
-        let (stream_ids, stream_connections): (Vec<&StreamID>, Vec<&Connection>) =
+        let (stream_ids, stream_connections): (Vec<&SessionID>, Vec<&Connection>) =
             connections.iter().unzip();
         //TODO: may be not rebuild the command each time when the list of current users don't change.
         let mut c = cmd("XREAD");
@@ -285,19 +290,19 @@ where
         };
 
         let users = self.users.read().await;
-        for Messages(stream_id, messages) in output {
-            let user = match users.get(&stream_id) {
+        'main: for Messages(session_id, messages) in output {
+            let user = match users.get(&session_id) {
                 Some(user) => user,
                 None => {
-                    connections.remove(&stream_id);
+                    connections.remove(&session_id);
                     continue;
                 }
             };
-            let session = connections.get_mut(&stream_id).expect("not possible");
-            if &user.connection != session.id() {
+
+            let mut connection = connections.remove(&session_id).expect("must exist");
+            if &user.connection != connection.id() {
                 // user has disconnected, and reconnected hence is probably served now
                 // by another workers.
-                connections.remove(&stream_id);
                 continue;
             }
             // now we know that the "connected" user is indeed served by this worker
@@ -311,28 +316,35 @@ where
                 }
 
                 let msg = &tags[1];
-                user.hook.received(msg_id, msg).await;
+                // todo: Multiple issues:
+                // - This blocks the worker if we are trying to send on a slow connection
+                //  - Make sure you return immediately or spawn a task.
+                // - This should never block because we already holding also
+                // a mutex guard on the global users map.
+                if user.callback.handle(msg_id, msg).await.is_err() {
+                    // todo: we need to find a way to cancel user registration.
+                    // so basically pop the user out of the "users" map. and call user.cancel()
+                    continue 'main;
+                }
 
                 MESSAGE_TX.inc();
                 MESSAGE_TX_BYTES.inc_by(msg.len() as u64);
 
-                session.set_last(msg_id);
+                connection.set_last(msg_id);
             }
+
+            connections.insert(session_id, connection);
         }
 
         Ok(())
     }
-
-    /* pub async fn is_local(&self, id: StreamID) -> bool {
-        return self.users.read().await.contains_key(&id);
-    } */
 
     async fn worker(self, id: u32, nr: usize) {
         log::trace!("[{}] worker started", id);
         // a worker will wait for available registrations.
         // once registrations are available, it will then maintain it's own list
         // of user ids (in memory) with a
-        let mut connections: HashMap<StreamID, Connection> = HashMap::default();
+        let mut connections: HashMap<SessionID, Connection> = HashMap::default();
         // wait for the first set of users
         let name = id.to_string();
 
@@ -391,9 +403,9 @@ where
         }
     }
 
-    pub async fn register<ID: Into<StreamID>>(&self, id: ID, hook: H) -> Result<Registration<H>> {
+    pub async fn register<ID: Into<SessionID>>(&self, id: ID, hook: H) -> Result<Registration<H>> {
         // to make sure
-        let stream_id: StreamID = id.into();
+        let stream_id: SessionID = id.into();
         let connection_id = ConnectionID::new();
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -423,7 +435,7 @@ where
         ))
     }
 
-    pub async fn ack<ID: AsRef<StreamID>>(&self, id: ID, ids: &[MessageID]) -> Result<()> {
+    pub async fn ack<ID: AsRef<SessionID>>(&self, id: ID, ids: &[MessageID]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -448,7 +460,7 @@ where
     }
 
     /// send a message to given ID
-    pub async fn send<ID: AsRef<StreamID>, T: AsRef<[u8]>>(
+    pub async fn send<ID: AsRef<SessionID>, T: AsRef<[u8]>>(
         &self,
         id: ID,
         msg: T,
@@ -467,7 +479,7 @@ impl Sink {
         Self { pool }
     }
 
-    pub async fn send<ID: AsRef<StreamID>, T: AsRef<[u8]>>(
+    pub async fn send<ID: AsRef<SessionID>, T: AsRef<[u8]>>(
         &self,
         id: ID,
         msg: T,
@@ -477,7 +489,7 @@ impl Sink {
 }
 
 async fn send<'a>(
-    stream_id: &StreamID,
+    stream_id: &SessionID,
     pool: &Pool<RedisConnectionManager>,
     msg: &[u8],
 ) -> Result<MessageID> {
@@ -506,9 +518,9 @@ async fn send<'a>(
 }
 pub struct Registration<H>
 where
-    H: Hook,
+    H: Callback,
 {
-    id: StreamID,
+    id: SessionID,
     con: ConnectionID,
     users: Option<Arc<RwLock<UserMap<H>>>>,
     ch: oneshot::Receiver<()>,
@@ -516,10 +528,10 @@ where
 
 impl<H> Registration<H>
 where
-    H: Hook,
+    H: Callback,
 {
     fn new(
-        id: StreamID,
+        id: SessionID,
         con: ConnectionID,
         users: Arc<RwLock<UserMap<H>>>,
         ch: oneshot::Receiver<()>,
@@ -535,7 +547,7 @@ where
 
 impl<H> Registration<H>
 where
-    H: Hook,
+    H: Callback,
 {
     // cancelled blocks until the registration
     // is cancelled by the switch
@@ -550,7 +562,7 @@ where
 
 impl<S> Drop for Registration<S>
 where
-    S: Hook,
+    S: Callback,
 {
     fn drop(&mut self) {
         // if drop is called. it means whoever did the registration
@@ -574,7 +586,7 @@ where
 }
 
 use bb8_redis::redis::{ErrorKind, RedisResult, Value};
-struct Job(StreamID, ConnectionID);
+struct Job(SessionID, ConnectionID);
 struct Message(MessageID, Vec<Vec<u8>>);
 
 impl FromRedisValue for Message {
@@ -600,7 +612,7 @@ impl FromRedisValue for Message {
     }
 }
 
-struct Messages(StreamID, Vec<Message>);
+struct Messages(SessionID, Vec<Message>);
 
 impl FromRedisValue for Messages {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
@@ -613,7 +625,7 @@ impl FromRedisValue for Messages {
                     )));
                 }
                 Ok(Self(
-                    StreamID::from_redis_value(&values[0])?,
+                    SessionID::from_redis_value(&values[0])?,
                     Vec::from_redis_value(&values[1])?,
                 ))
             }
@@ -629,14 +641,14 @@ type Output = Option<Vec<Messages>>;
 
 #[cfg(test)]
 mod test {
-    use super::{MessageID, Output, StreamID};
+    use super::{MessageID, Output, SessionID};
     use bb8_redis::redis::{self, cmd};
 
     #[test]
     fn message_serialization() {
         let client = redis::Client::open("redis://127.0.0.1/").unwrap();
         let mut con = client.get_connection().unwrap();
-        let stream = StreamID::from(0);
+        let stream = SessionID::from(0);
         let msg = "hello world";
         let _: () = cmd("XADD")
             .arg(stream.clone())

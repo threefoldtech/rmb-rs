@@ -22,11 +22,11 @@ use tokio::sync::Mutex;
 
 use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
-use super::switch::{Hook, MessageID, StreamID, Switch};
+use super::switch::{Callback, CallbackError, MessageID, SessionID, Switch};
 use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
-    switch: Arc<Switch<RelayHook>>,
+    switch: Arc<Switch<RelayCallback>>,
     twins: D,
     domain: String,
     federator: Arc<Federator>,
@@ -40,7 +40,7 @@ where
 {
     pub(crate) fn new<S: Into<String>>(
         domain: S,
-        switch: Arc<Switch<RelayHook>>,
+        switch: Arc<Switch<RelayCallback>>,
         twins: D,
         federator: Federator,
         limiter: R,
@@ -131,7 +131,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
 
         let metrics = data.limiter.get(twin.id).await;
         // Spawn a task to handle the websocket connection.
-        let stream = Stream::new(
+        let session = Session::new(
             // todo: improve the domain clone
             claims,
             data.domain.clone(),
@@ -142,7 +142,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
         );
 
         tokio::spawn(async move {
-            if let Err(err) = stream.serve(websocket).await {
+            if let Err(err) = session.serve(websocket).await {
                 log::error!("error in websocket connection: {}", err);
             }
         });
@@ -203,10 +203,13 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
+    // todo: this is UNSAFE. since we can't verify the received message hence
+    // we shouldn't poison local cache
+
     update_cache_relays(&envelope, &data.twins)
         .await
         .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
-    let dst: StreamID = (&envelope.destination).into();
+    let dst: SessionID = (&envelope.destination).into();
     data.switch.send(&dst, &body).await?;
 
     Response::builder()
@@ -238,14 +241,14 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
 
-pub(crate) struct RelayHook {
-    peer: StreamID,
+pub(crate) struct RelayCallback {
+    peer: SessionID,
     switch: Arc<Switch<Self>>,
     writer: Arc<Mutex<Writer>>,
 }
 
-impl RelayHook {
-    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+impl RelayCallback {
+    fn new(peer: SessionID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
         Self {
             peer,
             switch,
@@ -254,43 +257,48 @@ impl RelayHook {
     }
 }
 
-#[async_trait::async_trait]
-impl Hook for RelayHook {
-    async fn received<T>(&self, id: MessageID, data: T)
-    where
-        T: AsRef<[u8]> + Send + Sync,
-    {
+impl Callback for RelayCallback {
+    async fn handle(&self, id: MessageID, data: &[u8]) -> Result<(), CallbackError> {
         log::trace!("relaying message {} to peer {}", id, self.peer);
         let mut writer = self.writer.lock().await;
+        // todo: Suggestion
+        // Imagine running the writer behind a tokio bound channel. Means that on write
+        // the worker will immediately detect if the underlying socket writer is already dead (channel is closed)
+        // and will skip immediately (and remove this connection from its own connection subset). Or it detect
+        // that the channel is full in that case it can also assume connection is stalling and can be removed
+        // from its own subset.
         if let Err(err) = writer.send(Message::Binary(data.as_ref().into())).await {
+            let _ = writer.close();
             log::debug!("failed to forward message to peer: {}", err);
-            return;
+            return Err(CallbackError);
         }
 
-        if let Err(err) = self.switch.ack(&self.peer, &[id]).await {
-            log::error!("failed to ack message ({}, {}): {}", self.peer, id, err);
-        }
+        self.switch
+            .ack(&self.peer, &[id])
+            .await
+            .map_err(|_| CallbackError)
     }
 }
 
-struct Stream<M: Metrics, D: TwinDB> {
-    id: StreamID,
+struct Session<M: Metrics, D: TwinDB> {
+    id: SessionID,
     domain: String,
-    switch: Arc<Switch<RelayHook>>,
+    switch: Arc<Switch<RelayCallback>>,
     federator: Arc<Federator>,
     metrics: M,
     twins: D,
 }
-impl<M: Metrics, D: TwinDB> Stream<M, D> {
+
+impl<M: Metrics, D: TwinDB> Session<M, D> {
     fn new(
         claims: Claims,
         domain: String,
-        switch: Arc<Switch<RelayHook>>,
+        switch: Arc<Switch<RelayCallback>>,
         federator: Arc<Federator>,
         metrics: M,
         twins: D,
     ) -> Self {
-        let id: StreamID = (claims.id, claims.sid).into();
+        let id: SessionID = (claims.id, claims.sid).into();
         Self {
             id,
             domain,
@@ -317,10 +325,15 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             msg = envelope.write_to_bytes()?;
         }
 
-        let dst: StreamID = (&envelope.destination).into();
+        let dst: SessionID = (&envelope.destination).into();
         if dst.zero() {
             anyhow::bail!("message with missing destination");
         }
+
+        // todo(sameh):
+        // check if the dst twin id is already connected locally
+        // if so, we don't have to check federation and directly
+        // switch the message
 
         //  instead of sending the message directly to the switch
         //  we check federation information attached to the envelope
@@ -333,6 +346,8 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
+        // it's safe to update the local cache since we already authenticated
+        // the twin hence we trust their information.
         update_cache_relays(envelope, &self.twins).await?;
 
         if !twin
@@ -366,7 +381,7 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             .switch
             .register(
                 self.id.clone(),
-                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer),
+                RelayCallback::new(self.id.clone(), Arc::clone(&self.switch), writer),
             )
             .await?;
 
@@ -386,7 +401,6 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
                         Err(err) => {
                             log::debug!("error receiving a message: {}", err);
                             return Ok(());
-
                         }
                     };
 

@@ -15,18 +15,18 @@ pub enum ParseError {
     #[error("invalid value: {0}")]
     InvalidValue(#[from] ParseIntError),
 }
-/// StreamID is a type alias for a user id. can be replaced later
+/// SessionID is a type alias for a user id. can be replaced later
 /// but for now we using numeric ids
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct StreamID(u32, Option<String>);
+pub struct SessionID(u32, Option<String>);
 
-impl StreamID {
+impl SessionID {
     pub fn zero(&self) -> bool {
         self.0 == 0
     }
 }
 
-impl Display for StreamID {
+impl Display for SessionID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.1 {
             Some(ref con) => write!(f, "{}:{}", self.0, con),
@@ -35,13 +35,13 @@ impl Display for StreamID {
     }
 }
 
-impl AsRef<StreamID> for &StreamID {
-    fn as_ref(&self) -> &StreamID {
+impl AsRef<SessionID> for &SessionID {
+    fn as_ref(&self) -> &SessionID {
         self
     }
 }
 
-impl FromStr for StreamID {
+impl FromStr for SessionID {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.split_once(':') {
@@ -58,14 +58,14 @@ impl FromStr for StreamID {
     }
 }
 
-impl From<&Address> for StreamID {
+impl From<&Address> for SessionID {
     fn from(value: &Address) -> Self {
         Self(value.twin, value.connection.clone())
     }
 }
 
-impl From<&StreamID> for Address {
-    fn from(value: &StreamID) -> Self {
+impl From<&SessionID> for Address {
+    fn from(value: &SessionID) -> Self {
         let mut address = Address::new();
         address.twin = value.0;
         address.connection.clone_from(&value.1);
@@ -74,7 +74,7 @@ impl From<&StreamID> for Address {
     }
 }
 
-impl PartialEq<protobuf::MessageField<Address>> for StreamID {
+impl PartialEq<protobuf::MessageField<Address>> for SessionID {
     fn eq(&self, other: &protobuf::MessageField<Address>) -> bool {
         match other.0 {
             None => false,
@@ -83,25 +83,25 @@ impl PartialEq<protobuf::MessageField<Address>> for StreamID {
     }
 }
 
-impl From<&protobuf::MessageField<Address>> for StreamID {
+impl From<&protobuf::MessageField<Address>> for SessionID {
     fn from(value: &protobuf::MessageField<Address>) -> Self {
         Self(value.twin, value.connection.clone())
     }
 }
 
-impl From<u32> for StreamID {
+impl From<u32> for SessionID {
     fn from(value: u32) -> Self {
         Self(value, None)
     }
 }
 
-impl From<(u32, Option<String>)> for StreamID {
+impl From<(u32, Option<String>)> for SessionID {
     fn from((id, sid): (u32, Option<String>)) -> Self {
         Self(id, sid)
     }
 }
 
-impl ToRedisArgs for StreamID {
+impl ToRedisArgs for SessionID {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + bb8_redis::redis::RedisWrite,
@@ -111,7 +111,7 @@ impl ToRedisArgs for StreamID {
     }
 }
 
-impl FromRedisValue for StreamID {
+impl FromRedisValue for SessionID {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         if let Value::Data(bytes) = v {
             let s = core::str::from_utf8(bytes)?;
@@ -125,7 +125,7 @@ impl FromRedisValue for StreamID {
 
             let part = &s[7..];
 
-            let id: StreamID = part.parse().map_err(|err: ParseError| {
+            let id: SessionID = part.parse().map_err(|err: ParseError| {
                 RedisError::from((
                     ErrorKind::TypeError,
                     "stream id parse error",
@@ -229,7 +229,7 @@ impl From<ConnectionID> for Connection {
 
 #[cfg(test)]
 mod test {
-    use super::{MessageID, StreamID};
+    use super::{MessageID, SessionID};
     use std::num::ParseIntError;
 
     use bb8_redis::redis::{FromRedisValue, ToRedisArgs, Value};
@@ -254,11 +254,11 @@ mod test {
 
     #[test]
     fn parse_stream_id() {
-        let id: StreamID = "10".parse().unwrap();
+        let id: SessionID = "10".parse().unwrap();
         assert_eq!(id.0, 10);
         assert_eq!(id.1, None);
 
-        let id: StreamID = "10:con".parse().unwrap();
+        let id: SessionID = "10:con".parse().unwrap();
         assert_eq!(id.0, 10);
         assert!(matches!(id.1, Some(ref sid) if sid == "con"));
 
@@ -268,7 +268,7 @@ mod test {
         assert_eq!(String::from_utf8_lossy(&arg[0]), "stream:10:con");
 
         let v = Value::Data(arg.pop().unwrap());
-        let id: StreamID = StreamID::from_redis_value(&v).unwrap();
+        let id: SessionID = SessionID::from_redis_value(&v).unwrap();
 
         assert_eq!(id.0, 10);
         assert!(matches!(id.1, Some(ref sid) if sid == "con"));
