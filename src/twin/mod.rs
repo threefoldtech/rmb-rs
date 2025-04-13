@@ -1,11 +1,11 @@
 mod substrate;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fmt::{Display, Formatter},
+    future::Future,
     str::FromStr,
 };
 pub use substrate::*;
@@ -31,11 +31,13 @@ impl TwinID {
     pub const EMPTY: TwinID = TwinID(0);
 }
 
-#[async_trait]
 pub trait TwinDB: Send + Sync + Clone + 'static {
-    async fn get_twin(&self, twin_id: TwinID) -> Result<Option<Twin>>;
-    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>>;
-    async fn set_twin(&self, twin: Twin) -> Result<()>;
+    fn get_twin(&self, twin_id: TwinID) -> impl Future<Output = Result<Option<Twin>>> + Send;
+    fn get_twin_with_account(
+        &self,
+        account_id: AccountId32,
+    ) -> impl Future<Output = Result<Option<u32>>> + Send;
+    fn set_twin(&self, twin: Twin) -> impl Future<Output = Result<()>> + Send;
 }
 
 use tfchain_client::client::Twin as TwinData;

@@ -5,7 +5,6 @@ use tokio::sync::RwLock;
 
 use super::Cache;
 use anyhow::Result;
-use async_trait::async_trait;
 use ttl_cache::TtlCache;
 
 static IN_MEMORY_CAP: usize = 500;
@@ -33,7 +32,6 @@ impl<V> MemCache<V> {
     }
 }
 
-#[async_trait]
 impl<T> Cache<T> for MemCache<T>
 where
     T: Clone + Send + Sync + 'static,

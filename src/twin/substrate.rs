@@ -4,7 +4,6 @@ use super::TwinDB;
 use super::TwinID;
 use crate::cache::Cache;
 use anyhow::Result;
-use async_trait::async_trait;
 use std::collections::LinkedList;
 use std::sync::Arc;
 use subxt::utils::AccountId32;
@@ -47,7 +46,6 @@ where
     }
 }
 
-#[async_trait]
 impl<C> TwinDB for SubstrateTwinDB<C>
 where
     C: Cache<Twin> + Clone,
