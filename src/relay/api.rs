@@ -266,8 +266,15 @@ impl ConnectionWriter {
     }
 
     fn start(self) -> WriterCallback {
-        // todo: make the channel size configurable
-        let (tx, rx) = mpsc::channel(20);
+        // TODO:
+        // Regardless of the channel size. A slow connection can cause the messages to pile up
+        // in the channel. Which will eventually causes the `[WriterCallback::handle]` to fail.
+        // Hence it's important for the worker to tell the difference between a "Full" channel and a
+        // "Closed" channel. And then react differently to the error. One suggesting if a channel
+        // is full the worker can wait (on the background) until capacity is available for that client
+        // or timesout. If timedout or suddenly the connection is closed, it should then cancel that
+        // connection.
+        let (tx, rx) = mpsc::channel(256);
 
         tokio::spawn(self.run(rx));
 
