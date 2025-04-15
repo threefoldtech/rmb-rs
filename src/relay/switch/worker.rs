@@ -5,10 +5,10 @@ use bb8_redis::{
     redis::{cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value},
     RedisConnectionManager,
 };
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant, Duration};
 use tokio_util::sync::CancellationToken;
 
-use crate::relay::switch::{SwitchError, CON_PER_WORKER, MIN_JOBS_POP, RETRY_DELAY};
+use crate::relay::switch::{SwitchError, CallbackError, CON_PER_WORKER, MIN_JOBS_POP, RETRY_DELAY};
 
 use super::{
     queue::Queue, Callback, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
@@ -40,6 +40,82 @@ where
     callback: H,
     cancellation: CancellationToken,
     last_message_id: MessageID,
+    // cooldown information
+    cooldown_until: Option<Instant>,
+    first_error_time: Option<Instant>,
+    consecutive_errors: u32,
+}
+
+impl<H: Callback> Session<H> {
+    fn new(callback: H, cancellation: CancellationToken) -> Self {
+        Self {
+            callback,
+            cancellation,
+            last_message_id: MessageID::default(),
+            cooldown_until: None,
+            first_error_time: None,
+            consecutive_errors: 0,
+        }
+    }
+    
+    fn is_in_cooldown(&self, now: Instant) -> bool {
+        if let Some(until) = self.cooldown_until {
+            now < until
+        } else {
+            false
+        }
+    }
+    
+    fn reset_cooldown(&mut self) {
+        self.cooldown_until = None;
+        self.first_error_time = None;
+        self.consecutive_errors = 0;
+    }
+    
+    fn apply_cooldown(&mut self, now: Instant, base_duration: Duration, max_duration: Duration, multiplier: f32) {
+        // while processing a batch of messages, we want to avoid applying multiple cooldowns.
+        // Applying them repeatedly wouldn't be effective until the entire batch is processed.
+        // So we check if the cooldown is already active to avoid unnecessary updates.
+         if self.cooldown_until.is_none() || now >= self.cooldown_until.unwrap() {
+            self.consecutive_errors += 1;
+            
+            if self.first_error_time.is_none() {
+                self.first_error_time = Some(now);
+            }
+            
+            // Calculate cooldown duration
+            let duration = self.calculate_cooldown_duration(now, base_duration, max_duration, multiplier);
+            
+            // Apply cooldown
+            self.cooldown_until = Some(now + duration);
+        }
+    }
+    
+    fn calculate_cooldown_duration(&self, now: Instant, base_duration: Duration, max_duration: Duration, multiplier: f32) -> Duration {
+        // If this is the first error, use base duration
+        if self.consecutive_errors == 1 {
+            return base_duration;
+        }
+        
+        // Calculate how long errors have been occurring
+        let error_duration = if let Some(first_time) = self.first_error_time {
+            now.duration_since(first_time)
+        } else {
+            Duration::from_secs(0)
+        };
+        
+        // For recent first errors (< 6 seconds), use base duration
+        if error_duration < Duration::from_secs(6) {
+            return base_duration;
+        }
+        
+        // For persistent errors, apply exponential backoff
+        let factor = (self.consecutive_errors as f32 - 1.0).min(10.0);
+        let duration = base_duration.mul_f32(multiplier.powf(factor));
+        
+        // Cap at maximum duration
+        std::cmp::min(duration, max_duration)
+    }
 }
 
 pub struct Worker<H: Callback> {
@@ -49,6 +125,11 @@ pub struct Worker<H: Callback> {
     queue: Queue<WorkerJob<H>>,
     sessions: HashMap<SessionID, Session<H>>,
     cleanup: Vec<SessionID>,
+
+    // Cooldown configuration
+    cooldown_base_duration: Duration,
+    cooldown_max_duration: Duration,
+    cooldown_multiplier: f32,
 }
 
 impl<H> Worker<H>
@@ -63,6 +144,9 @@ where
             pool: switch.pool.clone(),
             sessions: HashMap::default(),
             cleanup: Vec::default(),
+            cooldown_base_duration: Duration::from_millis(100),
+            cooldown_max_duration: Duration::from_secs(5),
+            cooldown_multiplier: 2.0,
         }
     }
 
@@ -84,11 +168,7 @@ where
                 .await
                 .into_iter()
             {
-                let session = Session {
-                    callback: job.callback,
-                    cancellation: job.cancellation,
-                    last_message_id: MessageID::default(),
-                };
+                let session = Session::new(job.callback, job.cancellation);
 
                 self.sessions.insert(job.session_id, session);
             }
@@ -149,11 +229,7 @@ where
                     .await
                     .into_iter()
                 {
-                    let session = Session {
-                        callback: job.callback,
-                        cancellation: job.cancellation,
-                        last_message_id: MessageID::default(),
-                    };
+                    let session = Session::new(job.callback, job.cancellation);
 
                     self.sessions.insert(job.session_id, session);
                 }
@@ -168,9 +244,19 @@ where
             return Ok(());
         }
 
+        let now = Instant::now();
+        // Filter active sessions (not in cooldown)
+        let active_sessions: Vec<(&SessionID, &Session<H>)> = self.sessions.iter()
+            .filter(|(_, session)| !session.is_in_cooldown(now))
+            .collect();
+
+        if active_sessions.is_empty() {
+            return Ok(());
+        }
+
         // build command
         let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) =
-            self.sessions.iter().unzip();
+            active_sessions.into_iter().unzip();
         //TODO: may be not rebuild the command each time when the list of current users don't change.
         let mut c = cmd("XREAD");
         let mut c = c
@@ -215,9 +301,47 @@ where
                 let msg = tags.swap_remove(1);
                 let msg_len = msg.len();
 
-                if session.handle(msg_id, msg).is_err() {
-                    self.cleanup.push(session_id);
-                    continue 'sender;
+                match session.callback.handle(msg_id, msg) {
+                    Ok(()) => {
+                        // Success case - update metrics and reset cooldown
+                        MESSAGE_TX.inc();
+                        MESSAGE_TX_BYTES.inc_by(msg_len as u64);
+                        session.last_message_id = msg_id;
+                        
+                        if session.consecutive_errors > 0 {
+                            session.reset_cooldown();
+                        }
+                    },
+                    Err(CallbackError::Closed) => {
+                        // Channel is closed - client disconnected or crashed
+                        log::debug!("Channel closed for session {}, cleaning up", session_id);
+                        self.cleanup.push(session_id);
+                        continue 'sender;
+                    },
+                    Err(CallbackError::Full) => {
+                        // Channel is full - client is slow
+                        log::debug!("Channel full for session {}, applying cooldown", session_id);
+                        
+                        // Apply cooldown
+                        session.apply_cooldown(
+                            now,
+                            self.cooldown_base_duration,
+                            self.cooldown_max_duration,
+                            self.cooldown_multiplier
+                        );
+                    
+                        // Log cooldown details
+                        if let Some(until) = session.cooldown_until {
+                            let duration = until.duration_since(now);
+                            log::debug!(
+                                "Applied cooldown for session {} until {:?} (duration: {:?}, consecutive errors: {})",
+                                session_id, until, duration, session.consecutive_errors
+                            );
+                        }
+                    
+                    // Skip this message and continue with others
+                    continue;
+                    }
                 }
 
                 MESSAGE_TX.inc();

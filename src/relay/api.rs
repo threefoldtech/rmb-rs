@@ -316,7 +316,17 @@ pub(crate) struct WriterCallback {
 
 impl Callback for WriterCallback {
     fn handle(&self, id: MessageID, data: Vec<u8>) -> Result<(), CallbackError> {
-        self.tx.try_send((id, data)).map_err(|_| CallbackError)
+        match self.tx.try_send((id, data)) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if matches!(err, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
+                    Err(CallbackError::Closed)
+                } else {
+                    // Must be full
+                    Err(CallbackError::Full)
+                }
+            }
+        }
     }
 }
 

@@ -90,9 +90,14 @@ impl From<RunError<RedisError>> for SwitchError {
 
 type Result<T> = std::result::Result<T, SwitchError>;
 
-#[derive(thiserror::Error, Debug)]
-#[error("callback error")]
-pub struct CallbackError;
+#[derive(Debug, thiserror::Error)]
+pub enum CallbackError {
+    #[error("channel closed")]
+    Closed,
+    
+    #[error("channel full")]
+    Full,
+}
 
 pub trait Callback: Send + Sync + 'static {
     fn handle(&self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), CallbackError>;
