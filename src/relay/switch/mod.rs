@@ -22,9 +22,9 @@ use queue::Queue;
 pub use session::{MessageID, SessionID};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Duration;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use worker::WorkerJob;
 
 use prometheus::{IntCounter, IntGaugeVec, Opts, Registry};
@@ -98,7 +98,7 @@ pub trait Callback: Send + Sync + 'static {
     fn handle(&self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), CallbackError>;
 }
 
-type ActiveSessions = HashMap<SessionID, CancellationToken>;
+type ActiveSessions = HashMap<SessionID, DropGuard>;
 
 pub struct SwitchOptions {
     pool: Pool<RedisConnectionManager>,
@@ -145,24 +145,10 @@ pub struct Switch<H>
 where
     H: Callback,
 {
+    capacity: Arc<Semaphore>,
+    queue: Queue<WorkerJob<H>>,
     pool: Pool<RedisConnectionManager>,
     sessions: Arc<Mutex<ActiveSessions>>,
-    queue: Queue<WorkerJob<H>>,
-    max_users: usize,
-}
-
-impl<H> Clone for Switch<H>
-where
-    H: Callback,
-{
-    fn clone(&self) -> Self {
-        Switch {
-            pool: self.pool.clone(),
-            sessions: Arc::clone(&self.sessions),
-            queue: self.queue.clone(),
-            max_users: self.max_users,
-        }
-    }
 }
 
 impl<H> Switch<H>
@@ -191,10 +177,10 @@ where
 
         let queue = Queue::new();
         let switch = Switch {
-            pool,
+            capacity: Arc::new(Semaphore::new(max_users)),
             queue,
+            pool,
             sessions: Arc::new(Mutex::new(ActiveSessions::default())),
-            max_users,
         };
 
         let mut user_per_worker = max_users / (workers as usize);
@@ -227,21 +213,18 @@ where
         callback: H,
     ) -> Result<()> {
         let mut sessions = self.sessions.lock().await;
-        if sessions.len() > self.max_users {
+        let Ok(permit) = Arc::clone(&self.capacity).try_acquire_owned() else {
             return Err(SwitchError::MaxNumberOfUsers);
-        }
+        };
 
         // this overrides the previous user object. which means workers who
         // has been handling this user connection should forget about him and
         // don't wait on messages for it anymore.
-        if let Some(cancellation) = sessions.insert(session_id.clone(), cancellation.clone()) {
-            // old registration if exists should be used to close the
-            // join handler.
-            cancellation.cancel();
-        }
+
+        sessions.insert(session_id.clone(), cancellation.clone().drop_guard());
 
         self.queue
-            .push(WorkerJob::new(session_id, callback, cancellation))
+            .push(WorkerJob::new(session_id, permit, callback, cancellation))
             .await;
 
         Ok(())
@@ -249,9 +232,7 @@ where
 
     pub async fn unregister(&self, stream_id: SessionID) {
         let mut sessions = self.sessions.lock().await;
-        if let Some(cancellation) = sessions.remove(&stream_id) {
-            cancellation.cancel();
-        }
+        sessions.remove(&stream_id);
     }
 
     pub async fn ack<ID: AsRef<SessionID>>(&self, id: ID, ids: &[MessageID]) -> Result<()> {
@@ -307,7 +288,7 @@ impl Sink {
     }
 }
 
-async fn send<'a>(
+async fn send(
     stream_id: &SessionID,
     pool: &Pool<RedisConnectionManager>,
     msg: &[u8],

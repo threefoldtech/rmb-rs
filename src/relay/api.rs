@@ -295,7 +295,7 @@ impl ConnectionWriter {
                 None => return,
                 // failed to write
                 Some(Err(err)) => {
-                    let _ = self.writer.close();
+                    _ = self.writer.close().await;
                     log::debug!("failed to forward message to peer: {}", err);
                     return;
                 }

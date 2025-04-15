@@ -5,7 +5,7 @@ use bb8_redis::{
     redis::{cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value},
     RedisConnectionManager,
 };
-use tokio::time::sleep;
+use tokio::{sync::OwnedSemaphorePermit, time::sleep};
 use tokio_util::sync::CancellationToken;
 
 use crate::relay::switch::{SwitchError, CON_PER_WORKER, MIN_JOBS_POP, RETRY_DELAY};
@@ -17,14 +17,21 @@ use super::{
 
 pub struct WorkerJob<H: Callback> {
     session_id: SessionID,
+    permit: OwnedSemaphorePermit,
     callback: H,
     cancellation: CancellationToken,
 }
 
 impl<H: Callback> WorkerJob<H> {
-    pub fn new(session_id: SessionID, callback: H, cancellation: CancellationToken) -> Self {
+    pub fn new(
+        session_id: SessionID,
+        permit: OwnedSemaphorePermit,
+        callback: H,
+        cancellation: CancellationToken,
+    ) -> Self {
         Self {
             session_id,
+            permit,
             callback,
             cancellation,
         }
@@ -38,8 +45,23 @@ where
 {
     #[deref]
     callback: H,
+    _permit: OwnedSemaphorePermit,
     cancellation: CancellationToken,
     last_message_id: MessageID,
+}
+
+impl<H> From<WorkerJob<H>> for Session<H>
+where
+    H: Callback,
+{
+    fn from(value: WorkerJob<H>) -> Self {
+        Self {
+            callback: value.callback,
+            _permit: value.permit,
+            cancellation: value.cancellation,
+            last_message_id: MessageID::default(),
+        }
+    }
 }
 
 pub struct Worker<H: Callback> {
@@ -84,13 +106,7 @@ where
                 .await
                 .into_iter()
             {
-                let session = Session {
-                    callback: job.callback,
-                    cancellation: job.cancellation,
-                    last_message_id: MessageID::default(),
-                };
-
-                self.sessions.insert(job.session_id, session);
+                self.sessions.insert(job.session_id.clone(), job.into());
             }
 
             'inner: loop {
@@ -149,13 +165,7 @@ where
                     .await
                     .into_iter()
                 {
-                    let session = Session {
-                        callback: job.callback,
-                        cancellation: job.cancellation,
-                        last_message_id: MessageID::default(),
-                    };
-
-                    self.sessions.insert(job.session_id, session);
+                    self.sessions.insert(job.session_id.clone(), job.into());
                 }
             }
         }

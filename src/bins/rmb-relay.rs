@@ -15,7 +15,6 @@ use tokio::sync::oneshot;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
-
 /// the reliable message bus
 #[derive(Parser, Debug)]
 #[clap(name ="rmb-rely", author, version = env!("GIT_VERSION"), about, long_about = None)]

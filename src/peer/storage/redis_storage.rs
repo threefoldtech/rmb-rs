@@ -18,7 +18,7 @@ struct BacklogKey<'a>(&'a str);
 
 const MAX_COMMANDS: isize = 10000;
 
-impl<'a> ToRedisArgs for BacklogKey<'a> {
+impl ToRedisArgs for BacklogKey<'_> {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + bb8_redis::redis::RedisWrite,
@@ -27,7 +27,7 @@ impl<'a> ToRedisArgs for BacklogKey<'a> {
     }
 }
 
-impl<'a> Display for BacklogKey<'a> {
+impl Display for BacklogKey<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "msgbus.backlog.{}", self.0)
     }
@@ -35,7 +35,7 @@ impl<'a> Display for BacklogKey<'a> {
 
 struct RunKey<'a>(&'a str);
 
-impl<'a> ToRedisArgs for RunKey<'a> {
+impl ToRedisArgs for RunKey<'_> {
     fn write_redis_args<W>(&self, out: &mut W)
     where
         W: ?Sized + bb8_redis::redis::RedisWrite,
@@ -44,7 +44,7 @@ impl<'a> ToRedisArgs for RunKey<'a> {
     }
 }
 
-impl<'a> Display for RunKey<'a> {
+impl Display for RunKey<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "msgbus.{}", self.0)
     }
