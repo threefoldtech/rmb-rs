@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     relay::ranker::RelayRanker,
-    relay::switch::{Sink, StreamID},
+    relay::switch::{SessionID, Sink},
     twin::TwinDB,
     types::{Envelope, EnvelopeExt},
 };
@@ -82,7 +82,7 @@ where
         let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
         let twin = self
             .twins
-            .get_twin(env.destination.twin)
+            .get_twin(env.destination.twin.into())
             .await
             .context("failed to get twin details")?
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
@@ -106,7 +106,7 @@ where
                     msg.uid = env.uid;
                     let e = msg.mut_error();
                     e.message = err.to_string();
-                    let dst: StreamID = (&env.source).into();
+                    let dst: SessionID = (&env.source).into();
 
                     let _ = sink.send(&dst, msg.write_to_bytes()?).await;
                     // after this point we don't care if the error was not reported back
@@ -157,7 +157,7 @@ mod test {
             .unwrap();
         let twin_id = 1;
         let twin = Twin {
-            id: twin_id,
+            id: twin_id.into(),
             account: account_id,
             relay: Some(RelayDomains::new(&[server.address().to_string()])),
             pk: None,

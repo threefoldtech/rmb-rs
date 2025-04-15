@@ -152,7 +152,7 @@ impl Storage for RedisStorage {
         }
         let mut conn = self.get_connection().await?;
         let key = BacklogKey(&backlog.uid);
-        conn.set_ex(&key, backlog, backlog.ttl as usize).await?;
+        let _: () = conn.set_ex(&key, backlog, backlog.ttl as usize).await?;
 
         Ok(())
     }
@@ -167,8 +167,8 @@ impl Storage for RedisStorage {
         request.reply_to = Queue::Response.to_string();
 
         let key = RunKey(&request.command);
-        conn.lpush(&key, &request).await?;
-        conn.ltrim(&key, 0, self.max_commands - 1).await?;
+        let _: () = conn.lpush(&key, &request).await?;
+        let _: () = conn.ltrim(&key, 0, self.max_commands - 1).await?;
 
         Ok(())
     }
@@ -177,8 +177,8 @@ impl Storage for RedisStorage {
         let mut conn = self.get_connection().await?;
         // set reply queue
 
-        conn.lpush(queue, &response).await?;
-        conn.ltrim(queue, 0, self.max_commands - 1).await?;
+        let _: () = conn.lpush(queue, &response).await?;
+        let _: () = conn.ltrim(queue, 0, self.max_commands - 1).await?;
 
         Ok(())
     }

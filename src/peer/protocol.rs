@@ -164,7 +164,7 @@ where
         }
         let twin = self
             .twins
-            .get_twin(envelope.source.twin)
+            .get_twin(envelope.source.twin.into())
             .await
             .context("failed to get twin information")?
             .ok_or(ProtocolError::UnknownTwin(envelope.source.twin))?;
@@ -253,7 +253,7 @@ where
     pub async fn write(&mut self, mut envelope: Envelope) -> Result<(), ProtocolError> {
         let twin = self
             .twins
-            .get_twin(envelope.destination.twin)
+            .get_twin(envelope.destination.twin.into())
             .await?
             .ok_or_else(|| ProtocolError::UnknownTwin(envelope.destination.twin))?;
 

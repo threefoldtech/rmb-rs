@@ -172,7 +172,7 @@ async fn app(args: Params) -> Result<()> {
 
         // we need to make sure our twin is up to date
         let twin = db
-            .get_twin(id)
+            .get_twin(id.into())
             .await
             .context("failed to get twin details")?
             .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;

@@ -4,17 +4,24 @@ pub use memory::MemCache;
 pub use redis::RedisCache;
 
 use anyhow::Result;
-use async_trait::async_trait;
-use std::marker::{Send, Sync};
+use std::{
+    future::Future,
+    marker::{Send, Sync},
+};
 
-#[async_trait]
 pub trait Cache<T>: Send + Sync + 'static {
-    async fn set<S: ToString + Send + Sync>(&self, id: S, obj: T) -> Result<()>;
-    async fn get<S: ToString + Send + Sync>(&self, id: S) -> Result<Option<T>>;
-    async fn flush(&self) -> Result<()>;
+    fn set<S: ToString + Send + Sync>(
+        &self,
+        id: S,
+        obj: T,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn get<S: ToString + Send + Sync>(
+        &self,
+        id: S,
+    ) -> impl Future<Output = Result<Option<T>>> + Send;
+    fn flush(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
-#[async_trait]
 impl<T, C> Cache<T> for Option<C>
 where
     C: Cache<T>,
@@ -43,7 +50,6 @@ where
 #[derive(Clone, Copy)]
 pub struct NoCache;
 
-#[async_trait]
 impl<T> Cache<T> for NoCache
 where
     T: Send + Sync + 'static,

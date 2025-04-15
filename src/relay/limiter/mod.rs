@@ -6,6 +6,8 @@ use fixed::{FixedWindow, FixedWindowLimiter};
 
 pub use fixed::FixedWindowOptions;
 
+use crate::twin::TwinID;
+
 #[async_trait]
 pub trait Metrics: Send + Sync + Clone + 'static {
     /// measure returns `true` if a user hasn't exceeded his consumption limits, `false` otherwise.
@@ -16,7 +18,7 @@ pub trait Metrics: Send + Sync + Clone + 'static {
 pub trait RateLimiter: Send + Sync + Clone + 'static {
     type Metrics: Metrics;
 
-    async fn get(&self, twin: u32) -> Self::Metrics;
+    async fn get(&self, twin: TwinID) -> Self::Metrics;
 }
 
 /// Limiters enum combines different implementations of rate limiters.
@@ -56,7 +58,7 @@ impl Metrics for LimitersMetrics {
 #[async_trait]
 impl RateLimiter for Limiters {
     type Metrics = LimitersMetrics;
-    async fn get(&self, twin: u32) -> Self::Metrics {
+    async fn get(&self, twin: TwinID) -> Self::Metrics {
         match self {
             Self::NoLimit => LimitersMetrics::NoLimit,
             Self::FixedWindow(ref limiter) => LimitersMetrics::FixedWindow(limiter.get(twin).await),
