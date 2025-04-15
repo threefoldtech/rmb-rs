@@ -31,7 +31,7 @@ use super::HttpError;
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<WriterCallback>>,
     twins: D,
-    domain: HashSet<String>,
+    domains: HashSet<String>,
     federator: Arc<Federator>,
     limiter: R,
 }
@@ -42,14 +42,14 @@ where
     R: RateLimiter,
 {
     pub(crate) fn new(
-        domain: HashSet<String>,
+        domains: HashSet<String>,
         switch: Arc<Switch<WriterCallback>>,
         twins: D,
         federator: Federator,
         limiter: R,
     ) -> Self {
         Self {
-            domain: domain,
+            domains: domains,
             switch,
             twins,
             federator: Arc::new(federator),
@@ -137,7 +137,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
         let session = Session::new(
             // todo: improve the domain clone
             claims,
-            data.domain.clone(),
+            data.domains.clone(),
             Arc::clone(&data.switch),
             Arc::clone(&data.federator),
             metrics,
@@ -323,7 +323,7 @@ impl Callback for WriterCallback {
 
 struct Session<M: Metrics, D: TwinDB> {
     id: SessionID,
-    domain: HashSet<String>,
+    domains: HashSet<String>,
     switch: Arc<Switch<WriterCallback>>,
     federator: Arc<Federator>,
     metrics: M,
@@ -333,7 +333,7 @@ struct Session<M: Metrics, D: TwinDB> {
 impl<M: Metrics, D: TwinDB> Session<M, D> {
     fn new(
         claims: Claims,
-        domain: HashSet<String>,
+        domains: HashSet<String>,
         switch: Arc<Switch<WriterCallback>>,
         federator: Arc<Federator>,
         metrics: M,
@@ -342,7 +342,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         let id = SessionID::new(claims.id.into(), claims.sid);
         Self {
             id,
-            domain,
+            domains,
             switch,
             federator,
             metrics,
@@ -378,7 +378,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
 
         //  instead of sending the message directly to the switch
         //  we check federation information attached to the envelope
-        //  if federation is not empty and does not match the domain
+        //  if federation is not empty and does not match one of the domains
         //  of this server, we need to schedule this message to be
         //  federated to the right relay (according to specs)
         let twin = self
@@ -394,7 +394,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         if !twin
             .relay
             .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
-            .has_common(&self.domain)
+            .has_common(&self.domains)
         {
             log::debug!("got an foreign message");
             // push message to the (relay.federation) queue

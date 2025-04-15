@@ -24,7 +24,7 @@ pub mod ranker;
 pub struct Relay<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<WriterCallback>>,
     twins: D,
-    domain: HashSet<String>,
+    domains: HashSet<String>,
     federation: Federation<D>,
     limiter: R,
 }
@@ -35,7 +35,7 @@ where
     R: RateLimiter,
 {
     pub async fn new(
-        domain: HashSet<String>,
+        domains: HashSet<String>,
         twins: D,
         opt: SwitchOptions,
         federation: FederationOptions<D>,
@@ -47,7 +47,7 @@ where
         Ok(Self {
             switch: Arc::new(switch),
             twins,
-            domain: domain,
+            domains: domains,
             federation,
             limiter,
         })
@@ -57,7 +57,7 @@ where
         let tcp_listener = TcpListener::bind(address).await?;
         let federator = self.federation.start();
         let http = api::HttpService::new(api::AppData::new(
-            self.domain,
+            self.domains,
             self.switch,
             self.twins,
             federator,
