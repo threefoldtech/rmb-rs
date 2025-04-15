@@ -167,9 +167,16 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         )
     };
     let ranker = relay::ranker::RelayRanker::new(Duration::from_secs(args.ranker_period));
-    let r = relay::Relay::new(args.domain.iter().cloned().collect(), twins, opt, federation, limiter, ranker)
-        .await
-        .unwrap();
+    let r = relay::Relay::new(
+        args.domain.iter().cloned().collect(),
+        twins,
+        opt,
+        federation,
+        limiter,
+        ranker,
+    )
+    .await
+    .unwrap();
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {
