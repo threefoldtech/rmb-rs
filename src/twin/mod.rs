@@ -119,4 +119,8 @@ impl RelayDomains {
     pub fn iter(&self) -> std::collections::hash_set::Iter<String> {
         self.0.iter()
     }
+
+    pub fn has_common(&self, other: &HashSet<String>) -> bool {
+        !self.0.is_disjoint(other)
+    }
 }

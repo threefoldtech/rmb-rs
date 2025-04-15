@@ -15,6 +15,7 @@ use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use prometheus::Encoder;
 use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,7 +31,7 @@ use super::HttpError;
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<WriterCallback>>,
     twins: D,
-    domain: String,
+    domain: HashSet<String>,
     federator: Arc<Federator>,
     limiter: R,
 }
@@ -40,15 +41,15 @@ where
     D: TwinDB,
     R: RateLimiter,
 {
-    pub(crate) fn new<S: Into<String>>(
-        domain: S,
+    pub(crate) fn new(
+        domain: HashSet<String>,
         switch: Arc<Switch<WriterCallback>>,
         twins: D,
         federator: Federator,
         limiter: R,
     ) -> Self {
         Self {
-            domain: domain.into(),
+            domain: domain,
             switch,
             twins,
             federator: Arc::new(federator),
@@ -322,7 +323,7 @@ impl Callback for WriterCallback {
 
 struct Session<M: Metrics, D: TwinDB> {
     id: SessionID,
-    domain: String,
+    domain: HashSet<String>,
     switch: Arc<Switch<WriterCallback>>,
     federator: Arc<Federator>,
     metrics: M,
@@ -332,7 +333,7 @@ struct Session<M: Metrics, D: TwinDB> {
 impl<M: Metrics, D: TwinDB> Session<M, D> {
     fn new(
         claims: Claims,
-        domain: String,
+        domain: HashSet<String>,
         switch: Arc<Switch<WriterCallback>>,
         federator: Arc<Federator>,
         metrics: M,
@@ -393,7 +394,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         if !twin
             .relay
             .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
-            .contains(&self.domain)
+            .has_common(&self.domain)
         {
             log::debug!("got an foreign message");
             // push message to the (relay.federation) queue

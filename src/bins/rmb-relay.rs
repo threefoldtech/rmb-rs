@@ -20,10 +20,10 @@ use tokio::sync::oneshot;
 #[derive(Parser, Debug)]
 #[clap(name ="rmb-rely", author, version = env!("GIT_VERSION"), about, long_about = None)]
 struct Args {
-    /// domain of this relay or it's public IP. used to identify
+    /// domains of this relay or it's public IPs. used to identify
     /// if a twin is on this relay or not.
-    #[clap(short = 'm', long)]
-    domain: String,
+    #[clap(short = 'm', long, num_args = 1..)]
+    domain: Vec<String>,
 
     /// redis address
     #[clap(short, long, default_value_t = String::from("redis://localhost:6379"))]
@@ -167,7 +167,7 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         )
     };
     let ranker = relay::ranker::RelayRanker::new(Duration::from_secs(args.ranker_period));
-    let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter, ranker)
+    let r = relay::Relay::new(args.domain.iter().cloned().collect(), twins, opt, federation, limiter, ranker)
         .await
         .unwrap();
 
