@@ -272,3 +272,19 @@ Example:
 ```bash
   rmb-peer -m "{MNEMONIC}" --substrate wss://tfchain.dev.grid.tf:443 --relay wss://r1.dev.grid.tf --relay wss://r2.dev.grid.tf
 ```
+
+## Relay Domains
+
+Starting from v1.3.1, the relay supports multiple domains (when needed), which are used to determine whether a destination twin is directly connected to this relay. these domains should be points to the public IP of this relay.
+
+```bash
+rmb-relay --domain relay.example.com --domain relay1.example.com
+```
+
+or short name
+
+```bash
+rmb-relay -m relay.example.com -m relay1.example.com
+```
+
+The relay will internally route messages over existing WebSocket connections to twins that use one of the provided domains as their relay domain. If the destination twin isn't associated with any of these domains, the message will be forwarded to one of the twin's relays via federation (https protocol).

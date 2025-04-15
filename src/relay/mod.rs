@@ -15,6 +15,7 @@ use self::ranker::RelayRanker;
 use api::RelayHook;
 use federation::Federation;
 pub use federation::FederationOptions;
+use std::collections::HashSet;
 use std::sync::Arc;
 use switch::Switch;
 pub use switch::SwitchOptions;
@@ -23,7 +24,7 @@ pub mod ranker;
 pub struct Relay<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<RelayHook>>,
     twins: D,
-    domain: String,
+    domains: HashSet<String>,
     federation: Federation<D>,
     limiter: R,
 }
@@ -33,8 +34,8 @@ where
     D: TwinDB + Clone,
     R: RateLimiter,
 {
-    pub async fn new<S: Into<String>>(
-        domain: S,
+    pub async fn new(
+        domains: HashSet<String>,
         twins: D,
         opt: SwitchOptions,
         federation: FederationOptions<D>,
@@ -46,7 +47,7 @@ where
         Ok(Self {
             switch: Arc::new(switch),
             twins,
-            domain: domain.into(),
+            domains: domains,
             federation,
             limiter,
         })
@@ -56,7 +57,7 @@ where
         let tcp_listener = TcpListener::bind(address).await?;
         let federator = self.federation.start();
         let http = api::HttpService::new(api::AppData::new(
-            self.domain,
+            self.domains,
             self.switch,
             self.twins,
             federator,
