@@ -281,7 +281,7 @@ Starting from v1.3.1, the relay supports multiple domains (when needed), which a
 rmb-relay --domain relay.example.com --domain relay1.example.com
 ```
 
-oe short name
+or short name
 
 ```bash
 rmb-relay -m relay.example.com -m relay1.example.com
