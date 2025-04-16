@@ -5,6 +5,9 @@ use hyper::server::conn::Http;
 use hyper_tungstenite::tungstenite::error::ProtocolError;
 use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
+use tokio::select;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 mod api;
 mod federation;
@@ -53,9 +56,17 @@ where
         })
     }
 
-    pub async fn start<A: ToSocketAddrs>(self, address: A) -> Result<()> {
+    pub async fn start<A: ToSocketAddrs>(
+        self,
+        address: A,
+        relay_cancellation_token: CancellationToken,
+    ) -> Result<()> {
+        let tracker = TaskTracker::new();
         let tcp_listener = TcpListener::bind(address).await?;
-        let federator = self.federation.start();
+        let federator_cancellation_token = relay_cancellation_token.clone();
+        let federator = self
+            .federation
+            .start(federator_cancellation_token, &tracker);
         let http = api::HttpService::new(api::AppData::new(
             self.domains,
             self.switch,
@@ -63,20 +74,39 @@ where
             federator,
             self.limiter,
         ));
+        tracker.close();
         loop {
-            let (tcp_stream, _) = tcp_listener.accept().await?;
-            let http = http.clone();
-            tokio::task::spawn(async move {
-                if let Err(http_err) = Http::new()
-                    .http1_keep_alive(true)
-                    .serve_connection(tcp_stream, http)
-                    .with_upgrades()
-                    .await
-                {
-                    eprintln!("Error while serving HTTP connection: {}", http_err);
-                }
-            });
+            select! {
+                _ = relay_cancellation_token.cancelled() => {
+                    log::info!("shutting down relay gracefully");
+                    tracker.close();
+                    break;
+                },
+                result = tcp_listener.accept() => {
+                    let (tcp_stream, _) = result?;
+                    let http = http.clone();
+                    let stream_cancellation_token = relay_cancellation_token.clone();
+                    tracker.spawn(async move {
+                        select! {
+                            _ = stream_cancellation_token.cancelled() => {
+                                log::info!("shutting down connection gracefully");
+                            },
+                            result = Http::new()
+                            .http1_keep_alive(true)
+                            .serve_connection(tcp_stream, http)
+                            .with_upgrades() => {
+                                if let Err(http_err) = result {
+                                    eprintln!("Error while serving HTTP connection: {}", http_err);
+                                }
+                            },
+
+                        }
+                    });
+                },
+            }
         }
+        tracker.wait().await;
+        Ok(())
     }
 }
 

@@ -11,7 +11,10 @@ use rmb::relay::{
     limiter::{FixedWindowOptions, Limiters},
 };
 use rmb::twin::SubstrateTwinDB;
-use tokio::sync::oneshot;
+use std::process::ExitCode;
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -93,7 +96,7 @@ fn set_limits() -> Result<()> {
     Ok(())
 }
 
-async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
+async fn app(args: Args, cloned_token: CancellationToken, tracker: &TaskTracker) -> Result<()> {
     if args.workers == 0 {
         anyhow::bail!("number of workers cannot be zero");
     }
@@ -178,16 +181,18 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
     .await
     .unwrap();
 
+    let relay_cancellation_token = cloned_token.clone();
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
-    tokio::spawn(async move {
+    tracker.spawn(async move {
         let max_retries = 9; // max wait is 2^9 = 512 seconds ( 5 minutes )
         let mut attempt = 0;
         let mut backoff = Duration::from_secs(1);
         let mut got_hit = false;
 
         loop {
+            let listener_cancellation_token = cloned_token.clone();
             match l
-                .listen(&mut got_hit)
+                .listen(&mut got_hit, listener_cancellation_token)
                 .await
                 .context("failed to listen to chain events")
             {
@@ -202,7 +207,8 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
                     attempt += 1;
                     if attempt > max_retries {
                         log::error!("Listener failed after {} attempts: {:?}", attempt - 1, e);
-                        let _ = tx.send(());
+                        let max_attempt_token = cloned_token.clone();
+                        max_attempt_token.cancel();
                         break;
                     }
                     log::warn!(
@@ -218,28 +224,45 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         }
     });
 
-    r.start(&args.listen).await.unwrap();
+    tracker.close();
+    r.start(&args.listen, relay_cancellation_token)
+        .await
+        .unwrap();
+
     Ok(())
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     let args = Args::parse();
-    let (tx, rx) = oneshot::channel();
-    let app_handle = tokio::spawn(async move {
-        if let Err(e) = app(args, tx).await {
+    let token = CancellationToken::new();
+    let cloned_token = token.clone();
+    let tracker = TaskTracker::new();
+    let cloned_tracker = tracker.clone();
+    let app_handle = tracker.spawn(async move {
+        if let Err(e) = app(args, cloned_token, &cloned_tracker).await {
             eprintln!("{:#}", e);
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
+        ExitCode::SUCCESS
     });
+    tracker.close();
 
     tokio::select! {
-        _ = app_handle => {
+        status = app_handle => {
             log::info!("Application is closing successfully.");
+            token.cancel();
+            tracker.wait().await;
+            match status {
+                Ok(code) => code,
+                Err(_) => ExitCode::FAILURE
+            }
         }
-        _ = rx => {
-            log::error!("Listener shutdown signal received. Exiting application.");
-            std::process::exit(1);
+        _ = signal::ctrl_c() => {
+            log::info!("Ctrl-C received. Exiting application.");
+            token.cancel();
+            tracker.wait().await;
+            ExitCode::SUCCESS
         }
     }
 }
