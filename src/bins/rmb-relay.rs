@@ -124,7 +124,7 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
     // of number of workers is needed
 
     // a wiggle is 10% of number of workers with min of 1
-    let wiggle = std::cmp::max((args.workers * 10) / 100, 1);
+    let wiggle = std::cmp::max((args.workers * 50) / 100, 5);
     let pool_size = args.workers + wiggle;
     let fed_size = wiggle * 2;
 
