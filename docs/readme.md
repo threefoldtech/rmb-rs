@@ -52,7 +52,7 @@ The ranker time window can be configured when starting the relay by specifying t
 
 Example:
 
-```
+```bash
 rmb-relay --substrate wss://tfchain.dev.grid.tf:443 --domain r1.3x0.me --ranker-period 1800
 ```
 
@@ -212,7 +212,7 @@ pub struct JsonOutgoingResponse {
 }
 ```
 
-# End2End Encryption
+## End2End Encryption
 
 Relay is totally opaque to the messages. Our implementation of the relay does not poke into messages except for the routing attributes (source, and destinations addresses, and federation information). But since the relay is designed to be hosted by other 3rd parties (hence federation) you should
 not fully trust the relay or whoever is hosting it. Hence e2e was needed
@@ -275,16 +275,16 @@ Example:
 
 ## Relay Domains
 
-Starting from v1.3.1, the relay supports multiple domains (when needed), which are used to determine whether a destination twin is directly connected to this relay. these domains should be points to the public IP of this relay.
+Starting from v1.3.4, the relay supports multiple domains (when needed), which are used to determine whether a destination twin is directly connected to this relay. these domains should be points to the public IP of this relay.
 
 ```bash
-rmb-relay --domain relay.example.com --domain relay1.example.com
+rmb-relay --domain relay.example.com relay1.example.com
 ```
 
 or short name
 
 ```bash
-rmb-relay -m relay.example.com -m relay1.example.com
+rmb-relay -m relay.example.com relay1.example.com
 ```
 
 The relay will internally route messages over existing WebSocket connections to twins that use one of the provided domains as their relay domain. If the destination twin isn't associated with any of these domains, the message will be forwarded to one of the twin's relays via federation (https protocol).
