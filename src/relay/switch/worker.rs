@@ -2,13 +2,17 @@ use std::collections::HashMap;
 
 use bb8_redis::{
     bb8::Pool,
-    redis::{cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value},
+    redis::{cmd, Cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value},
     RedisConnectionManager,
+};
+use futures::{
+    future::{FusedFuture, OptionFuture},
+    FutureExt,
 };
 use tokio::{sync::OwnedSemaphorePermit, time::sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::relay::switch::{SwitchError, CON_PER_WORKER, MIN_JOBS_POP, RETRY_DELAY};
+use crate::relay::switch::{CON_PER_WORKER, RETRY_DELAY};
 
 use super::{
     queue::Queue, Callback, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
@@ -98,92 +102,114 @@ where
 
         CON_PER_WORKER.with_label_values(&[&worker_name]).set(0);
 
-        loop {
-            log::trace!("[{}] waiting for connections", self.worker_id);
-            for job in self
-                .queue
-                .pop(self.worker_size.min(MIN_JOBS_POP))
-                .await
-                .into_iter()
-            {
-                self.sessions.insert(job.session_id.clone(), job.into());
-            }
-
-            'inner: loop {
-                log::debug!(
-                    "[{}] handling {} connections",
-                    self.worker_id,
-                    self.sessions.len()
-                );
-
-                CON_PER_WORKER
-                    .with_label_values(&[&worker_name])
-                    .set(self.sessions.len() as i64);
-
-                // process
-                match self.process().await {
-                    Ok(_) => {}
-                    Err(SwitchError::RedisError(err)) => {
-                        log::error!(
-                            "[{}] error while waiting for messages: {}",
-                            self.worker_id,
-                            err
-                        );
-                        // this delay in case of redis connection error that we
-                        // wait before retrying
-                        sleep(RETRY_DELAY).await;
-                    }
-                    Err(err) => {
-                        log::error!(
-                            "[{}] error while waiting for messages: {}",
-                            self.worker_id,
-                            err
-                        );
-                    }
-                };
-
-                // no more sessions to serve
-                if self.sessions.is_empty() {
-                    // make sure to set this back to 0
-                    CON_PER_WORKER.with_label_values(&[&worker_name]).set(0);
-
-                    break 'inner;
-                }
-
-                // can we take more users?
-                if self.sessions.len() >= self.worker_size {
-                    // no.
+        'main: loop {
+            let mut con = match self.pool.get().await {
+                Ok(con) => con,
+                Err(err) => {
+                    log::error!(
+                        "[{}] error while getting redis connection: {}",
+                        self.worker_id,
+                        err
+                    );
+                    // this delay in case of redis connection error that we
+                    // wait before retrying
+                    sleep(RETRY_DELAY).await;
                     continue;
                 }
+            };
 
-                for job in self
-                    .queue
-                    .pop_no_wait(usize::min(
-                        self.worker_size.saturating_sub(self.sessions.len()),
-                        MIN_JOBS_POP,
-                    ))
-                    .await
-                    .into_iter()
-                {
-                    self.sessions.insert(job.session_id.clone(), job.into());
+            // drop any connection that was cancelled.
+            self.sessions.retain(|_, s| !s.cancellation.is_cancelled());
+
+            CON_PER_WORKER
+                .with_label_values(&[&worker_name])
+                .set(self.sessions.len() as i64);
+
+            let query: OptionFuture<_> = self
+                .query_command()
+                .map(|cmd| async move { cmd.query_async::<_, Output>(&mut *con).await }.fuse())
+                .into();
+            let mut query = std::pin::pin!(query);
+
+            loop {
+                tokio::select! {
+                    // SAFETY: query_async is not cancellation safe hence
+                    // we have to run this to completion before we create a new query_async future
+                    Some(output) = &mut query => {
+                        // handle received
+                        match output {
+                            Err(err) => {
+                                log::error!(
+                                    "[{}] error while reading messages: {}",
+                                    self.worker_id,
+                                    err
+                                );
+                                sleep(RETRY_DELAY).await;
+                            }
+                            Ok(None) =>{}
+                            Ok(Some(streams)) => {
+                                'sender: for Messages(session_id, messages) in streams {
+                                    let session = self.sessions.get_mut(&session_id).expect("must exists");
+
+                                    // now we know that the "connected" user is indeed served by this worker
+                                    // hence we can now feed the messages.
+                                    for Message(msg_id, mut tags) in messages {
+                                        // tags are always of even length (k, v) but we only right now
+                                        // only use tag _ and value is actual content
+                                        if tags.len() != 2 {
+                                            log::warn!("received a message with tag count={}", tags.len());
+                                            continue;
+                                        }
+
+                                        let msg = tags.swap_remove(1);
+                                        let msg_len = msg.len();
+
+                                        if session.handle(msg_id, msg).is_err() {
+                                            self.cleanup.push(session_id);
+                                            continue 'sender;
+                                        }
+
+                                        MESSAGE_TX.inc();
+                                        MESSAGE_TX_BYTES.inc_by(msg_len as u64);
+
+                                        session.last_message_id = msg_id;
+                                    }
+                                }
+                            }
+                        }
+
+                        continue 'main;
+                    }
+                    jobs = self.queue.pop(self.worker_size.saturating_sub(self.sessions.len())) => {
+                        let mut count = 0;
+                        for job in jobs {
+                            self.sessions.insert(job.session_id.clone(), job.into());
+                            count += 1;
+                        }
+
+                        log::info!("[{}] Accepted {} new clients to handle", self.worker_id, count);
+
+                        if query.is_terminated() {
+                            // no running queries, it's safe to create a new query now
+                            break;
+                        }
+                    }
                 }
             }
         }
     }
 
-    async fn process(&mut self) -> Result<(), SwitchError> {
-        self.sessions.retain(|_, s| !s.cancellation.is_cancelled());
-
+    fn query_command(&self) -> Option<Cmd> {
         if self.sessions.is_empty() {
-            return Ok(());
+            return None;
         }
 
         // build command
         let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) =
             self.sessions.iter().unzip();
         //TODO: may be not rebuild the command each time when the list of current users don't change.
-        let mut c = cmd("XREAD");
-        let mut c = c
+        let mut cmd = cmd("XREAD");
+        let mut c = cmd
             .arg("COUNT")
             .arg(READ_COUNT)
             .arg("BLOCK")
@@ -199,52 +225,7 @@ where
             c = c.arg(session.last_message_id);
         }
 
-        // now actually run the command
-        let mut con = self.pool.get().await?;
-
-        let output: Output = c.query_async(&mut *con).await?;
-
-        let output = match output {
-            None => return Ok(()),
-            Some(streams) => streams,
-        };
-
-        'sender: for Messages(session_id, messages) in output {
-            let session = self.sessions.get_mut(&session_id).expect("must exists");
-
-            // now we know that the "connected" user is indeed served by this worker
-            // hence we can now feed the messages.
-            for Message(msg_id, mut tags) in messages {
-                // tags are always of even length (k, v) but we only right now
-                // only use tag _ and value is actual content
-                if tags.len() != 2 {
-                    log::warn!("received a message with tag count={}", tags.len());
-                    continue;
-                }
-
-                let msg = tags.swap_remove(1);
-                let msg_len = msg.len();
-
-                if session.handle(msg_id, msg).is_err() {
-                    self.cleanup.push(session_id);
-                    continue 'sender;
-                }
-
-                MESSAGE_TX.inc();
-                MESSAGE_TX_BYTES.inc_by(msg_len as u64);
-
-                session.last_message_id = msg_id;
-            }
-        }
-
-        // make sure to cancel all unreachable peers to clean up
-        for session_id in self.cleanup.drain(..) {
-            if let Some(session) = self.sessions.remove(&session_id) {
-                session.cancellation.cancel();
-            }
-        }
-
-        Ok(())
+        Some(cmd)
     }
 }
 

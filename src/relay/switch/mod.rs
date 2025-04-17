@@ -57,7 +57,6 @@ lazy_static::lazy_static! {
 pub const DEFAULT_WORKERS: u32 = 100;
 pub const DEFAULT_USERS: usize = 100_1000;
 
-const MIN_JOBS_POP: usize = 100;
 const READ_COUNT: usize = 100;
 const READ_BLOCK_MS: usize = 5000; // 5 seconds
 const RETRY_DELAY: Duration = Duration::from_secs(2);
