@@ -58,7 +58,6 @@ pub const DEFAULT_WORKERS: u32 = 100;
 pub const DEFAULT_USERS: usize = 100_1000;
 
 const READ_COUNT: usize = 100;
-const READ_BLOCK_MS: usize = 5000; // 5 seconds
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 const QUEUE_MAXLEN: usize = 10000;
 const QUEUE_EXPIRE: usize = 3600; // queues can live max of 1 hour
@@ -91,10 +90,20 @@ type Result<T> = std::result::Result<T, SwitchError>;
 
 #[derive(thiserror::Error, Debug)]
 #[error("callback error")]
-pub struct CallbackError;
+pub enum SendError {
+    /// Closed is returned if the callback
+    /// will never be able to handle any more messages anymore
+    #[error("Sender is closed")]
+    Closed,
+    /// NotEnoughCapacity is returned if callback can't keep up
+    /// with messages, but might succeed later
+    #[error("Sender has no enough capacity")]
+    NotEnoughCapacity,
+}
 
-pub trait Callback: Send + Sync + 'static {
-    fn handle(&self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), CallbackError>;
+pub trait ConnectionSender: Send + Sync + 'static {
+    fn send(&self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), SendError>;
+    fn can_send(&self) -> bool;
 }
 
 type ActiveSessions = HashMap<SessionID, DropGuard>;
@@ -134,25 +143,25 @@ impl SwitchOptions {
         self
     }
 
-    pub async fn build<H: Callback>(self) -> Result<Switch<H>> {
+    pub async fn build<H: ConnectionSender>(self) -> Result<Switch<H>> {
         Switch::new(self).await
     }
 }
 
 /// Rely is main rely object
-pub struct Switch<H>
+pub struct Switch<S>
 where
-    H: Callback,
+    S: ConnectionSender,
 {
     capacity: Arc<Semaphore>,
-    queue: Queue<WorkerJob<H>>,
+    queue: Queue<WorkerJob<S>>,
     pool: Pool<RedisConnectionManager>,
     sessions: Arc<Mutex<ActiveSessions>>,
 }
 
-impl<H> Switch<H>
+impl<S> Switch<S>
 where
-    H: Callback,
+    S: ConnectionSender,
 {
     /// create a new instance of the switch with given redis connection info and
     /// pool size. The pool size determine the number of workers who are pulling
@@ -209,7 +218,7 @@ where
         &self,
         session_id: SessionID,
         cancellation: CancellationToken,
-        callback: H,
+        callback: S,
     ) -> Result<()> {
         let mut sessions = self.sessions.lock().await;
         let Ok(permit) = Arc::clone(&self.capacity).try_acquire_owned() else {

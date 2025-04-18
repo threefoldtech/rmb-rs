@@ -19,12 +19,13 @@ use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_util::sync::CancellationToken;
 
 use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
-use super::switch::{Callback, CallbackError, MessageID, SessionID, Switch};
+use super::switch::{ConnectionSender, MessageID, SendError, SessionID, Switch};
 use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
@@ -314,9 +315,16 @@ pub(crate) struct WriterCallback {
     tx: Sender<(MessageID, Vec<u8>)>,
 }
 
-impl Callback for WriterCallback {
-    fn handle(&self, id: MessageID, data: Vec<u8>) -> Result<(), CallbackError> {
-        self.tx.try_send((id, data)).map_err(|_| CallbackError)
+impl ConnectionSender for WriterCallback {
+    fn send(&self, id: MessageID, data: Vec<u8>) -> Result<(), SendError> {
+        self.tx.try_send((id, data)).map_err(|err| match err {
+            TrySendError::Closed(_) => SendError::Closed,
+            TrySendError::Full(_) => SendError::NotEnoughCapacity,
+        })
+    }
+
+    fn can_send(&self) -> bool {
+        !self.tx.is_closed() && self.tx.capacity() > 0
     }
 }
 

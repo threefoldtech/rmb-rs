@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    ops::DerefMut,
+    time::{Duration, Instant},
+};
 
 use bb8_redis::{
     bb8::Pool,
@@ -12,21 +16,28 @@ use futures::{
 use tokio::{sync::OwnedSemaphorePermit, time::sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::relay::switch::{CON_PER_WORKER, RETRY_DELAY};
+use crate::relay::switch::{SendError, CON_PER_WORKER, RETRY_DELAY};
 
 use super::{
-    queue::Queue, Callback, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
-    READ_BLOCK_MS, READ_COUNT,
+    queue::Queue, ConnectionSender, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
+    READ_COUNT,
 };
 
-pub struct WorkerJob<H: Callback> {
+// block on read max of 5 seconds
+const READ_BLOCK_MS: usize = 5000;
+
+// connection can wait in back pressure status for 60 seconds
+const MAX_BACK_PRESSURE_DURATION: Duration = Duration::from_secs(60);
+const BACK_PRESSURE_RETRY: Duration = Duration::from_millis(READ_BLOCK_MS as u64);
+
+pub struct WorkerJob<H: ConnectionSender> {
     session_id: SessionID,
     permit: OwnedSemaphorePermit,
     callback: H,
     cancellation: CancellationToken,
 }
 
-impl<H: Callback> WorkerJob<H> {
+impl<H: ConnectionSender> WorkerJob<H> {
     pub fn new(
         session_id: SessionID,
         permit: OwnedSemaphorePermit,
@@ -42,44 +53,97 @@ impl<H: Callback> WorkerJob<H> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionStatus {
+    Open,
+    BackPressure { since: Instant },
+    Closed,
+}
+
+impl SessionStatus {
+    fn merge(&mut self, status: SessionStatus) {
+        match (&self, status) {
+            (Self::Closed, _) => {
+                //there is no coming back from closed
+            }
+            (_, Self::Open) => *self = Self::Open,
+            (_, Self::Closed) => *self = Self::Closed,
+            (Self::Open, Self::BackPressure { since }) => *self = Self::BackPressure { since },
+            (Self::BackPressure { .. }, Self::BackPressure { .. }) => {
+                // we don't override the since if we still under back pressure
+            }
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        matches!(self, Self::Closed)
+    }
+}
+
 #[derive(derive_more::Deref)]
-struct Session<H>
+struct Session<S>
 where
-    H: Callback,
+    S: ConnectionSender,
 {
     #[deref]
-    callback: H,
+    sender: S,
     _permit: OwnedSemaphorePermit,
     cancellation: CancellationToken,
     last_message_id: MessageID,
+    status: SessionStatus,
+}
+
+impl<S> Session<S>
+where
+    S: ConnectionSender,
+{
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+            || self.status.is_closed()
+            || matches!(self.status, SessionStatus::BackPressure { since } if Instant::now().duration_since(since) > MAX_BACK_PRESSURE_DURATION)
+    }
+
+    #[inline]
+    fn can_send(&self) -> bool {
+        self.sender.can_send()
+    }
+}
+
+impl<S> Drop for Session<S>
+where
+    S: ConnectionSender,
+{
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 impl<H> From<WorkerJob<H>> for Session<H>
 where
-    H: Callback,
+    H: ConnectionSender,
 {
     fn from(value: WorkerJob<H>) -> Self {
         Self {
-            callback: value.callback,
+            sender: value.callback,
             _permit: value.permit,
             cancellation: value.cancellation,
             last_message_id: MessageID::default(),
+            status: SessionStatus::Open,
         }
     }
 }
 
-pub struct Worker<H: Callback> {
+pub struct Worker<H: ConnectionSender> {
     pool: Pool<RedisConnectionManager>,
     worker_id: u32,
     worker_size: usize,
     queue: Queue<WorkerJob<H>>,
     sessions: HashMap<SessionID, Session<H>>,
-    cleanup: Vec<SessionID>,
 }
 
 impl<H> Worker<H>
 where
-    H: Callback,
+    H: ConnectionSender,
 {
     pub fn new(worker_id: u32, worker_size: usize, switch: &Switch<H>) -> Self {
         Self {
@@ -88,7 +152,6 @@ where
             queue: switch.queue.clone(),
             pool: switch.pool.clone(),
             sessions: HashMap::default(),
-            cleanup: Vec::default(),
         }
     }
 
@@ -118,8 +181,8 @@ where
                 }
             };
 
-            // drop any connection that was cancelled.
-            self.sessions.retain(|_, s| !s.cancellation.is_cancelled());
+            // drop any connection that was cancelled or was in back pressure state for too long
+            self.sessions.retain(|_, s| !s.is_cancelled());
 
             CON_PER_WORKER
                 .with_label_values(&[&worker_name])
@@ -127,10 +190,17 @@ where
 
             let query: OptionFuture<_> = self
                 .query_command()
-                .map(|cmd| async move { cmd.query_async::<_, Output>(&mut *con).await }.fuse())
+                .map(|cmd| {
+                    async move { cmd.query_async::<_, Output>(con.deref_mut()).await }.fuse()
+                })
                 .into();
             let mut query = std::pin::pin!(query);
 
+            // NOTE:
+            // it's possible that the query will be None while self.sessions is not empty
+            // in case if all clients are under back pressure.
+            // to avoid being stuck waiting for new "jobs" forever and not be able to server
+            // the back pressured client again, we need to also run a timeout
             loop {
                 tokio::select! {
                     // SAFETY: query_async is not cancellation safe hence
@@ -164,10 +234,19 @@ where
                                         let msg = tags.swap_remove(1);
                                         let msg_len = msg.len();
 
-                                        if session.handle(msg_id, msg).is_err() {
-                                            self.cleanup.push(session_id);
+                                        if let Err(err) = session.send(msg_id, msg) {
+                                            match err {
+                                                SendError::Closed => {
+                                                    session.status.merge(SessionStatus::Closed);
+                                                }
+                                                SendError::NotEnoughCapacity => {
+                                                    session.status.merge(SessionStatus::BackPressure { since: Instant::now() });
+                                                }
+                                            }
                                             continue 'sender;
                                         }
+                                        // we can send, set status to Open if possible.
+                                        session.status.merge(SessionStatus::Open);
 
                                         MESSAGE_TX.inc();
                                         MESSAGE_TX_BYTES.inc_by(msg_len as u64);
@@ -194,6 +273,13 @@ where
                             break;
                         }
                     }
+                    _ = tokio::time::sleep(BACK_PRESSURE_RETRY), if !self.sessions.is_empty() && query.is_terminated() => {
+                        // if query is terminated (no running queries) but the client has some sessions it means that
+                        // all our sessions under back pressure. We have this time out to try again even if the jobs
+                        // branch did not resolve.
+                        // this to make sure back pressure sessions are retired again.
+                        break;
+                    }
                 }
             }
         }
@@ -205,8 +291,20 @@ where
         }
 
         // build command
-        let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) =
-            self.sessions.iter().unzip();
+        let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| {
+                // filter out sessions that cannot send
+                // messages
+                s.can_send()
+            })
+            .unzip();
+
+        if stream_ids.is_empty() {
+            return None;
+        }
+
         //TODO: may be not rebuild the command each time when the list of current users don't change.
         let mut cmd = cmd("XREAD");
         let mut c = cmd
