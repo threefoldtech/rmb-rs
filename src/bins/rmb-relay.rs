@@ -173,7 +173,8 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         federation,
         limiter,
         ranker,
-    ).context("failed to initialize relay")?;
+    )
+    .context("failed to initialize relay")?;
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {
