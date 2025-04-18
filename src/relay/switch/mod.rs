@@ -102,7 +102,7 @@ pub enum SendError {
 }
 
 pub trait ConnectionSender: Send + Sync + 'static {
-    fn send(&self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), SendError>;
+    fn send(&mut self, id: MessageID, data: Vec<u8>) -> std::result::Result<(), SendError>;
     fn can_send(&self) -> bool;
 }
 
@@ -143,8 +143,8 @@ impl SwitchOptions {
         self
     }
 
-    pub async fn build<H: ConnectionSender>(self) -> Result<Switch<H>> {
-        Switch::new(self).await
+    pub fn build<H: ConnectionSender>(self) -> Result<Switch<H>> {
+        Switch::new(self)
     }
 }
 
@@ -177,7 +177,7 @@ where
     ///
     /// Hence the workers/users number must be sane values take in consideration
     /// max number of connections that this server can handle, number of cpus, etc
-    async fn new(opts: SwitchOptions) -> Result<Self> {
+    fn new(opts: SwitchOptions) -> Result<Self> {
         // TODO: use builder pattern to support setting of the metrics.
         let workers = opts.workers;
         let max_users = opts.max_users;
@@ -323,4 +323,116 @@ async fn send(
     MESSAGE_RX_BYTES.inc_by(msg.len() as u64);
 
     Ok(msg_id)
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use prometheus::Registry;
+    use tokio::sync::mpsc::{self, UnboundedSender};
+    use tokio_util::sync::CancellationToken;
+
+    use crate::{redis, relay::switch::SessionID};
+
+    use super::{ConnectionSender, MessageID, Switch};
+
+    #[derive(Clone)]
+    struct MessageSender {
+        session_id: SessionID,
+        switch: Arc<Switch<MessageSender>>,
+        tx: mpsc::UnboundedSender<(SessionID, MessageID, String)>,
+    }
+
+    impl MessageSender {
+        fn new(
+            session_id: SessionID,
+            switch: Arc<Switch<MessageSender>>,
+            tx: UnboundedSender<(SessionID, MessageID, String)>,
+        ) -> Self {
+            Self {
+                session_id,
+                switch,
+                tx,
+            }
+        }
+    }
+
+    impl ConnectionSender for MessageSender {
+        fn can_send(&self) -> bool {
+            true
+        }
+        fn send(
+            &mut self,
+            id: super::MessageID,
+            data: Vec<u8>,
+        ) -> std::result::Result<(), super::SendError> {
+            _ = self.tx.send((
+                self.session_id.clone(),
+                id,
+                String::from_utf8_lossy(&data).into(),
+            ));
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_switch() {
+        // TODO:
+        // this is a basic test structure but can be extended and reused to introduce more test cases
+
+        let pool = redis::pool("redis://localhost:6379", 10)
+            .await
+            .expect("can connect");
+
+        let switch = Arc::new(
+            Switch::<MessageSender>::new(super::SwitchOptions {
+                pool: pool,
+                workers: 2,
+                max_users: 100,
+                registry: Registry::new(),
+            })
+            .expect("switch created"),
+        );
+
+        let (tx, mut receiver) = mpsc::unbounded_channel();
+
+        for id in 1..=100 {
+            let session_id = SessionID::new(id.into(), None);
+            let handler = MessageSender::new(session_id.clone(), Arc::clone(&switch), tx.clone());
+
+            switch
+                .register(session_id, CancellationToken::new(), handler)
+                .await
+                .expect("session registered")
+        }
+
+        drop(tx);
+
+        for id in 1..=100 {
+            let session_id = SessionID::new(id.into(), None);
+            for _ in 0..10 {
+                switch
+                    .send(&session_id, format!("Hello {id}"))
+                    .await
+                    .expect("can send");
+            }
+
+            // un registering the client will cause it's handler to drop and eventually
+            // drop all transmitter ends. Effectively terminating the received channel
+            switch.unregister(session_id).await;
+        }
+
+        let expected_count = 100 * 10;
+
+        let mut count = 0;
+        while let Some((session_id, msg_id, _msg)) = receiver.recv().await {
+            // expecting a 100 message
+            switch.ack(&session_id, &[msg_id]).await.expect("ack");
+            count += 1;
+        }
+
+        assert_eq!(count, expected_count);
+    }
 }

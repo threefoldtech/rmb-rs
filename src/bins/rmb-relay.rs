@@ -167,8 +167,7 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
     };
     let ranker = relay::ranker::RelayRanker::new(Duration::from_secs(args.ranker_period));
     let r = relay::Relay::new(&args.domain, twins, opt, federation, limiter, ranker)
-        .await
-        .unwrap();
+        .context("failed to initialize relay")?;
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {

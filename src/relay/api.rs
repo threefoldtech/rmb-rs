@@ -304,6 +304,10 @@ impl ConnectionWriter {
                 Some(_) => {}
             }
 
+            // todo: a possible bottle neck. If messages can't be acked we probably
+            // will get stuck and not process new messages.
+            // a possible improvement is to ack multiple messages in one go instead
+            // of acking one by one
             _ = self.switch.ack(&self.peer, &[id]).await;
         }
 
@@ -316,7 +320,7 @@ pub(crate) struct WriterCallback {
 }
 
 impl ConnectionSender for WriterCallback {
-    fn send(&self, id: MessageID, data: Vec<u8>) -> Result<(), SendError> {
+    fn send(&mut self, id: MessageID, data: Vec<u8>) -> Result<(), SendError> {
         self.tx.try_send((id, data)).map_err(|err| match err {
             TrySendError::Closed(_) => SendError::Closed,
             TrySendError::Full(_) => SendError::NotEnoughCapacity,

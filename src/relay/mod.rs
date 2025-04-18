@@ -33,7 +33,7 @@ where
     D: TwinDB + Clone,
     R: RateLimiter,
 {
-    pub async fn new<S: Into<String>>(
+    pub fn new<S: Into<String>>(
         domain: S,
         twins: D,
         opt: SwitchOptions,
@@ -41,7 +41,7 @@ where
         limiter: R,
         ranker: RelayRanker,
     ) -> Result<Self> {
-        let switch = opt.build().await?;
+        let switch = opt.build()?;
         let federation = federation.build(switch.sink(), twins.clone(), ranker)?;
         Ok(Self {
             switch: Arc::new(switch),

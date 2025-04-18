@@ -80,12 +80,13 @@ impl SessionStatus {
     }
 }
 
-#[derive(derive_more::Deref)]
+#[derive(derive_more::Deref, derive_more::DerefMut)]
 struct Session<S>
 where
     S: ConnectionSender,
 {
     #[deref]
+    #[deref_mut]
     sender: S,
     _permit: OwnedSemaphorePermit,
     cancellation: CancellationToken,
