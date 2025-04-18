@@ -327,7 +327,6 @@ async fn send(
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
 
     use prometheus::Registry;
     use tokio::sync::mpsc::{self, UnboundedSender};
@@ -340,21 +339,12 @@ mod test {
     #[derive(Clone)]
     struct MessageSender {
         session_id: SessionID,
-        switch: Arc<Switch<MessageSender>>,
         tx: mpsc::UnboundedSender<(SessionID, MessageID, String)>,
     }
 
     impl MessageSender {
-        fn new(
-            session_id: SessionID,
-            switch: Arc<Switch<MessageSender>>,
-            tx: UnboundedSender<(SessionID, MessageID, String)>,
-        ) -> Self {
-            Self {
-                session_id,
-                switch,
-                tx,
-            }
+        fn new(session_id: SessionID, tx: UnboundedSender<(SessionID, MessageID, String)>) -> Self {
+            Self { session_id, tx }
         }
     }
 
@@ -386,21 +376,19 @@ mod test {
             .await
             .expect("can connect");
 
-        let switch = Arc::new(
-            Switch::<MessageSender>::new(super::SwitchOptions {
-                pool: pool,
-                workers: 2,
-                max_users: 100,
-                registry: Registry::new(),
-            })
-            .expect("switch created"),
-        );
+        let switch = Switch::<MessageSender>::new(super::SwitchOptions {
+            pool: pool,
+            workers: 2,
+            max_users: 100,
+            registry: Registry::new(),
+        })
+        .expect("switch created");
 
         let (tx, mut receiver) = mpsc::unbounded_channel();
 
         for id in 1..=100 {
             let session_id = SessionID::new(id.into(), None);
-            let handler = MessageSender::new(session_id.clone(), Arc::clone(&switch), tx.clone());
+            let handler = MessageSender::new(session_id.clone(), tx.clone());
 
             switch
                 .register(session_id, CancellationToken::new(), handler)

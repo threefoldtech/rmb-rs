@@ -47,7 +47,7 @@ where
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
-        cmd("HSET")
+        let _: () = cmd("HSET")
             .arg(&self.prefix)
             .arg(key.to_string())
             .arg(obj)
