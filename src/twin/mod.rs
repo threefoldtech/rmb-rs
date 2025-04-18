@@ -1,21 +1,43 @@
 mod substrate;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fmt::{Display, Formatter},
+    future::Future,
     str::FromStr,
 };
 pub use substrate::*;
 use subxt::utils::AccountId32;
 
-#[async_trait]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    derive_more::From,
+    derive_more::Into,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+    Hash,
+)]
+#[display("{_0}")]
+pub struct TwinID(u32);
+
+impl TwinID {
+    pub const EMPTY: TwinID = TwinID(0);
+}
+
 pub trait TwinDB: Send + Sync + Clone + 'static {
-    async fn get_twin(&self, twin_id: u32) -> Result<Option<Twin>>;
-    async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>>;
-    async fn set_twin(&self, twin: Twin) -> Result<()>;
+    fn get_twin(&self, twin_id: TwinID) -> impl Future<Output = Result<Option<Twin>>> + Send;
+    fn get_twin_with_account(
+        &self,
+        account_id: AccountId32,
+    ) -> impl Future<Output = Result<Option<u32>>> + Send;
+    fn set_twin(&self, twin: Twin) -> impl Future<Output = Result<()>> + Send;
 }
 
 use tfchain_client::client::Twin as TwinData;
@@ -24,7 +46,7 @@ use crate::tfchain;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Twin {
-    pub id: u32,
+    pub id: TwinID,
     pub account: AccountId32,
     pub relay: Option<RelayDomains>,
     pub pk: Option<Vec<u8>>,
@@ -33,7 +55,7 @@ pub struct Twin {
 impl From<TwinData> for Twin {
     fn from(twin: TwinData) -> Self {
         Twin {
-            id: twin.id,
+            id: twin.id.into(),
             account: twin.account_id,
             relay: twin.relay.map(|v| {
                 let string: String = String::from_utf8_lossy(&v.0).into();
@@ -47,7 +69,7 @@ impl From<TwinData> for Twin {
 impl From<tfchain::Twin> for Twin {
     fn from(twin: tfchain::Twin) -> Self {
         Twin {
-            id: twin.id,
+            id: twin.id.into(),
             account: twin.account_id,
             relay: twin.relay.map(|v| {
                 let string: String = String::from_utf8_lossy(&v.0).into();

@@ -1,3 +1,5 @@
+use crate::twin::TwinID;
+
 use super::{Metrics, RateLimiter};
 use async_trait::async_trait;
 use core::num::NonZeroUsize;
@@ -80,7 +82,7 @@ pub struct FixedWindowLimiter {
     // suggestion: replace this with a map
     // with a periodic check to delete any metrics
     // that didn't get any updates in a long time.
-    cache: Arc<Mutex<LruCache<u32, FixedWindow>>>,
+    cache: Arc<Mutex<LruCache<TwinID, FixedWindow>>>,
     options: Arc<FixedWindowOptions>,
 }
 
@@ -97,7 +99,7 @@ impl FixedWindowLimiter {
 impl RateLimiter for FixedWindowLimiter {
     type Metrics = FixedWindow;
     /// get returns the corresponding metrics for the specified twin. if no metrics are stored for this twin, a new one is created.
-    async fn get(&self, twin: u32) -> Self::Metrics {
+    async fn get(&self, twin: TwinID) -> Self::Metrics {
         let mut cache = self.cache.lock().await;
         if let Some(metrics) = cache.get(&twin) {
             return metrics.clone();
@@ -126,7 +128,7 @@ mod test {
                 window: 5,
             },
         );
-        let twin_cache = limiter.get(1).await;
+        let twin_cache = limiter.get(1.into()).await;
         for _ in 0..10 {
             assert!(twin_cache.measure(1).await);
         }
@@ -146,7 +148,7 @@ mod test {
             },
         );
 
-        let twin_cache = limiter.get(1).await;
+        let twin_cache = limiter.get(1.into()).await;
         for _ in 0..10 {
             assert!(twin_cache.measure(1).await);
         }

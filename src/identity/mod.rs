@@ -79,7 +79,7 @@ where
     }
 }
 
-impl<'a, S> SigningAlgorithm for JwtSigner<'a, S>
+impl<S> SigningAlgorithm for JwtSigner<'_, S>
 where
     S: Signer,
 {
@@ -108,7 +108,7 @@ where
     }
 }
 
-impl<'a, I> VerifyingAlgorithm for JwtVerifier<'a, I>
+impl<I> VerifyingAlgorithm for JwtVerifier<'_, I>
 where
     I: Identity,
 {

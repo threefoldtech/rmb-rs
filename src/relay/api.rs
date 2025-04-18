@@ -19,15 +19,18 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_util::sync::CancellationToken;
 
 use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
-use super::switch::{Hook, MessageID, StreamID, Switch};
+use super::switch::{ConnectionSender, MessageID, SendError, SessionID, Switch};
 use super::HttpError;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
-    switch: Arc<Switch<RelayHook>>,
+    switch: Arc<Switch<WriterCallback>>,
     twins: D,
     domains: HashSet<String>,
     federator: Arc<Federator>,
@@ -41,13 +44,13 @@ where
 {
     pub(crate) fn new(
         domains: HashSet<String>,
-        switch: Arc<Switch<RelayHook>>,
+        switch: Arc<Switch<WriterCallback>>,
         twins: D,
         federator: Federator,
         limiter: R,
     ) -> Self {
         Self {
-            domains: domains,
+            domains,
             switch,
             twins,
             federator: Arc::new(federator),
@@ -121,7 +124,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
 
         let twin = data
             .twins
-            .get_twin(claims.id)
+            .get_twin(claims.id.into())
             .await
             .map_err(|err| HttpError::FailedToGetTwin(err.to_string()))?
             .ok_or(HttpError::TwinNotFound(claims.id))?;
@@ -132,7 +135,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
 
         let metrics = data.limiter.get(twin.id).await;
         // Spawn a task to handle the websocket connection.
-        let stream = Stream::new(
+        let session = Session::new(
             // todo: improve the domain clone
             claims,
             data.domains.clone(),
@@ -143,7 +146,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
         );
 
         tokio::spawn(async move {
-            if let Err(err) = stream.serve(websocket).await {
+            if let Err(err) = session.serve(websocket).await {
                 log::error!("error in websocket connection: {}", err);
             }
         });
@@ -204,10 +207,13 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
+    // todo: this is UNSAFE. since we can't verify the received message hence
+    // we shouldn't poison local cache
+
     update_cache_relays(&envelope, &data.twins)
         .await
         .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
-    let dst: StreamID = (&envelope.destination).into();
+    let dst: SessionID = (&envelope.destination).into();
     data.switch.send(&dst, &body).await?;
 
     Response::builder()
@@ -221,7 +227,7 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
         return Ok(());
     }
     let mut twin = twin_db
-        .get_twin(envelope.source.twin)
+        .get_twin(envelope.source.twin.into())
         .await?
         .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
     let envelope_relays = RelayDomains::new(&envelope.relays);
@@ -239,59 +245,113 @@ async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Resu
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
 
-pub(crate) struct RelayHook {
-    peer: StreamID,
-    switch: Arc<Switch<Self>>,
-    writer: Arc<Mutex<Writer>>,
+pub(crate) struct ConnectionWriter {
+    peer: SessionID,
+    cancellation: CancellationToken,
+    writer: Writer,
+    switch: Arc<Switch<WriterCallback>>,
 }
 
-impl RelayHook {
-    fn new(peer: StreamID, switch: Arc<Switch<Self>>, writer: Writer) -> Self {
+impl ConnectionWriter {
+    fn new(
+        peer: SessionID,
+        cancellation: CancellationToken,
+        switch: Arc<Switch<WriterCallback>>,
+        writer: Writer,
+    ) -> Self {
         Self {
             peer,
+            cancellation,
             switch,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
         }
+    }
+
+    fn start(self) -> WriterCallback {
+        // TODO:
+        // Regardless of the channel size. A slow connection can cause the messages to pile up
+        // in the channel. Which will eventually causes the `[WriterCallback::handle]` to fail.
+        // Hence it's important for the worker to tell the difference between a "Full" channel and a
+        // "Closed" channel. And then react differently to the error. One suggesting if a channel
+        // is full the worker can wait (on the background) until capacity is available for that client
+        // or timesout. If timedout or suddenly the connection is closed, it should then cancel that
+        // connection.
+        let (tx, rx) = mpsc::channel(256);
+
+        tokio::spawn(self.run(rx));
+
+        WriterCallback { tx }
+    }
+
+    async fn run(mut self, mut rx: Receiver<(MessageID, Vec<u8>)>) {
+        let drop_guard = self.cancellation.clone().drop_guard();
+
+        while let Some(Some((id, data))) = self.cancellation.run_until_cancelled(rx.recv()).await {
+            log::trace!("relaying message {} to peer {}", id, self.peer);
+            match self
+                .cancellation
+                .run_until_cancelled(self.writer.send(Message::Binary(data)))
+                .await
+            {
+                // cancelled
+                None => return,
+                // failed to write
+                Some(Err(err)) => {
+                    _ = self.writer.close().await;
+                    log::debug!("failed to forward message to peer: {}", err);
+                    return;
+                }
+                // written
+                Some(_) => {}
+            }
+
+            // todo: a possible bottle neck. If messages can't be acked we probably
+            // will get stuck and not process new messages.
+            // a possible improvement is to ack multiple messages in one go instead
+            // of acking one by one
+            _ = self.switch.ack(&self.peer, &[id]).await;
+        }
+
+        drop(drop_guard);
     }
 }
 
-#[async_trait::async_trait]
-impl Hook for RelayHook {
-    async fn received<T>(&self, id: MessageID, data: T)
-    where
-        T: AsRef<[u8]> + Send + Sync,
-    {
-        log::trace!("relaying message {} to peer {}", id, self.peer);
-        let mut writer = self.writer.lock().await;
-        if let Err(err) = writer.send(Message::Binary(data.as_ref().into())).await {
-            log::debug!("failed to forward message to peer: {}", err);
-            return;
-        }
+pub(crate) struct WriterCallback {
+    tx: Sender<(MessageID, Vec<u8>)>,
+}
 
-        if let Err(err) = self.switch.ack(&self.peer, &[id]).await {
-            log::error!("failed to ack message ({}, {}): {}", self.peer, id, err);
-        }
+impl ConnectionSender for WriterCallback {
+    fn send(&mut self, id: MessageID, data: Vec<u8>) -> Result<(), SendError> {
+        self.tx.try_send((id, data)).map_err(|err| match err {
+            TrySendError::Closed(_) => SendError::Closed,
+            TrySendError::Full(_) => SendError::NotEnoughCapacity,
+        })
+    }
+
+    fn can_send(&self) -> bool {
+        !self.tx.is_closed() && self.tx.capacity() > 0
     }
 }
 
-struct Stream<M: Metrics, D: TwinDB> {
-    id: StreamID,
+struct Session<M: Metrics, D: TwinDB> {
+    id: SessionID,
     domains: HashSet<String>,
-    switch: Arc<Switch<RelayHook>>,
+    switch: Arc<Switch<WriterCallback>>,
     federator: Arc<Federator>,
     metrics: M,
     twins: D,
 }
-impl<M: Metrics, D: TwinDB> Stream<M, D> {
+
+impl<M: Metrics, D: TwinDB> Session<M, D> {
     fn new(
         claims: Claims,
         domains: HashSet<String>,
-        switch: Arc<Switch<RelayHook>>,
+        switch: Arc<Switch<WriterCallback>>,
         federator: Arc<Federator>,
         metrics: M,
         twins: D,
     ) -> Self {
-        let id: StreamID = (claims.id, claims.sid).into();
+        let id = SessionID::new(claims.id.into(), claims.sid);
         Self {
             id,
             domains,
@@ -318,10 +378,15 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             msg = envelope.write_to_bytes()?;
         }
 
-        let dst: StreamID = (&envelope.destination).into();
-        if dst.zero() {
+        let dst: SessionID = (&envelope.destination).into();
+        if dst.is_empty() {
             anyhow::bail!("message with missing destination");
         }
+
+        // todo(sameh):
+        // check if the dst twin id is already connected locally
+        // if so, we don't have to check federation and directly
+        // switch the message
 
         //  instead of sending the message directly to the switch
         //  we check federation information attached to the envelope
@@ -330,10 +395,12 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
         //  federated to the right relay (according to specs)
         let twin = self
             .twins
-            .get_twin(envelope.destination.twin)
+            .get_twin(envelope.destination.twin.into())
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
+        // it's safe to update the local cache since we already authenticated
+        // the twin hence we trust their information.
         update_cache_relays(envelope, &self.twins).await?;
 
         if !twin
@@ -363,13 +430,24 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
         // handler is kept alive to keep the registration alive
         // once dropped (connection closed) registration stops
         log::debug!("got connection from '{}'", self.id);
-        let mut registration = self
-            .switch
+        let cancellation = CancellationToken::new();
+
+        self.switch
             .register(
                 self.id.clone(),
-                RelayHook::new(self.id.clone(), Arc::clone(&self.switch), writer),
+                cancellation.clone(),
+                ConnectionWriter::new(
+                    self.id.clone(),
+                    cancellation.clone(),
+                    Arc::clone(&self.switch),
+                    writer,
+                )
+                .start(),
             )
             .await?;
+
+        let drop_guard = cancellation.clone().drop_guard();
+        let mut cancelled = std::pin::pin!(cancellation.cancelled());
 
         loop {
             tokio::select! {
@@ -377,8 +455,8 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
                 // if the same twin with the same sid (session id)
                 // registered again.
                 // we need to drop the connection then
-                _ = registration.cancelled() => {
-                    return Ok(());
+                _ = &mut cancelled => {
+                    break;
                 }
                 // received a message from the peer
                 Some(message) = reader.next()=> {
@@ -386,8 +464,7 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
                         Ok(message) => message,
                         Err(err) => {
                             log::debug!("error receiving a message: {}", err);
-                            return Ok(());
-
+                            break;
                         }
                     };
 
@@ -437,6 +514,8 @@ impl<M: Metrics, D: TwinDB> Stream<M, D> {
             }
         }
 
+        self.switch.unregister(self.id).await;
+        drop(drop_guard);
         Ok(())
     }
 

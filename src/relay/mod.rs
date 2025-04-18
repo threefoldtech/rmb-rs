@@ -12,7 +12,7 @@ pub mod limiter;
 mod switch;
 use self::limiter::RateLimiter;
 use self::ranker::RelayRanker;
-use api::RelayHook;
+use api::WriterCallback;
 use federation::Federation;
 pub use federation::FederationOptions;
 use std::collections::HashSet;
@@ -22,7 +22,7 @@ pub use switch::SwitchOptions;
 pub mod ranker;
 
 pub struct Relay<D: TwinDB, R: RateLimiter> {
-    switch: Arc<Switch<RelayHook>>,
+    switch: Arc<Switch<WriterCallback>>,
     twins: D,
     domains: HashSet<String>,
     federation: Federation<D>,
@@ -34,7 +34,7 @@ where
     D: TwinDB + Clone,
     R: RateLimiter,
 {
-    pub async fn new(
+    pub fn new(
         domains: HashSet<String>,
         twins: D,
         opt: SwitchOptions,
@@ -42,12 +42,12 @@ where
         limiter: R,
         ranker: RelayRanker,
     ) -> Result<Self> {
-        let switch = opt.build().await?;
+        let switch = opt.build()?;
         let federation = federation.build(switch.sink(), twins.clone(), ranker)?;
         Ok(Self {
             switch: Arc::new(switch),
             twins,
-            domains: domains,
+            domains,
             federation,
             limiter,
         })

@@ -185,7 +185,7 @@ mod test {
             .unwrap();
         let twin_id = 1;
         let twin = Twin {
-            id: twin_id,
+            id: twin_id.into(),
             account: account_id,
             relay: Some(RelayDomains::new(&[server.address().to_string()])),
             pk: None,

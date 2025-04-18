@@ -15,7 +15,6 @@ use tokio::sync::oneshot;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
-
 /// the reliable message bus
 #[derive(Parser, Debug)]
 #[clap(name ="rmb-rely", author, version = env!("GIT_VERSION"), about, long_about = None)]
@@ -175,8 +174,7 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
         limiter,
         ranker,
     )
-    .await
-    .unwrap();
+    .context("failed to initialize relay")?;
 
     let mut l = events::Listener::new(args.substrate, redis_cache).await?;
     tokio::spawn(async move {

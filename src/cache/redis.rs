@@ -1,7 +1,6 @@
 use super::Cache;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use bb8_redis::{
     bb8::{Pool, PooledConnection},
     redis::cmd,
@@ -41,7 +40,6 @@ impl RedisCache {
     }
 }
 
-#[async_trait]
 impl<T> Cache<T> for RedisCache
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -53,7 +51,7 @@ where
             .arg(&self.prefix)
             .arg(key.to_string())
             .arg(obj)
-            .query_async(&mut *conn)
+            .query_async::<_, ()>(&mut *conn)
             .await?;
 
         Ok(())
