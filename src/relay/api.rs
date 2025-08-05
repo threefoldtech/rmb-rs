@@ -383,11 +383,23 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             anyhow::bail!("message with missing destination");
         }
 
-        // todo(sameh):
+        // it's safe to update the local cache since we already authenticated
+        // the twin hence we trust their information.
+        update_cache_relays(envelope, &self.twins).await?;
+
         // check if the dst twin id is already connected locally
         // if so, we don't have to check federation and directly
         // switch the message
+        if self.switch.is_local(&dst).await {
+            log::debug!("found local session for '{}', forwarding message", dst);
+            if let Err(err) = self.switch.send(&dst, &msg).await {
+                log::error!("failed to route message to peer '{}': {}", dst, err);
+            }
+            return Ok(());
+        }
 
+        // if destination is not local, we need to check if we need to federate
+        // or not.
         //  instead of sending the message directly to the switch
         //  we check federation information attached to the envelope
         //  if federation is not empty and does not match the domain
@@ -399,10 +411,6 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
-        // it's safe to update the local cache since we already authenticated
-        // the twin hence we trust their information.
-        update_cache_relays(envelope, &self.twins).await?;
-
         if !twin
             .relay
             .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
@@ -412,6 +420,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);
         }
+
         // we don't return an error because when we return an error
         // we will send this error back to the sender user. Hence
         // calling the switch.send again

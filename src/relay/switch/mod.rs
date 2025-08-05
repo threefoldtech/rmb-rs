@@ -275,6 +275,11 @@ where
     ) -> Result<MessageID> {
         send(id.as_ref(), &self.pool, msg.as_ref()).await
     }
+
+    /// checks if a session is connected locally
+    pub async fn is_local(&self, id: &SessionID) -> bool {
+        self.sessions.lock().await.contains_key(id)
+    }
 }
 
 #[derive(Clone)]
