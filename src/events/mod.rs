@@ -46,6 +46,12 @@ pub struct EventListenerOptions {
     registry: Registry,
 }
 
+impl Default for EventListenerOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventListenerOptions {
     pub fn new() -> Self {
         Self {
@@ -239,7 +245,7 @@ where
 
     async fn handle_events_inner(&mut self) -> Result<()> {
         // Subscribe to best head to minimize latency; reorg safety can be layered later if needed.
-        let mut blocks_sub = self.api.blocks().subscribe_best().await.map_err(|e| e)?;
+        let mut blocks_sub = self.api.blocks().subscribe_best().await?;
         // Detect stalled streams: if no new block arrives within this window, bail to trigger reconnect.
         let stall_timeout = Duration::from_secs(7);
         while let Some(block) = match tokio::time::timeout(stall_timeout, blocks_sub.next()).await {
@@ -267,7 +273,7 @@ where
         EVENTS_LAST_BLOCK_NUM.set(num_i64);
         log::trace!("processing block number: {}", num_i64);
 
-        let events = block.events().await.map_err(|e| e)?;
+        let events = block.events().await?;
         for evt in events.iter() {
             let evt = match evt {
                 Err(err) => {
@@ -281,9 +287,8 @@ where
                 self.cache
                     .set(twin.0.id, twin.0.into())
                     .await
-                    .map_err(|e| {
+                    .inspect_err(|_| {
                         EVENTS_ERRORS.with_label_values(&["cache_set"]).inc();
-                        e
                     })?;
                 EVENTS_TWIN_STORED_TOTAL.inc();
             } else if let Ok(Some(twin)) =
@@ -292,9 +297,8 @@ where
                 self.cache
                     .set(twin.0.id, twin.0.into())
                     .await
-                    .map_err(|e| {
+                    .inspect_err(|_| {
                         EVENTS_ERRORS.with_label_values(&["cache_set"]).inc();
-                        e
                     })?;
                 EVENTS_TWIN_UPDATED_TOTAL.inc();
             }
