@@ -62,17 +62,29 @@ where
                     }
                 };
 
-                if resp.status() != StatusCode::ACCEPTED {
+                if resp.status() == StatusCode::ACCEPTED {
+                    return Ok(domain.as_ref());
+                }
+
+                // Treat client errors (4xx) as non-retryable: return immediately with error
+                if resp.status().is_client_error() {
                     log::warn!(
-                        "received relay '{}' did not accept the message: {}",
+                        "relay '{}' rejected the message with client error: {} (non-retryable)",
                         domain.as_ref(),
                         resp.status()
                     );
                     self.ranker.downvote(domain.as_ref()).await;
-                    continue;
+                    bail!("remote relay rejected permanently: {}", resp.status());
                 }
 
-                return Ok(domain.as_ref());
+                // For other statuses (e.g., 5xx), downvote and try next candidate
+                log::warn!(
+                    "received relay '{}' did not accept the message: {}",
+                    domain.as_ref(),
+                    resp.status()
+                );
+                self.ranker.downvote(domain.as_ref()).await;
+                continue;
             }
         }
         bail!("relays '{:?}' was not reachable in time", domains);

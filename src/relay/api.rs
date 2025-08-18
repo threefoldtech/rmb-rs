@@ -1,5 +1,5 @@
 use crate::token::{self, Claims};
-use crate::twin::{RelayDomains, TwinDB};
+use crate::twin::TwinDB;
 use crate::types::{Envelope, EnvelopeExt, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
@@ -208,6 +208,16 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
     let dst: SessionID = (&envelope.destination).into();
+
+    // fast-fail: if requested and destination is not local, return error immediately
+    if has_fast_fail(&envelope) && !data.switch.is_local(&dst).await {
+        // destination session doesn’t exist on this relay
+        return Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body(Body::from("destination offline"))
+            .map_err(HttpError::Http);
+    }
+
     data.switch.send(&dst, &body).await?;
 
     Response::builder()
@@ -216,25 +226,13 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         .map_err(HttpError::Http)
 }
 
-async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Result<()> {
-    if envelope.relays.is_empty() {
-        return Ok(());
-    }
-    let mut twin = twin_db
-        .get_twin(envelope.source.twin.into())
-        .await?
-        .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
-    let envelope_relays = RelayDomains::new(&envelope.relays);
-    match twin.relay {
-        Some(twin_relays) => {
-            if twin_relays == envelope_relays {
-                return Ok(());
-            }
-            twin.relay = Some(envelope_relays);
-        }
-        None => twin.relay = Some(envelope_relays),
-    }
-    twin_db.set_twin(twin).await
+#[inline]
+fn has_fast_fail(envelope: &Envelope) -> bool {
+    envelope
+        .tags
+        .as_deref()
+        .map(|t| t.contains("fast-fail"))
+        .unwrap_or(false)
 }
 
 type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -378,9 +376,10 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         }
 
         let is_local = self.switch.is_local(&dst).await;
-        // it's safe to update the local cache since we already authenticated
-        // the twin hence we trust their information.
-        update_cache_relays(envelope, &self.twins).await?;
+        // fast-fail: if requested and destination is not local, return error immediately
+        if has_fast_fail(envelope) && !is_local {
+            anyhow::bail!("destination offline");
+        }
 
         // check if the dst twin id is already connected locally
         // if so, we don't have to check federation and directly
