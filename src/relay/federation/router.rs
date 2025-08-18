@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::time::Duration;
 
 use crate::{
     relay::ranker::RelayRanker,
@@ -10,7 +11,9 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::StatusCode;
 use protobuf::Message;
+use rand::{thread_rng, Rng};
 use reqwest::Client;
+use tokio::time::sleep;
 use workers::Work;
 
 #[derive(Clone)]
@@ -26,11 +29,27 @@ where
     D: TwinDB,
 {
     pub fn new(sink: Sink, twins: D, ranker: RelayRanker) -> Self {
+        // Configure HTTP client with production-friendly defaults
+        let client = Client::builder()
+            // Avoid your application hanging indefinitely
+            .connect_timeout(Duration::from_secs(5))
+            // Overall per-request ceiling
+            .timeout(Duration::from_secs(12))
+            // This keeps a connection in the connection pool for up to 5 minutes
+            // drastically reduce overhead by reusing existing connections for subsequent requests
+            .pool_idle_timeout(Duration::from_secs(300))
+            // Help detect dead paths sooner
+            .tcp_keepalive(Duration::from_secs(60))
+            // Let reqwest/h2 auto-tune flow control when available
+            .http2_adaptive_window(true)
+            .build()
+            .expect("failed to build reqwest client");
+
         Self {
             sink: Some(sink),
             twins,
             ranker,
-            client: Client::new(),
+            client,
         }
     }
 
@@ -39,8 +58,8 @@ where
         domains: &'a Vec<S>,
         msg: Vec<u8>,
     ) -> Result<&'a str> {
-        // TODO: FIX ME
-        for _ in 0..3 {
+        // Up to 3 passes over candidate relays with small jittered backoff between passes
+        for pass in 0..3 {
             for domain in domains.iter() {
                 let url = if cfg!(test) {
                     format!("http://{}/", domain.as_ref())
@@ -86,6 +105,13 @@ where
                 self.ranker.downvote(domain.as_ref()).await;
                 continue;
             }
+
+            // Jittered exponential backoff between passes except after the last pass
+            if pass < 2 {
+                let base_ms = 100u64 << pass; // 100ms, 200ms
+                let jitter: u64 = thread_rng().gen_range(0..(base_ms / 2 + 1));
+                sleep(Duration::from_millis(base_ms + jitter)).await;
+            }
         }
         bail!("relays '{:?}' was not reachable in time", domains);
     }
@@ -110,18 +136,19 @@ where
                 for d in domains.iter() {
                     super::MESSAGE_ERROR.with_label_values(&[d]).inc();
                 }
+                if env.has_request() {
+                    if let Some(ref sink) = self.sink {
+                        let mut msg = Envelope::new();
+                        msg.expiration = 300;
+                        msg.stamp();
+                        msg.uid = env.uid;
+                        let e = msg.mut_error();
+                        e.message = err.to_string();
+                        let dst: SessionID = (&env.source).into();
 
-                if let Some(ref sink) = self.sink {
-                    let mut msg = Envelope::new();
-                    msg.expiration = 300;
-                    msg.stamp();
-                    msg.uid = env.uid;
-                    let e = msg.mut_error();
-                    e.message = err.to_string();
-                    let dst: SessionID = (&env.source).into();
-
-                    let _ = sink.send(&dst, msg.write_to_bytes()?).await;
-                    // after this point we don't care if the error was not reported back
+                        let _ = sink.send(&dst, msg.write_to_bytes()?).await;
+                        // after this point we don't care if the error was not reported back
+                    }
                 }
             }
         }

@@ -17,6 +17,7 @@ use federation::Federation;
 pub use federation::FederationOptions;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use switch::Switch;
 pub use switch::SwitchOptions;
 pub mod ranker;
@@ -67,8 +68,17 @@ where
             let (tcp_stream, _) = tcp_listener.accept().await?;
             let http = http.clone();
             tokio::task::spawn(async move {
+                // Reduce latency for small frames (WS pings)
+                if let Err(e) = tcp_stream.set_nodelay(true) {
+                    log::debug!("failed to set TCP_NODELAY: {}", e);
+                }
                 if let Err(http_err) = Http::new()
+                    // Keep HTTP/1.1 enabled for WebSocket upgrades
                     .http1_keep_alive(true)
+                    .http1_header_read_timeout(Duration::from_secs(6))
+                    // Enable HTTP/2 alongside HTTP/1.1 (no breaking changes)
+                    .http2_adaptive_window(true)
+                    .http2_keep_alive_interval(Some(Duration::from_secs(60)))
                     .serve_connection(tcp_stream, http)
                     .with_upgrades()
                     .await
