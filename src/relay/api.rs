@@ -207,12 +207,6 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
-    // todo: this is UNSAFE. since we can't verify the received message hence
-    // we shouldn't poison local cache
-
-    update_cache_relays(&envelope, &data.twins)
-        .await
-        .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
     let dst: SessionID = (&envelope.destination).into();
     data.switch.send(&dst, &body).await?;
 
@@ -383,6 +377,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             anyhow::bail!("message with missing destination");
         }
 
+        let is_local = self.switch.is_local(&dst).await;
         // it's safe to update the local cache since we already authenticated
         // the twin hence we trust their information.
         update_cache_relays(envelope, &self.twins).await?;
@@ -390,10 +385,10 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         // check if the dst twin id is already connected locally
         // if so, we don't have to check federation and directly
         // switch the message
-        if self.switch.is_local(&dst).await {
-            log::debug!("found local session for '{}', forwarding message", dst);
+        if is_local {
+            log::debug!("found local session for '{}' , forwarding message", dst);
             if let Err(err) = self.switch.send(&dst, &msg).await {
-                log::error!("failed to route message to peer '{}': {}", dst, err);
+                log::error!("failed to route message to peer '{}' : {}", dst, err);
             }
             return Ok(());
         }

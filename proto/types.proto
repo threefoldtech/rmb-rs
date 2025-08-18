@@ -62,8 +62,8 @@ message Envelope {
   optional string schema = 10;
 
   // a federation url (domain)
-  // this filed ignored by relays but left for back compatibilty with old peers
-  optional string federation = 11;
+  // deprecated: this filed ignored by relays but left for back compatibilty with old peers
+  optional string federation = 11 [deprecated = true];
 
   // pyload of the message is interpreted differently based
   // on the message filed
@@ -72,5 +72,6 @@ message Envelope {
     bytes cipher = 14;
   }
 
-  repeated string relays = 17;
+  // deprecated: relays discovery is now driven by chain/cache; this field will be removed
+  repeated string relays = 17 [deprecated = true];
 }

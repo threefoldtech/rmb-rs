@@ -11,7 +11,7 @@ use rmb::relay::{
     limiter::{FixedWindowOptions, Limiters},
 };
 use rmb::twin::SubstrateTwinDB;
-use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 /// A peer requires only which rely to connect to, and
 /// which identity (mnemonics)
@@ -65,6 +65,10 @@ struct Args {
     /// failures that occurred outside this specified period will be disregarded.
     #[clap(short = 'p', long, default_value_t = 3600)]
     ranker_period: u64,
+
+    /// maximum number of blocks to catch up without flushing cache (on reconnect)
+    #[clap(long, default_value_t = 600)]
+    catchup_threshold: u64,
 }
 
 fn set_limits() -> Result<()> {
@@ -92,7 +96,7 @@ fn set_limits() -> Result<()> {
     Ok(())
 }
 
-async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
+async fn app(args: Args) -> Result<JoinHandle<()>> {
     if args.workers == 0 {
         anyhow::bail!("number of workers cannot be zero");
     }
@@ -176,68 +180,55 @@ async fn app(args: Args, tx: oneshot::Sender<()>) -> Result<()> {
     )
     .context("failed to initialize relay")?;
 
-    let mut l = events::Listener::new(args.substrate, redis_cache).await?;
-    tokio::spawn(async move {
-        let max_retries = 9; // max wait is 2^9 = 512 seconds ( 5 minutes )
-        let mut attempt = 0;
-        let mut backoff = Duration::from_secs(1);
-        let mut got_hit = false;
+    let mut l = events::EventListenerOptions::new()
+        .with_catchup_threshold(args.catchup_threshold)
+        .build(args.substrate, redis_cache)
+        .await?;
+    let listener_handler = tokio::spawn(async move {
+        // The listener self-heals and retries internally; this task should run indefinitely.
+        if let Err(e) = l.listen().await.context("failed to listen to chain events") {
+            log::error!("Listener exited with error: {:?}", e);
+        }
+    });
 
-        loop {
-            match l
-                .listen(&mut got_hit)
-                .await
-                .context("failed to listen to chain events")
-            {
-                Ok(_) => break,
-                Err(e) => {
-                    if got_hit {
-                        log::warn!("Listener got a hit, but failed to listen to chain events before no attempts will be reset");
-                        got_hit = false;
-                        attempt = 0;
-                        backoff = Duration::from_secs(1);
-                    }
-                    attempt += 1;
-                    if attempt > max_retries {
-                        log::error!("Listener failed after {} attempts: {:?}", attempt - 1, e);
-                        let _ = tx.send(());
-                        break;
-                    }
-                    log::warn!(
-                        "Listener failed on attempt {}: {:?}. Retrying in {:?}...",
-                        attempt,
-                        e,
-                        backoff
-                    );
-                    tokio::time::sleep(backoff).await;
-                    backoff *= 2;
+    let relay_handler = tokio::spawn(async move {
+        r.start(&args.listen).await.unwrap();
+    });
+
+    let main_handler = tokio::spawn(async move {
+        tokio::select! {
+            _ = relay_handler => {
+                log::info!("Relay is closing successfully.");
+            }
+            result = listener_handler => {
+                match result {
+                    Ok(_) => log::warn!("Listener task finished unexpectedly."),
+                    Err(e) => log::error!("Listener panicked: {:?}", e),
                 }
             }
         }
     });
 
-    r.start(&args.listen).await.unwrap();
-    Ok(())
+    Ok(main_handler)
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let (tx, rx) = oneshot::channel();
-    let app_handle = tokio::spawn(async move {
-        if let Err(e) = app(args, tx).await {
+    let app_handle = match app(args).await {
+        Ok(handles) => handles,
+        Err(e) => {
             eprintln!("{:#}", e);
             std::process::exit(1);
         }
-    });
+    };
 
     tokio::select! {
         _ = app_handle => {
             log::info!("Application is closing successfully.");
         }
-        _ = rx => {
-            log::error!("Listener shutdown signal received. Exiting application.");
-            std::process::exit(1);
+        _ = tokio::signal::ctrl_c() => {
+            log::info!("Ctrl-C received. Shutting down...");
         }
     }
 }
