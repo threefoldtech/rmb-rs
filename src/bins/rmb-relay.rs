@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{builder::ArgAction, Parser};
+use prometheus::default_registry;
 use rmb::cache::RedisCache;
 use rmb::events;
 use rmb::redis;
@@ -170,6 +171,7 @@ async fn app(args: Args) -> Result<JoinHandle<()>> {
         )
     };
     let ranker = relay::ranker::RelayRanker::new(Duration::from_secs(args.ranker_period));
+    rmb::cache::register_cache_metrics(default_registry());
     let r = relay::Relay::new(
         args.domains.iter().cloned().collect(),
         twins,

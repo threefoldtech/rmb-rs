@@ -209,7 +209,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
 
     let dst: SessionID = (&envelope.destination).into();
 
-    // fast-fail: if requested and destination is not local, return error immediately
+    // fast-fail path: if requested and destination is not local, return error immediately
     if has_fast_fail(&envelope) && !data.switch.is_local(&dst).await {
         // destination session doesn’t exist on this relay
         return Response::builder()
@@ -376,18 +376,15 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         }
 
         let is_local = self.switch.is_local(&dst).await;
-        // fast-fail: if requested and destination is not local, return error immediately
-        if has_fast_fail(envelope) && !is_local {
-            anyhow::bail!("destination offline");
-        }
 
         // check if the dst twin id is already connected locally
         // if so, we don't have to check federation and directly
         // switch the message
         if is_local {
-            log::debug!("found local session for '{}' , forwarding message", dst);
+            log::trace!("found local session for '{}' , forwarding message", dst);
             if let Err(err) = self.switch.send(&dst, &msg).await {
                 log::error!("failed to route message to peer '{}' : {}", dst, err);
+                anyhow::bail!("failed to route message to peer '{}': {}", dst, err);
             }
             return Ok(());
         }
@@ -414,13 +411,18 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);
         }
-
+        // fast-fail path: we confirmed that this is not an foreign message, and if it is fast-fail taged and destination session is not connected
+        // then the peer must be offline, return error immediately
+        if has_fast_fail(envelope) && !is_local {
+            anyhow::bail!("destination offline");
+        }
         // we don't return an error because when we return an error
         // we will send this error back to the sender user. Hence
         // calling the switch.send again
         // this is an internal error anyway, and should not happen
         if let Err(err) = self.switch.send(&dst, &msg).await {
             log::error!("failed to route message to peer '{}': {}", dst, err);
+            anyhow::bail!("failed to route message to peer '{}': {}", dst, err);
         }
 
         Ok(())
@@ -474,7 +476,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                     // TODO: throttling to avoid sending too many messages in short time!
                     match message {
                         Message::Text(_) => {
-                            log::trace!("received unsupported (text) message. disconnecting!");
+                            log::debug!("received unsupported (text) message. disconnecting!");
                             break;
                         }
                         Message::Binary(msg) => {
@@ -487,16 +489,21 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                             super::switch::MESSAGE_RX_TWIN.with_label_values(&[&format!("{}", envelope.source.twin)]).inc();
 
                             if !self.metrics.measure(msg.len()).await {
-                                log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
-                                self.send_error(envelope, "exceeded rate limits, dropping message").await;
-                                continue
+                                log::debug!("twin with stream id {} exceeded its request limits, dropping message", self.id);
+                                if envelope.has_request() {
+                                    self.send_error(envelope, "exceeded rate limits, dropping message").await;
+                                }
+                                continue;
                             }
 
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&mut envelope, msg).await {
-                                self.send_error(envelope, err).await;
+                                // check if the envolope is request or response
+                                if envelope.has_request() {
+                                    self.send_error(envelope, err).await;
+                                }
                             }
                         }
                         Message::Ping(_) => {

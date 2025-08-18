@@ -100,7 +100,7 @@ mod tests {
         Sr25519Signer::try_from(WORDS).expect("key must be loaded");
 
         let err = Sr25519Signer::try_from("invalid words");
-        assert_eq!(err.is_err(), true);
+        assert!(err.is_err());
     }
 
     #[test]
@@ -108,6 +108,6 @@ mod tests {
         Sr25519Signer::try_from(SEED).expect("key must be loaded");
 
         let err = Sr25519Signer::try_from("0xinvalidseed");
-        assert_eq!(err.is_err(), true);
+        assert!(err.is_err());
     }
 }

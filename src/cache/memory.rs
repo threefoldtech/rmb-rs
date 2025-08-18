@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use super::Cache;
+#[cfg(feature = "tracker")]
+use super::RMB_CACHE_HITS_TOTAL;
+use super::{Cache, RMB_CACHE_ENTRIES, RMB_CACHE_FLUSHES_TOTAL, RMB_CACHE_MISSES_TOTAL};
 use anyhow::Result;
 use ttl_cache::TtlCache;
 
@@ -38,7 +40,10 @@ where
 {
     async fn set<K: ToString + Send + Sync>(&self, key: K, obj: T) -> Result<()> {
         let mut mem = self.mem.write().await;
-        mem.insert(key.to_string(), obj, self.ttl);
+        let prev = mem.insert(key.to_string(), obj, self.ttl);
+        if prev.is_none() {
+            RMB_CACHE_ENTRIES.inc();
+        }
 
         Ok(())
     }
@@ -46,13 +51,24 @@ where
     async fn get<K: ToString + Send + Sync>(&self, key: K) -> Result<Option<T>> {
         let mem = self.mem.read().await;
         match mem.get(&key.to_string()) {
-            None => Ok(None),
-            Some(v) => Ok(Some(v.clone())),
+            None => {
+                RMB_CACHE_MISSES_TOTAL.inc();
+                Ok(None)
+            }
+            Some(v) => {
+                #[cfg(feature = "tracker")]
+                {
+                    RMB_CACHE_HITS_TOTAL.inc();
+                }
+                Ok(Some(v.clone()))
+            }
         }
     }
     async fn flush(&self) -> Result<()> {
         let mut mem = self.mem.write().await;
         mem.clear();
+        RMB_CACHE_ENTRIES.set(0);
+        RMB_CACHE_FLUSHES_TOTAL.inc();
 
         Ok(())
     }

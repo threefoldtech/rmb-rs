@@ -16,7 +16,7 @@ use futures::{
 use tokio::{sync::OwnedSemaphorePermit, time::sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::relay::switch::{SendError, CON_PER_WORKER, RETRY_DELAY};
+use crate::relay::switch::{SendError, CON_PER_WORKER, RELAY_SESSION_EVICTIONS_TOTAL, RETRY_DELAY};
 
 use super::{
     queue::Queue, ConnectionSender, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
@@ -98,7 +98,7 @@ impl<S> Session<S>
 where
     S: ConnectionSender,
 {
-    fn is_cancelled(&self) -> bool {
+    fn _is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
             || self.status.is_closed()
             || matches!(self.status, SessionStatus::BackPressure { since } if Instant::now().duration_since(since) > MAX_BACK_PRESSURE_DURATION)
@@ -183,11 +183,50 @@ where
             };
 
             // drop any connection that was cancelled or was in back pressure state for too long
-            self.sessions.retain(|_, s| !s.is_cancelled());
+            // while counting the eviction reason, using a single-pass retain
+            let now = Instant::now();
+            let mut closed_count = 0u64;
+            let mut bp_timeout_count = 0u64;
+            let mut cancelled_count = 0u64;
+
+            self.sessions.retain(|_, s| {
+                // classify reason in a mutually exclusive order
+                if s.status.is_closed() {
+                    closed_count += 1;
+                    return false;
+                }
+                if matches!(s.status, SessionStatus::BackPressure { since } if now.duration_since(since) > MAX_BACK_PRESSURE_DURATION) {
+                    bp_timeout_count += 1;
+                    return false;
+                }
+                if s.cancellation.is_cancelled() {
+                    cancelled_count += 1;
+                    return false;
+                }
+                true
+            });
+
+            if closed_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["closed"])
+                    .inc_by(closed_count);
+            }
+            if bp_timeout_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["back_pressure_timeout"])
+                    .inc_by(bp_timeout_count);
+            }
+            if cancelled_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["cancelled"])
+                    .inc_by(cancelled_count);
+            }
 
             CON_PER_WORKER
                 .with_label_values(&[&worker_name])
                 .set(self.sessions.len() as i64);
+
+            // back-pressure gauge removed
 
             let query: OptionFuture<_> = self
                 .query_command()
@@ -242,6 +281,8 @@ where
                                                 }
                                                 SendError::NotEnoughCapacity => {
                                                     session.status.merge(SessionStatus::BackPressure { since: Instant::now() });
+                                                    // inc counter
+
                                                 }
                                             }
                                             continue 'sender;

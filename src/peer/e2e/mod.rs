@@ -141,8 +141,8 @@ mod test {
                 .parse()
                 .unwrap();
 
-        let shared1 = sk1.shared(&sk2.public()).unwrap();
-        let shared2 = sk2.shared(&sk1.public()).unwrap();
+        let shared1 = sk1.shared(sk2.public()).unwrap();
+        let shared2 = sk2.shared(sk1.public()).unwrap();
 
         assert_eq!(shared1, shared2);
 

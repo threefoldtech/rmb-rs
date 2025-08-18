@@ -27,10 +27,7 @@ use tokio::time::Duration;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use worker::WorkerJob;
 
-use prometheus::{IntCounter, IntGaugeVec, Opts, Registry};
-
-#[cfg(feature = "tracker")]
-use prometheus::IntCounterVec;
+use prometheus::{IntCounter, IntCounterVec, IntGaugeVec, Opts, Registry};
 
 lazy_static::lazy_static! {
     static ref CON_PER_WORKER: IntGaugeVec = IntGaugeVec::new(
@@ -45,6 +42,16 @@ lazy_static::lazy_static! {
     static ref MESSAGE_RX_BYTES: IntCounter = IntCounter::new("relay_message_rx_bytes", "size of messages received by relay in bytes").unwrap();
 
     static ref MESSAGE_TX_BYTES: IntCounter = IntCounter::new("relay_message_tx_bytes", "size of messages forwarded by relay in bytes").unwrap();
+
+    // Total number of session evictions, labeled by reason
+    // reason ∈ { "closed", "back_pressure_timeout", "cancelled" }
+    static ref RELAY_SESSION_EVICTIONS_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "relay_session_evictions_total",
+            "Total number of session evictions from the relay, labeled by reason",
+        ),
+        &["reason"],
+    ).unwrap();
 }
 
 #[cfg(feature = "tracker")]
@@ -201,6 +208,8 @@ where
         opts.registry.register(Box::new(MESSAGE_TX.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX_BYTES.clone()))?;
         opts.registry.register(Box::new(MESSAGE_TX_BYTES.clone()))?;
+        opts.registry
+            .register(Box::new(RELAY_SESSION_EVICTIONS_TOTAL.clone()))?;
         #[cfg(feature = "tracker")]
         opts.registry.register(Box::new(MESSAGE_RX_TWIN.clone()))?;
 
@@ -277,6 +286,9 @@ where
     }
 
     /// checks if a session is connected locally
+    /// it doesn't verify if the twin is belongs to this relay
+    /// so should be treated as cheap way to route to locals online twins bypassing twin lookup
+    /// if the session is not found, further routing verification should be done
     pub async fn is_local(&self, id: &SessionID) -> bool {
         self.sessions.lock().await.contains_key(id)
     }
@@ -382,7 +394,7 @@ mod test {
             .expect("can connect");
 
         let switch = Switch::<MessageSender>::new(super::SwitchOptions {
-            pool: pool,
+            pool,
             workers: 2,
             max_users: 100,
             registry: Registry::new(),

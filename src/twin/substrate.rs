@@ -215,8 +215,8 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert!(matches!(twin.relay, None));
-        assert!(matches!(twin.pk, None));
+        assert!(twin.relay.is_none());
+        assert!(twin.pk.is_none());
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
@@ -249,8 +249,8 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert!(matches!(twin.relay, None));
-        assert!(matches!(twin.pk, None));
+        assert!(twin.relay.is_none());
+        assert!(twin.pk.is_none());
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
