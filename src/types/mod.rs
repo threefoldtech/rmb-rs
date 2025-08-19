@@ -188,7 +188,7 @@ impl redis::ToRedisArgs for Envelope {
 
 impl redis::FromRedisValue for Envelope {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             Self::parse_from_bytes(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,
@@ -217,7 +217,7 @@ impl redis::ToRedisArgs for Backlog {
 
 impl redis::FromRedisValue for Backlog {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             Self::parse_from_bytes(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,

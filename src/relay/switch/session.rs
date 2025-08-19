@@ -115,7 +115,7 @@ impl ToRedisArgs for SessionID {
 
 impl FromRedisValue for SessionID {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        if let Value::Data(bytes) = v {
+        if let Value::BulkString(bytes) = v {
             let s = core::str::from_utf8(bytes)?;
 
             if !s.starts_with("stream:") {
@@ -172,7 +172,7 @@ impl FromStr for MessageID {
 
 impl FromRedisValue for MessageID {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        if let Value::Data(bytes) = v {
+        if let Value::BulkString(bytes) = v {
             let id: MessageID =
                 core::str::from_utf8(bytes)?
                     .parse()
@@ -233,7 +233,7 @@ mod test {
 
         assert_eq!(String::from_utf8_lossy(&arg[0]), "stream:10:con");
 
-        let v = Value::Data(arg.pop().unwrap());
+        let v = Value::BulkString(arg.pop().unwrap());
         let id: SessionID = SessionID::from_redis_value(&v).unwrap();
 
         assert_eq!(id.0, TwinID::from(10));

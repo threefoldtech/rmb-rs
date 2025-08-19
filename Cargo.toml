@@ -16,7 +16,8 @@ path = "src/bins/rmb-relay.rs"
 anyhow = "1.0.56"
 async-trait = "0.1"
 base64 = "0.13.0"
-bb8-redis = "0.13"
+bb8-redis = "0.16"
+redis = { version = "0.26", features = ["streams", "aio", "tokio-comp"] }
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hex = { version = "0.4", features = ["alloc"] }

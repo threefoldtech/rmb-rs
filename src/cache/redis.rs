@@ -53,7 +53,7 @@ where
             .arg(&self.prefix)
             .arg(key.to_string())
             .arg(obj)
-            .query_async::<_, i64>(&mut *conn)
+            .query_async::<i64>(&mut *conn)
             .await?;
         if added == 1 {
             RMB_CACHE_ENTRIES.inc();

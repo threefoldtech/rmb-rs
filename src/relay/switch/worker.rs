@@ -230,9 +230,7 @@ where
 
             let query: OptionFuture<_> = self
                 .query_command()
-                .map(|cmd| {
-                    async move { cmd.query_async::<_, Output>(con.deref_mut()).await }.fuse()
-                })
+                .map(|cmd| async move { cmd.query_async::<Output>(con.deref_mut()).await }.fuse())
                 .into();
             let mut query = std::pin::pin!(query);
 
@@ -374,7 +372,7 @@ struct Message(MessageID, Vec<Vec<u8>>);
 impl FromRedisValue for Message {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Bulk(values) => {
+            Value::Array(values) => {
                 if values.len() != 2 {
                     return Err(RedisError::from((
                         ErrorKind::TypeError,
@@ -399,7 +397,7 @@ struct Messages(SessionID, Vec<Message>);
 impl FromRedisValue for Messages {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Bulk(values) => {
+            Value::Array(values) => {
                 if values.len() != 2 {
                     return Err(RedisError::from((
                         ErrorKind::TypeError,
@@ -424,7 +422,7 @@ type Output = Option<Vec<Messages>>;
 #[cfg(test)]
 mod test {
     use super::{MessageID, Output, SessionID};
-    use bb8_redis::redis::{self, cmd};
+    use redis::{self, cmd};
 
     #[test]
     fn message_serialization() {
