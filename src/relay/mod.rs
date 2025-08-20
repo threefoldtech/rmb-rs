@@ -1,5 +1,6 @@
 use crate::token;
 use crate::twin::TwinDB;
+use crate::types::{Envelope, EnvelopeExt};
 use anyhow::Result;
 use hyper::server::conn::Http;
 use hyper_tungstenite::tungstenite::error::ProtocolError;
@@ -28,6 +29,18 @@ pub struct Relay<D: TwinDB, R: RateLimiter> {
     domains: HashSet<String>,
     federation: Federation<D>,
     limiter: R,
+}
+
+// Build an error response envelope based on a request envelope.
+// Note: destination is NOT set here; caller assigns the appropriate destination.
+pub(crate) fn build_error_envelope<E: std::fmt::Display>(req_env: &Envelope, err: E) -> Envelope {
+    let mut resp = Envelope::new();
+    resp.expiration = 300;
+    resp.stamp();
+    resp.uid = req_env.uid.clone();
+    let e = resp.mut_error();
+    e.message = err.to_string();
+    resp
 }
 
 impl<D, R> Relay<D, R>

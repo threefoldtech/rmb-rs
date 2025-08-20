@@ -1,6 +1,6 @@
 use crate::token::{self, Claims};
 use crate::twin::TwinDB;
-use crate::types::{Envelope, EnvelopeExt, Pong};
+use crate::types::{Envelope, Pong};
 use anyhow::{Context, Result};
 use futures::stream::SplitSink;
 use futures::Future;
@@ -28,6 +28,7 @@ use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
 use super::switch::{ConnectionSender, MessageID, SendError, SessionID, Switch};
 use super::HttpError;
+use crate::relay::build_error_envelope;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<WriterCallback>>,
@@ -490,9 +491,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
 
                             if !self.metrics.measure(msg.len()).await {
                                 log::debug!("twin with stream id {} exceeded its request limits, dropping message", self.id);
-                                if envelope.has_request() {
-                                    self.send_error(envelope, "exceeded rate limits, dropping message").await;
-                                }
+                                self.send_error_response(envelope, "exceeded rate limits, dropping message").await;
                                 continue;
                             }
 
@@ -500,10 +499,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&mut envelope, msg).await {
-                                // check if the envolope is request or response
-                                if envelope.has_request() {
-                                    self.send_error(envelope, err).await;
-                                }
+                                self.send_error_response(envelope, err).await;
                             }
                         }
                         Message::Ping(_) => {
@@ -529,27 +525,24 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         Ok(())
     }
 
-    async fn send_error<E: Display>(&self, envelope: Envelope, err: E) {
-        let mut resp = Envelope::new();
-        resp.expiration = 300;
-        resp.stamp();
-        resp.uid = envelope.uid;
+    async fn send_error_response<E: Display>(&self, envelope: Envelope, err: E) {
+        if !envelope.has_request() {
+            return;
+        }
+        let mut resp = build_error_envelope(&envelope, err);
         resp.destination = Some((&self.id).into()).into();
-        let e = resp.mut_error();
-        e.message = err.to_string();
 
-        let bytes = match resp.write_to_bytes() {
-            Ok(bytes) => bytes,
+        match resp.write_to_bytes() {
+            Ok(bytes) => {
+                if let Err(err) = self.switch.send(&self.id, bytes).await {
+                    // just log then
+                    log::error!("failed to send error message back to caller: {}", err);
+                }
+            }
             Err(err) => {
                 // this should never happen, hence let's print this as an error
                 log::error!("failed to serialize envelope: {}", err);
-                return;
             }
-        };
-
-        if let Err(err) = self.switch.send(&self.id, bytes).await {
-            // just log then
-            log::error!("failed to send error message back to caller: {}", err);
         }
     }
 }

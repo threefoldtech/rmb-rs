@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use crate::{
+    relay::build_error_envelope,
     relay::ranker::RelayRanker,
     relay::switch::{SessionID, Sink},
     twin::TwinDB,
@@ -163,21 +164,25 @@ where
     }
 
     // Public helper used by retry path to send an error response back to requester
-    pub async fn send_error_response(&self, env: &Envelope, err: &str) -> anyhow::Result<()> {
+    pub async fn send_error_response(&self, env: &Envelope, err: &str) {
         if env.has_request() {
             if let Some(ref sink) = self.sink {
-                let mut msg = Envelope::new();
-                msg.expiration = 300;
-                msg.stamp();
-                msg.uid = env.uid.clone();
-                let e = msg.mut_error();
-                e.message = err.to_string();
+                let msg = build_error_envelope(env, err);
                 let dst: SessionID = (&env.source).into();
 
-                let _ = sink.send(&dst, msg.write_to_bytes()?).await;
+                match msg.write_to_bytes() {
+                    Ok(bytes) => {
+                        if let Err(err) = sink.send(&dst, bytes).await {
+                            // just log then
+                            log::error!("failed to send error message back to caller: {}", err);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("failed to serialize error envelope: {}", e);
+                    }
+                }
             }
         }
-        Ok(())
     }
 }
 

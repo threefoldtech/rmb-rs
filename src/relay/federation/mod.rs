@@ -117,8 +117,7 @@ where
                     // For permanent/expired, send error response once, then ACK
                     let mut env = Envelope::new();
                     if env.merge_from_bytes(&job.msg).is_ok() {
-                        let _ = self
-                            .router
+                        self.router
                             .send_error_response(&env, &err.to_string())
                             .await;
                     }
