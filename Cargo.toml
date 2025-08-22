@@ -13,31 +13,32 @@ path = "src/bins/rmb-relay.rs"
 
 
 [dependencies]
-anyhow = "1.0.56"
+anyhow = "1"
 async-trait = "0.1"
-base64 = "0.13.0"
+base64 = "0.13"
 bb8-redis = "0.16"
 redis = { version = "0.26", features = ["streams", "aio", "tokio-comp"] }
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hex = { version = "0.4", features = ["alloc"] }
-http = "0.2.7"
+http = "1"
 log = "0.4"
 md5 = "0.7.0"
-nix = "0.24.1"
-serde = { version = "1.0.136", features = ["derive"] }
-serde_json = { version = "1.0.81" }
+nix = "0.24"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+bincode = "1"
 simple_logger = "2.1"
 thiserror = "1.0.31"
 tokio = { version = "1", features = ["full"] }
 tokio-retry = "0.3"
-uuid = { version = "1.1.0", features = ["v4"] }
+uuid = { version = "1", features = ["v4"] }
 jsonrpsee-core = "0.14.0"
 mime = "0.3"
 mpart-async = "0.6.0"
 url = "2.3.1"
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-futures-util = "0.3.25"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
 jwt = "0.16"
 subxt = { version = "0.28.0", features = ["substrate-compat"] }
 codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = [
@@ -54,13 +55,16 @@ openssl = { version = "0.10", features = ["vendored"] }
 workers = { git = "https://github.com/threefoldtech/tokio-worker-pool", branch = "main" }
 protobuf = { version = "3.2.0", features = ["with-bytes"] }
 
-hyper = { version = "0.14", features = ["full"] }
-hyper-tungstenite = "0.11"
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "http2", "tokio"] }
+http-body-util = "0.1"
+hyper-tungstenite = "0.14"
 lazy_static = "1.4.0"
-prometheus = { version = "0.13.3", features = ["process"] }
+prometheus = { version = "0.13", features = ["process"] }
 
 tfchain-client = { git = "https://github.com/threefoldtech/tfchain.git", version = "0.2.0", branch = "development" }
-reqwest = "0.11"
+reqwest = "0.12"
+bytes = "1"
 
 # for e2e
 bip39 = { version = "2.0.0", default-features = false }

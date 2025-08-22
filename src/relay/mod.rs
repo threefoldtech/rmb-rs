@@ -2,7 +2,8 @@ use crate::token;
 use crate::twin::TwinDB;
 use crate::types::{Envelope, EnvelopeExt};
 use anyhow::Result;
-use hyper::server::conn::Http;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use hyper_tungstenite::tungstenite::error::ProtocolError;
 use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
@@ -17,8 +18,8 @@ use api::WriterCallback;
 use federation::Federation;
 pub use federation::FederationOptions;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
+use std::sync::Arc;
 use switch::Switch;
 pub use switch::SwitchOptions;
 pub mod ranker;
@@ -85,17 +86,21 @@ where
                 if let Err(e) = tcp_stream.set_nodelay(true) {
                     log::debug!("failed to set TCP_NODELAY: {}", e);
                 }
-                if let Err(http_err) = Http::new()
-                    // Keep HTTP/1.1 enabled for WebSocket upgrades
-                    .http1_keep_alive(true)
-                    .http1_header_read_timeout(Duration::from_secs(6))
-                    // Enable HTTP/2 alongside HTTP/1.1 (no breaking changes)
-                    .http2_adaptive_window(true)
-                    .http2_keep_alive_interval(Some(Duration::from_secs(60)))
-                    .serve_connection(tcp_stream, http)
-                    .with_upgrades()
-                    .await
-                {
+                let io = TokioIo::new(tcp_stream);
+                // Auto-detect HTTP/1.1 vs HTTP/2 per-connection; allow WS upgrades on HTTP/1.1
+                let mut builder = auto::Builder::new(TokioExecutor::new());
+                // Restore HTTP/1.1 tuning (keep-alive + header read timeout)
+                builder
+                    .http1()
+                    .keep_alive(true)
+                    .header_read_timeout(Duration::from_secs(6));
+                // Restore HTTP/2 tuning (adaptive window + keep-alive interval)
+                builder
+                    .http2()
+                    .adaptive_window(true)
+                    .keep_alive_interval(Some(Duration::from_secs(60)));
+
+                if let Err(http_err) = builder.serve_connection(io, http).await {
                     eprintln!("Error while serving HTTP connection: {}", http_err);
                 }
             });

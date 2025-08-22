@@ -8,10 +8,13 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use http::Method;
 use hyper::service::Service;
 use hyper::upgrade::Upgraded;
-use hyper::Body;
-use hyper::{Request, Response};
+use http::{Request, Response};
+use hyper::body::Incoming;
+use http_body_util::{BodyExt, Full};
+use bytes::Bytes;
 use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
+use hyper_util::rt::TokioIo;
 use prometheus::Encoder;
 use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
@@ -77,23 +80,16 @@ where
     }
 }
 
-impl<D, R> Service<Request<Body>> for HttpService<D, R>
+impl<D, R> Service<Request<Incoming>> for HttpService<D, R>
 where
     D: TwinDB,
     R: RateLimiter,
 {
-    type Response = Response<Body>;
+    type Response = Response<Full<Bytes>>;
     type Error = HttpError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
+    fn call(&self, req: Request<Incoming>) -> Self::Future {
         let data = Arc::clone(&self.data);
 
         let fut = async {
@@ -103,7 +99,7 @@ where
                     log::debug!("connection error: {:#}", err);
                     Response::builder()
                         .status(err.status())
-                        .body(Body::from(err.to_string()))
+                        .body(Full::from(Bytes::from(err.to_string())))
                         .map_err(HttpError::Http)
                 }
             }
@@ -115,8 +111,8 @@ where
 
 async fn entry<D: TwinDB, R: RateLimiter>(
     data: Arc<AppData<D, R>>,
-    mut request: Request<Body>,
-) -> Result<Response<Body>, HttpError> {
+    mut request: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, HttpError> {
     // Check if the request is a websocket upgrade request.
     if hyper_tungstenite::is_upgrade_request(&request) {
         let jwt = request.uri().query().ok_or(HttpError::MissingJWT)?;
@@ -164,7 +160,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
     }
 }
 
-fn metrics() -> Result<Response<Body>, HttpError> {
+fn metrics() -> Result<Response<Full<Bytes>>, HttpError> {
     // TODO add other end point
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
@@ -175,20 +171,20 @@ fn metrics() -> Result<Response<Body>, HttpError> {
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
         return Response::builder()
             .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from(err.to_string()))
+            .body(Full::from(Bytes::from(err.to_string())))
             .map_err(HttpError::Http);
     }
 
     Response::builder()
         .status(http::StatusCode::OK)
-        .body(Body::from(buffer))
+        .body(Full::from(Bytes::from(buffer)))
         .map_err(HttpError::Http)
 }
 
 async fn federation<D: TwinDB, R: RateLimiter>(
     data: &AppData<D, R>,
-    request: Request<Body>,
-) -> Result<Response<Body>, HttpError> {
+    request: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, HttpError> {
     // TODO:
     //   there are many things that can go wrong here
     //   - this is not an authorized endpoint. means anyone (not necessary a relay)
@@ -201,9 +197,12 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     //
     // this method trust whoever call it to provide correct federation information and proper message
     // size.
-    let body = hyper::body::to_bytes(request.into_body())
+    let body = request
+        .into_body()
+        .collect()
         .await
-        .map_err(|err| HttpError::BadRequest(err.to_string()))?;
+        .map_err(|err| HttpError::BadRequest(err.to_string()))?
+        .to_bytes();
 
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
@@ -215,7 +214,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         // destination session doesn’t exist on this relay
         return Response::builder()
             .status(http::StatusCode::NOT_FOUND)
-            .body(Body::from("destination offline"))
+            .body(Full::from(Bytes::from("destination offline")))
             .map_err(HttpError::Http);
     }
 
@@ -223,7 +222,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
 
     Response::builder()
         .status(http::StatusCode::ACCEPTED)
-        .body(Body::empty())
+        .body(Full::from(Bytes::new()))
         .map_err(HttpError::Http)
 }
 
@@ -236,7 +235,7 @@ fn has_fast_fail(envelope: &Envelope) -> bool {
         .unwrap_or(false)
 }
 
-type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
+type Writer = SplitSink<WebSocketStream<TokioIo<Upgraded>>, Message>;
 
 pub(crate) struct ConnectionWriter {
     peer: SessionID,
