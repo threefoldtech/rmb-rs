@@ -9,6 +9,7 @@ use bb8_redis::{
     RedisConnectionManager,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use bincode::{serialize, deserialize};
 
 //
 // how_to_init
@@ -48,7 +49,7 @@ where
 {
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
+        let obj = serialize(&obj).context("unable to serialize twin object for redis")?;
         let added: i64 = cmd("HSET")
             .arg(&self.prefix)
             .arg(key.to_string())
@@ -72,7 +73,7 @@ where
 
         match ret {
             Some(val) => {
-                let ret: T = serde_json::from_slice(&val)
+                let ret: T = deserialize(&val)
                     .context("unable to deserialize redis value to twin object")?;
 
                 #[cfg(feature = "tracker")]

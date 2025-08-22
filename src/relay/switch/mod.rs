@@ -319,18 +319,25 @@ async fn send(
     msg: &[u8],
 ) -> Result<MessageID> {
     let mut con = pool.get().await?;
-    let msg_id: MessageID = cmd("XADD")
+
+    // Build XADD command
+    let mut xadd = cmd("XADD");
+    xadd
         .arg(stream_id)
         .arg("MAXLEN")
         .arg("~")
         .arg(QUEUE_MAXLEN)
         .arg("*")
         .arg("_")
-        .arg(msg.as_ref())
-        .query_async(&mut *con)
-        .await?;
+        .arg(msg.as_ref());
 
-    let _: () = cmd("EXPIRE")
+    // Pipeline XADD + EXPIRE in a single round-trip (atomic)
+    let mut pipe = bb8_redis::redis::pipe();
+    pipe.atomic();
+
+    let (msg_id, _): (MessageID, ()) = pipe
+        .add_command(xadd)
+        .cmd("EXPIRE")
         .arg(stream_id)
         .arg(QUEUE_EXPIRE)
         .query_async(&mut *con)
@@ -403,39 +410,55 @@ mod test {
 
         let (tx, mut receiver) = mpsc::unbounded_channel();
 
+        // Unique suffix per test run to isolate Redis streams between runs
+        let unique_suffix = format!("test-{}", std::process::id());
+
+        // Keep a list of sessions to unregister at the end
+        let mut sessions: Vec<SessionID> = Vec::new();
+
         for id in 1..=100 {
-            let session_id = SessionID::new(id.into(), None);
+            let session_id = SessionID::new(id.into(), Some(unique_suffix.clone()));
             let handler = MessageSender::new(session_id.clone(), tx.clone());
 
             switch
-                .register(session_id, CancellationToken::new(), handler)
+                .register(session_id.clone(), CancellationToken::new(), handler)
                 .await
-                .expect("session registered")
+                .expect("session registered");
+
+            sessions.push(session_id);
         }
 
         drop(tx);
 
         for id in 1..=100 {
-            let session_id = SessionID::new(id.into(), None);
+            let session_id = SessionID::new(id.into(), Some(unique_suffix.clone()));
             for _ in 0..10 {
                 switch
                     .send(&session_id, format!("Hello {id}"))
                     .await
                     .expect("can send");
             }
-
-            // un registering the client will cause it's handler to drop and eventually
-            // drop all transmitter ends. Effectively terminating the received channel
-            switch.unregister(session_id).await;
         }
 
         let expected_count = 100 * 10;
 
         let mut count = 0;
-        while let Some((session_id, msg_id, _msg)) = receiver.recv().await {
-            // expecting a 100 message
-            switch.ack(&session_id, &[msg_id]).await.expect("ack");
-            count += 1;
+        let total = expected_count;
+        use tokio::time::{timeout, Duration};
+        while count < total {
+            match timeout(Duration::from_secs(10), receiver.recv()).await {
+                Ok(Some((session_id, msg_id, _msg))) => {
+                    switch.ack(&session_id, &[msg_id]).await.expect("ack");
+                    count += 1;
+                }
+                Ok(None) => break, // channel closed unexpectedly
+                Err(_) => break,   // timeout
+            }
+        }
+
+        // Now unregister all sessions to clean up
+        for s in sessions {
+            switch.unregister(s).await;
         }
 
         assert_eq!(count, expected_count);

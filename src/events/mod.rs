@@ -1,12 +1,13 @@
-use std::{collections::LinkedList, time::Duration};
+use std::{collections::VecDeque, time::Duration};
 
 use crate::{cache::Cache, tfchain::tfchain, twin::Twin};
 use anyhow::Result;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use lazy_static::lazy_static;
 use log;
 use prometheus::{IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use subxt::{blocks::Block as SubxtBlock, config::Header, OnlineClient, PolkadotConfig};
+
 
 lazy_static! {
     static ref EVENTS_RECONNECTING: IntGauge = IntGauge::new(
@@ -74,7 +75,7 @@ impl EventListenerOptions {
     where
         C: Cache<Twin> + Clone,
     {
-        let mut urls = LinkedList::from_iter(substrate_urls);
+        let mut urls: VecDeque<String> = substrate_urls.into();
         let api = Listener::<C>::connect(&mut urls).await?;
 
         // flush cache on startup to make sure we start with a clean state
@@ -114,7 +115,7 @@ where
 {
     cache: C,
     api: OnlineClient<PolkadotConfig>,
-    substrate_urls: LinkedList<String>,
+    substrate_urls: VecDeque<String>,
     // In-memory catch-up state
     last_processed: Option<u64>,
     catchup_threshold: u64,
@@ -131,7 +132,7 @@ where
             .await
     }
 
-    async fn connect(urls: &mut LinkedList<String>) -> Result<OnlineClient<PolkadotConfig>> {
+    async fn connect(urls: &mut VecDeque<String>) -> Result<OnlineClient<PolkadotConfig>> {
         let trials = urls.len() * 2;
         for _ in 0..trials {
             let url = match urls.front() {
@@ -158,59 +159,82 @@ where
         anyhow::bail!("failed to connect to substrate using the provided urls")
     }
 
-    /// reconnects to the chain and flushes the cache ONLY on success.
-    async fn reconnect(&mut self) -> Result<()> {
-        self.api = Self::connect(&mut self.substrate_urls).await?;
-        // Determine current head number
+/// reconnects to the chain and ensures it's fully caught up.
+async fn reconnect(&mut self) -> Result<()> {
+    self.api = Self::connect(&mut self.substrate_urls).await?;
+
+    // This loop ensures we catch up to the absolute latest block,
+    // even if new blocks are produced during the sync process.
+    loop {
         let head_block = self.api.blocks().at_latest().await?;
         let head_num: u64 = head_block.header().number().into();
-        match self.last_processed {
+        
+        let last = match self.last_processed {
             None => {
-                // No prior state: set to head and continue live without flush
+                // No prior state: set to head and we are done.
                 self.last_processed = Some(head_num);
-                Ok(())
+                return Ok(());
             }
-            Some(last) => {
-                if head_num > last {
-                    let gap = head_num - last;
-                    if gap <= self.catchup_threshold {
-                        log::info!(
-                            "catching up {} blocks ({} -> {}) without flushing cache",
-                            gap,
-                            last,
-                            head_num
-                        );
-                        // Sequential catch-up; yield periodically
-                        let mut count = 0u64;
-                        for n in (last + 1)..=head_num {
-                            if let Some(hash) = self.api.rpc().block_hash(Some(n.into())).await? {
-                                let block = self.api.blocks().at(hash).await?;
-                                self.process_block(block).await?;
-                            }
-                            count += 1;
-                            if count % 50 == 0 {
-                                tokio::task::yield_now().await;
-                            }
-                        }
-                        Ok(())
-                    } else {
-                        log::warn!(
-                            "gap {} exceeds threshold {}; flushing cache and jumping to head {}",
-                            gap,
-                            self.catchup_threshold,
-                            head_num
-                        );
-                        self.cache.flush().await?;
-                        self.last_processed = Some(head_num);
-                        Ok(())
-                    }
-                } else {
-                    // Nothing to catch up
-                    Ok(())
+            Some(last) => last,
+        };
+
+        if head_num <= last {
+            // We are fully caught up, exit the loop.
+            log::info!("successfully caught up to block {}", last);
+            return Ok(());
+        }
+        
+        // --- CATCH-UP LOGIC ---
+        let gap = head_num - last;
+        if gap > self.catchup_threshold {
+            log::warn!(
+                "gap {} exceeds threshold {}; flushing cache and jumping to head {}",
+                gap,
+                self.catchup_threshold,
+                head_num
+            );
+            self.cache.flush().await?;
+            self.last_processed = Some(head_num);
+            // After a flush, we consider ourselves caught up to the new head.
+            return Ok(());
+        }
+        
+        log::info!("catching up {} blocks ({} -> {})", gap, last, head_num);
+
+        // --- BATCH PROCESSING LOGIC ---
+        const BATCH_SIZE: usize = 20; // Process 20 blocks in parallel
+        let block_numbers_to_process = (last + 1)..=head_num;
+
+        // Clone API to avoid holding &mut self across awaited tasks
+        let api = self.api.clone();
+        let mut block_stream = stream::iter(block_numbers_to_process)
+            .map(move |n| {
+                let api = api.clone();
+                async move {
+                    let hash = api.rpc().block_hash(Some(n.into())).await?;
+                    let block_opt = match hash {
+                        Some(h) => Some(api.blocks().at(h).await?),
+                        None => None,
+                    };
+                    anyhow::Result::<Option<SubxtBlock<PolkadotConfig, OnlineClient<PolkadotConfig>>>>::Ok(block_opt)
+                }
+            })
+            .buffered(BATCH_SIZE);
+
+        while let Some(result) = block_stream.next().await {
+            match result {
+                Ok(Some(block)) => self.process_block(block).await?,
+                Ok(None) => log::warn!("Could not find block during catch-up"),
+                Err(e) => {
+                    log::warn!("catch-up fetch error; re-establishing and retrying: {}", e);
+                    // Recursively attempt to reconnect and retry catch-up, avoiding outer backoff.
+                    return Err(e.into());
                 }
             }
         }
+        // After processing the batch, the loop will restart to check the head again.
     }
+}
 
     pub async fn listen(&mut self) -> Result<()> {
         // Exponential backoff with jitter after reconnect failures; reset on successful reconnect.
@@ -271,7 +295,7 @@ where
         let header = block.header();
         let num_i64: i64 = header.number.into();
         EVENTS_LAST_BLOCK_NUM.set(num_i64);
-        log::trace!("processing block number: {}", num_i64);
+        log::debug!("processing block number: {}", num_i64);
 
         let events = block.events().await?;
         for evt in events.iter() {

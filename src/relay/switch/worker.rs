@@ -3,6 +3,8 @@ use std::{
     ops::DerefMut,
     time::{Duration, Instant},
 };
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use bb8_redis::{
     bb8::Pool,
@@ -80,6 +82,20 @@ impl SessionStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ReadableSetSig {
+    len: usize,
+    fp1: u64,
+    fp2: u64,
+}
+
+#[inline]
+fn hash64<T: Hash>(v: &T) -> u64 {
+    let mut h = DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
 #[derive(derive_more::Deref, derive_more::DerefMut)]
 struct Session<S>
 where
@@ -140,6 +156,12 @@ pub struct Worker<H: ConnectionSender> {
     worker_size: usize,
     queue: Queue<WorkerJob<H>>,
     sessions: HashMap<SessionID, Session<H>>,
+    // Cached, sorted list of readable session IDs used to build the base XREAD command
+    cached_stream_ids: Vec<SessionID>,
+    // Cached base XREAD command up to and including STREAMS <ids...>
+    cached_base_cmd: Option<Cmd>,
+    // Signature of the last readable set to avoid unnecessary sort/alloc when unchanged
+    cached_readable_sig: ReadableSetSig,
 }
 
 impl<H> Worker<H>
@@ -153,6 +175,9 @@ where
             queue: switch.queue.clone(),
             pool: switch.pool.clone(),
             sessions: HashMap::default(),
+            cached_stream_ids: Vec::new(),
+            cached_base_cmd: None,
+            cached_readable_sig: ReadableSetSig::default(),
         }
     }
 
@@ -167,20 +192,6 @@ where
         CON_PER_WORKER.with_label_values(&[&worker_name]).set(0);
 
         'main: loop {
-            let mut con = match self.pool.get().await {
-                Ok(con) => con,
-                Err(err) => {
-                    log::error!(
-                        "[{}] error while getting redis connection: {}",
-                        self.worker_id,
-                        err
-                    );
-                    // this delay in case of redis connection error that we
-                    // wait before retrying
-                    sleep(RETRY_DELAY).await;
-                    continue;
-                }
-            };
 
             // drop any connection that was cancelled or was in back pressure state for too long
             // while counting the eviction reason, using a single-pass retain
@@ -228,10 +239,32 @@ where
 
             // back-pressure gauge removed
 
-            let query: OptionFuture<_> = self
-                .query_command()
-                .map(|cmd| async move { cmd.query_async::<Output>(con.deref_mut()).await }.fuse())
-                .into();
+            // Build the query command first (requires &mut self), then acquire a Redis connection
+            // only if we actually have something to read. This avoids borrowing conflicts on `self`.
+            let cmd_opt = self.query_command();
+            let query: OptionFuture<_> = match cmd_opt {
+                Some(cmd) => {
+                    let mut con = match self.pool.get().await {
+                        Ok(con) => con,
+                        Err(err) => {
+                            log::error!(
+                                "[{}] error while getting redis connection: {}",
+                                self.worker_id,
+                                err
+                            );
+                            // this delay in case of redis connection error that we
+                            // wait before retrying
+                            sleep(RETRY_DELAY).await;
+                            continue;
+                        }
+                    };
+                    OptionFuture::from(Some(async move {
+                        cmd.query_async::<Output>(con.deref_mut()).await
+                    }
+                    .fuse()))
+                }
+                None => OptionFuture::from(None),
+            };
             let mut query = std::pin::pin!(query);
 
             // NOTE:
@@ -325,42 +358,61 @@ where
         }
     }
 
-    fn query_command(&self) -> Option<Cmd> {
+    fn query_command(&mut self) -> Option<Cmd> {
         if self.sessions.is_empty() {
             return None;
         }
 
-        // build command
-        let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| {
-                // filter out sessions that cannot send
-                // messages
-                s.can_send()
-            })
-            .unzip();
+        // Compute signature of readable set without allocating/sorting
+        let mut sig = ReadableSetSig::default();
+        for (id, s) in &self.sessions {
+            if s.can_send() {
+                sig.len += 1;
+                let h = hash64(id);
+                sig.fp1 ^= h;
+                sig.fp2 = sig.fp2.wrapping_add(h.rotate_left(13));
+            }
+        }
 
-        if stream_ids.is_empty() {
+        if sig.len == 0 {
             return None;
         }
 
-        //TODO: may be not rebuild the command each time when the list of current users don't change.
-        let mut cmd = cmd("XREAD");
-        let mut c = cmd
-            .arg("COUNT")
-            .arg(READ_COUNT)
-            .arg("BLOCK")
-            .arg(READ_BLOCK_MS)
-            .arg("STREAMS");
+        // Rebuild cached base only when the readable set actually changed
+        if sig != self.cached_readable_sig {
+            // Collect and sort only on change for deterministic order
+            let mut readable_ids: Vec<SessionID> = self
+                .sessions
+                .iter()
+                .filter_map(|(id, s)| if s.can_send() { Some(id.clone()) } else { None })
+                .collect();
 
-        for id in stream_ids {
-            // convert streamID to full stream name (say stream:<id>)
-            c = c.arg(id);
+            readable_ids.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+
+            let mut base = cmd("XREAD");
+            let mut b = base
+                .arg("COUNT")
+                .arg(READ_COUNT)
+                .arg("BLOCK")
+                .arg(READ_BLOCK_MS)
+                .arg("STREAMS");
+
+            for id in &readable_ids {
+                b = b.arg(id);
+            }
+
+            self.cached_stream_ids = readable_ids;
+            self.cached_base_cmd = Some(base);
+            self.cached_readable_sig = sig;
         }
 
-        for session in sessions {
-            c = c.arg(session.last_message_id);
+        // Clone base and append last IDs in the same order as cached_stream_ids
+        let mut cmd = self.cached_base_cmd.as_ref().cloned().unwrap();
+        for id in &self.cached_stream_ids {
+            if let Some(session) = self.sessions.get(id) {
+                // `arg` returns &mut Cmd; just keep building without reassignment
+                cmd.arg(session.last_message_id);
+            }
         }
 
         Some(cmd)

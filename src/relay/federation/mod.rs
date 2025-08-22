@@ -449,6 +449,24 @@ mod test {
         let reg = prometheus::Registry::new();
         let pool = redis::pool("redis://localhost:6379", 10).await.unwrap();
         let sink = Sink::new(pool.clone());
+
+        // Cleanup: ensure no leftover stream/group from previous runs
+        {
+            let mut con = pool.get().await.unwrap();
+            // Attempt to destroy the consumer group; ignore errors if it doesn't exist
+            let _ : Result<String, _> = cmd("XGROUP")
+                .arg("DESTROY")
+                .arg(FEDERATION_STREAM)
+                .arg(FEDERATION_GROUP)
+                .query_async(&mut *con)
+                .await;
+            // Delete the stream key; ignore errors if it doesn't exist
+            let _ : Result<i32, _> = cmd("DEL")
+                .arg(FEDERATION_STREAM)
+                .query_async(&mut *con)
+                .await;
+        }
+
         let mem: MemCache<Twin> = MemCache::default();
         let account_id: AccountId32 = "5EyHmbLydxX7hXTX7gQqftCJr2e57Z3VNtgd6uxJzZsAjcPb"
             .parse()
