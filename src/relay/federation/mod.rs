@@ -9,6 +9,7 @@ use bb8_redis::{
     bb8::{Pool, RunError},
     RedisConnectionManager,
 };
+use futures_util::StreamExt;
 use prometheus::{IntCounterVec, Opts, Registry};
 use protobuf::Message;
 use redis::streams::StreamReadReply;
@@ -34,6 +35,8 @@ const CLAIM_MIN_IDLE_MS: i64 = 3_000; // 3 seconds
 const XPENDING_COUNT: i64 = 200;
 const XREAD_COUNT: i64 = 100;
 const XREAD_BLOCK_MS: usize = 500;
+// Limit per-consumer parallelism; keep conservative by default
+const PARALLEL_PER_CONSUMER: usize = 4;
 
 async fn handle_xgroup_errors<C>(con: &mut C, consumer_id: &str, s: &str) -> bool
 where
@@ -307,7 +310,7 @@ where
 
 async fn per_consumer_loop<D: TwinDB>(
     pool: Pool<RedisConnectionManager>,
-    mut worker: StreamWorker<D>,
+    worker: StreamWorker<D>,
     consumer_id: String,
 ) {
     use tokio::time::{Duration, Instant};
@@ -338,9 +341,18 @@ async fn per_consumer_loop<D: TwinDB>(
                                 .arg(to_claim.as_slice());
                             match c.query_async::<Value>(&mut *con).await {
                                 Ok(v) => {
-                                    for (entry_id, msg) in extract_claimed_msgs(&v) {
-                                        worker.run(StreamJob { entry_id, msg }).await;
-                                    }
+                                    // Process claimed messages with bounded concurrency
+                                    let claimed: Vec<(String, Vec<u8>)> = extract_claimed_msgs(&v);
+                                    let parallel = PARALLEL_PER_CONSUMER;
+                                    let stream = futures::stream::iter(claimed.into_iter().map(
+                                        |(entry_id, msg)| {
+                                            let mut w = worker.clone();
+                                            async move { w.run(StreamJob { entry_id, msg }).await }
+                                        },
+                                    ))
+                                    .buffer_unordered(parallel);
+                                    futures::pin_mut!(stream);
+                                    while (stream.next().await).is_some() {}
                                 }
                                 Err(e) => {
                                     let s = e.to_string();
@@ -389,27 +401,27 @@ async fn per_consumer_loop<D: TwinDB>(
                 if reply.keys.is_empty() {
                     continue;
                 }
+                // Build jobs then process with bounded concurrency
+                let mut jobs = Vec::new();
                 for key in &reply.keys {
                     for entry in &key.ids {
-                        let mut msg_opt: Option<Vec<u8>> = None;
-                        for (k, v) in entry.map.iter() {
-                            if k == MSG_FIELD {
-                                if let Value::BulkString(data) = v {
-                                    msg_opt = Some(data.clone());
-                                }
-                                break;
-                            }
-                        }
-                        if let Some(msg) = msg_opt {
-                            worker
-                                .run(StreamJob {
-                                    entry_id: entry.id.clone(),
-                                    msg,
-                                })
-                                .await;
+                        // Extract msg field
+                        if let Some(Value::BulkString(data)) = entry.map.get(MSG_FIELD) {
+                            jobs.push(StreamJob {
+                                entry_id: entry.id.clone(),
+                                msg: data.clone(),
+                            });
                         }
                     }
                 }
+                let parallel = PARALLEL_PER_CONSUMER;
+                let stream = futures::stream::iter(jobs.into_iter().map(|job| {
+                    let mut w = worker.clone();
+                    async move { w.run(job).await }
+                }))
+                .buffer_unordered(parallel);
+                futures::pin_mut!(stream);
+                while (stream.next().await).is_some() {}
             }
             Err(err) => {
                 let s = err.to_string();
@@ -454,14 +466,14 @@ mod test {
         {
             let mut con = pool.get().await.unwrap();
             // Attempt to destroy the consumer group; ignore errors if it doesn't exist
-            let _ : Result<String, _> = cmd("XGROUP")
+            let _: Result<String, _> = cmd("XGROUP")
                 .arg("DESTROY")
                 .arg(FEDERATION_STREAM)
                 .arg(FEDERATION_GROUP)
                 .query_async(&mut *con)
                 .await;
             // Delete the stream key; ignore errors if it doesn't exist
-            let _ : Result<i32, _> = cmd("DEL")
+            let _: Result<i32, _> = cmd("DEL")
                 .arg(FEDERATION_STREAM)
                 .query_async(&mut *con)
                 .await;

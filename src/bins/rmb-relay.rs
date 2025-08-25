@@ -127,12 +127,20 @@ async fn app(args: Args) -> Result<JoinHandle<()>> {
     // push to the queue that depends on how fast messages are sent but we can assume an extra 10%
     // of number of workers is needed
 
-    // a wiggle is 10% of number of workers with min of 1
-    let wiggle = std::cmp::max((args.workers * 10) / 100, 1);
-    let pool_size = args.workers + wiggle;
+    // a wiggle is 10% of number of workers with min of 8
+    let wiggle = std::cmp::max((args.workers * 10) / 100, 8);
+    // federation workers scale with wiggle (existing behavior)
     let fed_size = wiggle * 2;
+    // blocking connections are from switch workers and federation consumers
+    let blocking = args.workers + fed_size;
+    // explicit headroom for ops (XADD/XACK/etc.) to avoid starvation
+    let ops_headroom = std::cmp::max(blocking / 4, 16);
+    let pool_size = blocking + ops_headroom;
 
-    log::info!("redis pool size: {}", pool_size);
+    log::info!(
+        "redis pool size: {} (blocking: {}, ops_headroom: {})",
+        pool_size, blocking, ops_headroom
+    );
     log::info!("switch workers: {}", args.workers);
     log::info!("federation workers: {}", fed_size);
     log::info!(
