@@ -315,7 +315,7 @@ where
         let header = block.header();
         let num_i64: i64 = header.number.into();
         EVENTS_LAST_BLOCK_NUM.set(num_i64);
-        log::debug!("processing block number: {}", num_i64);
+        log::trace!("processing block number: {}", num_i64);
 
         let events = block.events().await?;
         for evt in events.iter() {
