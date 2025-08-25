@@ -13,6 +13,20 @@ pub enum ParseError {
     #[error("invalid value: {0}")]
     InvalidValue(#[from] ParseIntError),
 }
+
+impl PartialOrd for SessionID {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SessionID {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let a = (u32::from(self.0), self.1.as_deref());
+        let b = (u32::from(other.0), other.1.as_deref());
+        a.cmp(&b)
+    }
+}
 /// SessionID is a type alias for a user id. can be replaced later
 /// but for now we using numeric ids
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]

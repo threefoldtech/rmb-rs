@@ -1,10 +1,10 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::{
     collections::HashMap,
     ops::DerefMut,
     time::{Duration, Instant},
 };
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 use bb8_redis::{
     bb8::Pool,
@@ -192,7 +192,6 @@ where
         CON_PER_WORKER.with_label_values(&[&worker_name]).set(0);
 
         'main: loop {
-
             // drop any connection that was cancelled or was in back pressure state for too long
             // while counting the eviction reason, using a single-pass retain
             let now = Instant::now();
@@ -258,10 +257,9 @@ where
                             continue;
                         }
                     };
-                    OptionFuture::from(Some(async move {
-                        cmd.query_async::<Output>(con.deref_mut()).await
-                    }
-                    .fuse()))
+                    OptionFuture::from(Some(
+                        async move { cmd.query_async::<Output>(con.deref_mut()).await }.fuse(),
+                    ))
                 }
                 None => OptionFuture::from(None),
             };
@@ -387,7 +385,9 @@ where
                 .filter_map(|(id, s)| if s.can_send() { Some(id.clone()) } else { None })
                 .collect();
 
-            readable_ids.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+            // Allocation-free in-place sort based on (TwinID, optional connection) via Ord
+            // Unstable is safe here: elements are unique and comparator is a total order.
+            readable_ids.sort_unstable();
 
             let mut base = cmd("XREAD");
             let mut b = base
