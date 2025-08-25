@@ -2,16 +2,16 @@ use crate::token::{self, Claims};
 use crate::twin::TwinDB;
 use crate::types::{Envelope, Pong};
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use futures::stream::SplitSink;
 use futures::Future;
 use futures::{sink::SinkExt, stream::StreamExt};
 use http::Method;
+use http::{Request, Response};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::upgrade::Upgraded;
-use http::{Request, Response};
-use hyper::body::Incoming;
-use http_body_util::{BodyExt, Full};
-use bytes::Bytes;
 use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
 use hyper_util::rt::TokioIo;
@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -277,6 +278,12 @@ impl ConnectionWriter {
 
     async fn run(mut self, mut rx: Receiver<(MessageID, Vec<u8>)>) {
         let drop_guard = self.cancellation.clone().drop_guard();
+        // Ack batching params
+        const ACK_BATCH_SIZE: usize = 128;
+        const ACK_FLUSH_MS: u64 = 10;
+
+        let mut pending_acks: Vec<MessageID> = Vec::with_capacity(ACK_BATCH_SIZE);
+        let mut last_flush = Instant::now();
 
         while let Some(Some((id, data))) = self.cancellation.run_until_cancelled(rx.recv()).await {
             log::trace!("relaying message {} to peer {}", id, self.peer);
@@ -285,8 +292,8 @@ impl ConnectionWriter {
                 .run_until_cancelled(self.writer.send(Message::Binary(data)))
                 .await
             {
-                // cancelled
-                None => return,
+                // cancelled; break so the loop exits and the final ACK flush runs.
+                None => break,
                 // failed to write
                 Some(Err(err)) => {
                     _ = self.writer.close().await;
@@ -297,11 +304,28 @@ impl ConnectionWriter {
                 Some(_) => {}
             }
 
-            // todo: a possible bottle neck. If messages can't be acked we probably
-            // will get stuck and not process new messages.
-            // a possible improvement is to ack multiple messages in one go instead
-            // of acking one by one
-            _ = self.switch.ack(&self.peer, &[id]).await;
+            // Batch ACKs to reduce Redis round-trips
+            pending_acks.push(id);
+            let should_flush = pending_acks.len() >= ACK_BATCH_SIZE
+                || last_flush.elapsed() >= Duration::from_millis(ACK_FLUSH_MS);
+            if should_flush {
+                if let Err(e) = self.switch.ack(&self.peer, &pending_acks).await {
+                    log::debug!("ack batch failed for {} ids: {}", pending_acks.len(), e);
+                }
+                pending_acks.clear();
+                last_flush = Instant::now();
+            }
+        }
+
+        // Flush any remaining acks on exit
+        if !pending_acks.is_empty() {
+            if let Err(e) = self.switch.ack(&self.peer, &pending_acks).await {
+                log::debug!(
+                    "final ack batch failed for {} ids: {}",
+                    pending_acks.len(),
+                    e
+                );
+            }
         }
 
         drop(drop_guard);
