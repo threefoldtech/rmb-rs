@@ -139,7 +139,9 @@ async fn app(args: Args) -> Result<JoinHandle<()>> {
 
     log::info!(
         "redis pool size: {} (blocking: {}, ops_headroom: {})",
-        pool_size, blocking, ops_headroom
+        pool_size,
+        blocking,
+        ops_headroom
     );
     log::info!("switch workers: {}", args.workers);
     log::info!("federation workers: {}", fed_size);
