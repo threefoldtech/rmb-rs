@@ -43,7 +43,7 @@ where
         // Configure HTTP client with production-friendly defaults
         let client = Client::builder()
             // Avoid your application hanging indefinitely
-            .connect_timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(2))
             // Overall per-request ceiling
             .timeout(Duration::from_secs(12))
             // This keeps a connection in the connection pool for up to 5 minutes
@@ -78,7 +78,14 @@ where
                     format!("https://{}/", domain.as_ref())
                 };
                 log::debug!("federation to: {}", url);
-                let resp = match self.client.post(&url).body(msg.clone()).send().await {
+                let resp = match self
+                    .client
+                    .post(&url)
+                    .timeout(Duration::from_secs(3))
+                    .body(msg.clone())
+                    .send()
+                    .await
+                {
                     Ok(resp) => resp,
                     Err(err) => {
                         log::warn!(

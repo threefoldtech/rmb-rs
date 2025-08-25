@@ -322,8 +322,7 @@ async fn send(
 
     // Build XADD command
     let mut xadd = cmd("XADD");
-    xadd
-        .arg(stream_id)
+    xadd.arg(stream_id)
         .arg("MAXLEN")
         .arg("~")
         .arg(QUEUE_MAXLEN)

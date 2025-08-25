@@ -8,7 +8,6 @@ use log;
 use prometheus::{IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use subxt::{blocks::Block as SubxtBlock, config::Header, OnlineClient, PolkadotConfig};
 
-
 lazy_static! {
     static ref EVENTS_RECONNECTING: IntGauge = IntGauge::new(
         "events_listener_reconnecting",
@@ -140,13 +139,29 @@ where
                 None => anyhow::bail!("substrate urls list is empty"),
             };
 
-            match OnlineClient::<PolkadotConfig>::from_url(url).await {
-                Ok(client) => return Ok(client),
-                Err(err) => {
+            // Protect against hangs in DNS/TLS/WebSocket setup
+            let attempt_timeout = Duration::from_secs(12);
+            match tokio::time::timeout(
+                attempt_timeout,
+                // JSON-RPC requests governed by jsonrpsee’s client request timeout (default 60s unless you configure it).
+                // Connection timing is bounded separately by sonrpsee_client_transport::ws::WsTransportClientBuilder::connection_timeout (default 10s unless you configure it).
+                OnlineClient::<PolkadotConfig>::from_url(url),
+            )
+            .await
+            {
+                Ok(Ok(client)) => return Ok(client),
+                Ok(Err(err)) => {
                     log::error!(
                         "failed to create substrate client with url \"{}\": {}",
                         url,
                         err
+                    );
+                }
+                Err(_) => {
+                    log::error!(
+                        "connect to \"{}\" timed out after {:?}",
+                        url,
+                        attempt_timeout
                     );
                 }
             }
@@ -159,108 +174,113 @@ where
         anyhow::bail!("failed to connect to substrate using the provided urls")
     }
 
-/// reconnects to the chain and ensures it's fully caught up.
-async fn reconnect(&mut self) -> Result<()> {
-    self.api = Self::connect(&mut self.substrate_urls).await?;
+    /// reconnects to the chain and ensures it's fully caught up.
+    async fn reconnect(&mut self) -> Result<()> {
+        self.api = Self::connect(&mut self.substrate_urls).await?;
 
-    // This loop ensures we catch up to the absolute latest block,
-    // even if new blocks are produced during the sync process.
-    loop {
-        let head_block = self.api.blocks().at_latest().await?;
-        let head_num: u64 = head_block.header().number().into();
-        
-        let last = match self.last_processed {
-            None => {
-                // No prior state: set to head and we are done.
-                self.last_processed = Some(head_num);
+        // This loop ensures we catch up to the absolute latest block,
+        // even if new blocks are produced during the sync process.
+        loop {
+            let head_block = self.api.blocks().at_latest().await?;
+            let head_num: u64 = head_block.header().number().into();
+
+            let last = match self.last_processed {
+                None => {
+                    // No prior state: set to head and we are done.
+                    self.last_processed = Some(head_num);
+                    return Ok(());
+                }
+                Some(last) => last,
+            };
+
+            if head_num <= last {
+                // We are fully caught up, exit the loop.
+                log::info!("successfully caught up to block {}", last);
                 return Ok(());
             }
-            Some(last) => last,
-        };
 
-        if head_num <= last {
-            // We are fully caught up, exit the loop.
-            log::info!("successfully caught up to block {}", last);
-            return Ok(());
-        }
-        
-        // --- CATCH-UP LOGIC ---
-        let gap = head_num - last;
-        if gap > self.catchup_threshold {
-            log::warn!(
-                "gap {} exceeds threshold {}; flushing cache and jumping to head {}",
-                gap,
-                self.catchup_threshold,
-                head_num
-            );
-            self.cache.flush().await?;
-            self.last_processed = Some(head_num);
-            // After a flush, we consider ourselves caught up to the new head.
-            return Ok(());
-        }
-        
-        log::info!("catching up {} blocks ({} -> {})", gap, last, head_num);
+            // --- CATCH-UP LOGIC ---
+            let gap = head_num - last;
+            if gap > self.catchup_threshold {
+                log::warn!(
+                    "gap {} exceeds threshold {}; flushing cache and jumping to head {}",
+                    gap,
+                    self.catchup_threshold,
+                    head_num
+                );
+                self.cache.flush().await?;
+                self.last_processed = Some(head_num);
+                // After a flush, we consider ourselves caught up to the new head.
+                return Ok(());
+            }
 
-        // --- BATCH PROCESSING LOGIC ---
-        const BATCH_SIZE: usize = 20; // Process 20 blocks in parallel
-        let block_numbers_to_process = (last + 1)..=head_num;
+            log::info!("catching up {} blocks ({} -> {})", gap, last, head_num);
 
-        // Clone API to avoid holding &mut self across awaited tasks
-        let api = self.api.clone();
-        let mut block_stream = stream::iter(block_numbers_to_process)
-            .map(move |n| {
-                let api = api.clone();
-                async move {
-                    let hash = api.rpc().block_hash(Some(n.into())).await?;
-                    let block_opt = match hash {
-                        Some(h) => Some(api.blocks().at(h).await?),
-                        None => None,
-                    };
-                    anyhow::Result::<Option<SubxtBlock<PolkadotConfig, OnlineClient<PolkadotConfig>>>>::Ok(block_opt)
-                }
-            })
-            .buffered(BATCH_SIZE);
+            // --- BATCH PROCESSING LOGIC ---
+            const BATCH_SIZE: usize = 20; // Process 20 blocks in parallel
+            let block_numbers_to_process = (last + 1)..=head_num;
 
-        while let Some(result) = block_stream.next().await {
-            match result {
-                Ok(Some(block)) => self.process_block(block).await?,
-                Ok(None) => log::warn!("Could not find block during catch-up"),
-                Err(e) => {
-                    log::warn!("catch-up fetch error; re-establishing and retrying: {}", e);
-                    // Recursively attempt to reconnect and retry catch-up, avoiding outer backoff.
-                    return Err(e.into());
+            // Clone API to avoid holding &mut self across awaited tasks
+            let api = self.api.clone();
+            let mut block_stream = stream::iter(block_numbers_to_process)
+                .map(move |n| {
+                    let api = api.clone();
+                    async move {
+                        let hash = api.rpc().block_hash(Some(n.into())).await?;
+                        let block_opt = match hash {
+                            Some(h) => Some(api.blocks().at(h).await?),
+                            None => None,
+                        };
+                        anyhow::Result::<
+                            Option<SubxtBlock<PolkadotConfig, OnlineClient<PolkadotConfig>>>,
+                        >::Ok(block_opt)
+                    }
+                })
+                .buffered(BATCH_SIZE);
+
+            while let Some(result) = block_stream.next().await {
+                match result {
+                    Ok(Some(block)) => self.process_block(block).await?,
+                    Ok(None) => log::warn!("Could not find block during catch-up"),
+                    Err(e) => {
+                        log::warn!("catch-up fetch error; re-establishing and retrying: {}", e);
+                        // Recursively attempt to reconnect and retry catch-up, avoiding outer backoff.
+                        return Err(e);
+                    }
                 }
             }
+            // After processing the batch, the loop will restart to check the head again.
         }
-        // After processing the batch, the loop will restart to check the head again.
     }
-}
 
     pub async fn listen(&mut self) -> Result<()> {
         // Exponential backoff with jitter after reconnect failures; reset on successful reconnect.
         let mut backoff = Duration::from_secs(1);
-        let max_backoff = Duration::from_secs(10);
+        let max_backoff = Duration::from_secs(6);
         log::info!("started chain events listener");
         loop {
             if let Err(err) = self.handle_events_inner().await {
                 log::warn!("event handler failed: {}", err);
                 EVENTS_RECONNECTING.set(1);
-                match self.reconnect().await {
-                    Ok(_) => {
-                        log::info!("event handler successfully reconnect");
-                        // Successful reconnect: reset backoff and loop to resume event handling.
-                        backoff = Duration::from_secs(1);
-                        EVENTS_RECONNECT_CYCLES.inc();
-                        EVENTS_RECONNECTING.set(0);
-                    }
-                    Err(reconnect_err) => {
-                        log::error!(
-                            "failed to reconnect after event handler failure: {}",
-                            reconnect_err
-                        );
-                        // Apply capped exponential backoff (no external deps for jitter).
-                        tokio::time::sleep(backoff).await;
-                        backoff = std::cmp::min(backoff.saturating_mul(2), max_backoff);
+                // Keep retrying reconnect until success, with capped exponential backoff
+                loop {
+                    match self.reconnect().await {
+                        Ok(_) => {
+                            log::info!("event handler successfully reconnected");
+                            backoff = Duration::from_secs(1);
+                            EVENTS_RECONNECT_CYCLES.inc();
+                            EVENTS_RECONNECTING.set(0);
+                            break; // exit reconnect loop and resume handling events
+                        }
+                        Err(reconnect_err) => {
+                            log::error!(
+                                "failed to reconnect after event handler failure: {}; retrying in {:?}",
+                                reconnect_err,
+                                backoff
+                            );
+                            tokio::time::sleep(backoff).await;
+                            backoff = std::cmp::min(backoff.saturating_mul(2), max_backoff);
+                        }
                     }
                 }
             }
@@ -268,7 +288,7 @@ async fn reconnect(&mut self) -> Result<()> {
     }
 
     async fn handle_events_inner(&mut self) -> Result<()> {
-        // Subscribe to best head to minimize latency; reorg safety can be layered later if needed.
+        // Subscribe to best head to minimize latency;
         let mut blocks_sub = self.api.blocks().subscribe_best().await?;
         // Detect stalled streams: if no new block arrives within this window, bail to trigger reconnect.
         let stall_timeout = Duration::from_secs(7);

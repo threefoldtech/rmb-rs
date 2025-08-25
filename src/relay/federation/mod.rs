@@ -29,11 +29,11 @@ lazy_static::lazy_static! {
 
 // Constants for readability and maintainability
 const MSG_FIELD: &str = "msg";
-const RETRY_THROTTLE_SECS: u64 = 15;
-const CLAIM_MIN_IDLE_MS: i64 = 30_000; // 30 seconds
-const XPENDING_COUNT: i64 = 100;
-const XREAD_COUNT: i64 = 10;
-const XREAD_BLOCK_MS: usize = 1000;
+const RETRY_THROTTLE_SECS: u64 = 2;
+const CLAIM_MIN_IDLE_MS: i64 = 3_000; // 3 seconds
+const XPENDING_COUNT: i64 = 200;
+const XREAD_COUNT: i64 = 100;
+const XREAD_BLOCK_MS: usize = 500;
 
 async fn handle_xgroup_errors<C>(con: &mut C, consumer_id: &str, s: &str) -> bool
 where

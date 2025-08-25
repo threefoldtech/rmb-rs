@@ -8,8 +8,8 @@ use bb8_redis::{
     redis::cmd,
     RedisConnectionManager,
 };
+use bincode::{deserialize, serialize};
 use serde::{de::DeserializeOwned, Serialize};
-use bincode::{serialize, deserialize};
 
 //
 // how_to_init
