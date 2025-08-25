@@ -20,6 +20,7 @@ bb8-redis = "0.16"
 redis = { version = "0.26", features = ["streams", "aio", "tokio-comp"] }
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
+arc-swap = "1.5"
 hex = { version = "0.4", features = ["alloc"] }
 http = "1"
 log = "0.4"

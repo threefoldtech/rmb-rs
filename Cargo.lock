@@ -4174,6 +4174,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "arc-swap",
  "async-stream",
  "async-trait",
  "base64 0.13.1",
