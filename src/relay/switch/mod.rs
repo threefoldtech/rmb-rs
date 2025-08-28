@@ -198,10 +198,12 @@ where
             sessions: Arc::new(Mutex::new(ActiveSessions::default())),
         };
 
-        let mut user_per_worker = max_users / (workers as usize);
-        if user_per_worker == 0 {
-            user_per_worker = 1;
-        }
+        // Determine per-worker capacity. If workers == 0 (tests may spawn manually), avoid div-by-zero.
+        let user_per_worker = if workers == 0 {
+            1
+        } else {
+            (max_users / workers as usize).max(1)
+        };
 
         opts.registry.register(Box::new(CON_PER_WORKER.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX.clone()))?;

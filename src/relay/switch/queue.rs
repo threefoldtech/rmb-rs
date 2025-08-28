@@ -26,7 +26,8 @@ impl<T> Queue<T> {
     pub async fn push(&self, t: T) {
         let mut v = self.inner.lock().await;
         v.push_front(t);
-        self.notify.notify_one();
+        // Wake all waiters so multiple workers can contend for new jobs
+        self.notify.notify_waiters();
     }
 
     pub async fn pop(&self, count: usize) -> impl IntoIterator<Item = T> {

@@ -227,13 +227,30 @@ async fn federation<D: TwinDB, R: RateLimiter>(
         .map_err(HttpError::Http)
 }
 
+/// Returns true if the envelope requests a fail-fast behavior for federation/local checks.
+///
+/// Canonical tag is "fail-fast" (kebab-case). Matching is token-based (comma/whitespace
+/// separated) and case-sensitive. No legacy aliases are supported.
 #[inline]
 fn has_fast_fail(envelope: &Envelope) -> bool {
-    envelope
-        .tags
-        .as_deref()
-        .map(|t| t.contains("fast-fail"))
-        .unwrap_or(false)
+    const TAG_FAIL_FAST: &str = "fail-fast";
+
+    let tags = match envelope.tags.as_deref() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    // split on commas and whitespace, trim tokens, compare exactly (case-sensitive)
+    for token in tags.split(|c: char| c == ',' || c.is_whitespace()) {
+        let tok = token.trim();
+        if tok.is_empty() {
+            continue;
+        }
+        if tok == TAG_FAIL_FAST {
+            return true;
+        }
+    }
+    false
 }
 
 type Writer = SplitSink<WebSocketStream<TokioIo<Upgraded>>, Message>;

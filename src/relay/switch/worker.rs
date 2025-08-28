@@ -15,7 +15,7 @@ use futures::{
     future::{FusedFuture, OptionFuture},
     FutureExt,
 };
-use tokio::{sync::OwnedSemaphorePermit, time::sleep};
+use tokio::{sync::OwnedSemaphorePermit, task::yield_now, time::sleep};
 use tokio_util::sync::CancellationToken;
 
 use crate::relay::switch::{SendError, CON_PER_WORKER, RELAY_SESSION_EVICTIONS_TOTAL, RETRY_DELAY};
@@ -25,8 +25,8 @@ use super::{
     READ_COUNT,
 };
 
-// block on read max of 5 seconds
-const READ_BLOCK_MS: usize = 5000;
+// block on read max of 2 seconds (was 5000)
+const READ_BLOCK_MS: usize = 2000;
 
 // connection can wait in back pressure status for 60 seconds
 const MAX_BACK_PRESSURE_DURATION: Duration = Duration::from_secs(60);
@@ -330,7 +330,7 @@ where
 
                         continue 'main;
                     }
-                    jobs = self.queue.pop(self.worker_size.saturating_sub(self.sessions.len())) => {
+                    jobs = self.queue.pop(1), if self.sessions.len() < self.worker_size => {
                         let mut count = 0;
                         for job in jobs {
                             self.sessions.insert(job.session_id.clone(), job.into());
@@ -338,6 +338,10 @@ where
                         }
 
                         log::info!("[{}] Accepted {} new clients to handle", self.worker_id, count);
+
+                        // Yield to allow other workers that were notified to acquire the queue lock
+                        // and accept their own registrations, improving fairness under load.
+                        yield_now().await;
 
                         if query.is_terminated() {
                             // no running queries, it's safe to create a new query now

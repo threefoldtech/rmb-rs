@@ -139,7 +139,10 @@ where
                     self.reconnect_singleflight().await?;
                     continue;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    log::warn!("update_twin non-RPC error (not retried): {}", err);
+                    return Err(err.into());
+                }
             }
         }
     }
@@ -188,7 +191,14 @@ where
                                 // retry
                                 continue;
                             }
-                            Err(err) => break Err(Arc::new(err.into())),
+                            Err(err) => {
+                                log::warn!(
+                                    "get_twin non-RPC error for key {} (not retried): {}",
+                                    key,
+                                    err
+                                );
+                                break Err(Arc::new(err.into()));
+                            }
                         }
                     }
                 }
@@ -227,7 +237,10 @@ where
                     self.reconnect_singleflight().await?;
                     continue;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    log::warn!("get_twin_with_account non-RPC error (not retried): {}", err);
+                    return Err(err.into());
+                }
             }
         }
     }
