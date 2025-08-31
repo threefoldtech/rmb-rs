@@ -210,8 +210,8 @@ async fn federation<D: TwinDB, R: RateLimiter>(
 
     let dst: SessionID = (&envelope.destination).into();
 
-    // fast-fail path: if requested and destination is not local, return error immediately
-    if has_fast_fail(&envelope) && !data.switch.is_local(&dst).await {
+    // fail-fast path: if requested and destination is not local, return error immediately
+    if has_fail_fast(&envelope) && !data.switch.is_local(&dst).await {
         // destination session doesn’t exist on this relay
         return Response::builder()
             .status(http::StatusCode::NOT_FOUND)
@@ -232,7 +232,7 @@ async fn federation<D: TwinDB, R: RateLimiter>(
 /// Canonical tag is "fail-fast" (kebab-case). Matching is token-based (comma/whitespace
 /// separated) and case-sensitive. No legacy aliases are supported.
 #[inline]
-fn has_fast_fail(envelope: &Envelope) -> bool {
+pub(crate) fn has_fail_fast(envelope: &Envelope) -> bool {
     const TAG_FAIL_FAST: &str = "fail-fast";
 
     let tags = match envelope.tags.as_deref() {
@@ -452,9 +452,9 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);
         }
-        // fast-fail path: we confirmed that this is not an foreign message, and if it is fast-fail taged and destination session is not connected
+        // fail-fast path: we confirmed that this is not an foreign message, and if it is fail-fast taged and destination session is not connected
         // then the peer must be offline, return error immediately
-        if has_fast_fail(envelope) && !is_local {
+        if has_fail_fast(envelope) && !is_local {
             anyhow::bail!("destination offline");
         }
         // we don't return an error because when we return an error

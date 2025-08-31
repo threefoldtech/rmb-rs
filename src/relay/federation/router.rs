@@ -109,8 +109,8 @@ where
                         domain.as_ref(),
                         resp.status()
                     );
-                    self.ranker.downvote(domain.as_ref()).await;
-                    return Err(RouterError::Permanent(resp.status().to_string()));
+                    // Do NOT downvote offline
+                    return Err(RouterError::Permanent("destination offline".into()));
                 }
 
                 // For other statuses (e.g., 5xx), downvote and try next candidate
