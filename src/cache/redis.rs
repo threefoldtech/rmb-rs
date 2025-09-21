@@ -1,4 +1,6 @@
-use super::Cache;
+#[cfg(feature = "tracker")]
+use super::RMB_CACHE_HITS_TOTAL;
+use super::{Cache, RMB_CACHE_ENTRIES, RMB_CACHE_FLUSHES_TOTAL, RMB_CACHE_MISSES_TOTAL};
 
 use anyhow::{Context, Result};
 use bb8_redis::{
@@ -6,6 +8,7 @@ use bb8_redis::{
     redis::cmd,
     RedisConnectionManager,
 };
+use bincode::{deserialize, serialize};
 use serde::{de::DeserializeOwned, Serialize};
 
 //
@@ -46,13 +49,16 @@ where
 {
     async fn set<S: ToString + Send + Sync>(&self, key: S, obj: T) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let obj = serde_json::to_vec(&obj).context("unable to serialize twin object for redis")?;
-        let _: () = cmd("HSET")
+        let obj = serialize(&obj).context("unable to serialize twin object for redis")?;
+        let added: i64 = cmd("HSET")
             .arg(&self.prefix)
             .arg(key.to_string())
             .arg(obj)
-            .query_async::<_, ()>(&mut *conn)
+            .query_async::<i64>(&mut *conn)
             .await?;
+        if added == 1 {
+            RMB_CACHE_ENTRIES.inc();
+        }
 
         Ok(())
     }
@@ -67,17 +73,26 @@ where
 
         match ret {
             Some(val) => {
-                let ret: T = serde_json::from_slice(&val)
+                let ret: T = deserialize(&val)
                     .context("unable to deserialize redis value to twin object")?;
 
+                #[cfg(feature = "tracker")]
+                {
+                    RMB_CACHE_HITS_TOTAL.inc();
+                }
                 Ok(Some(ret))
             }
-            None => Ok(None),
+            None => {
+                RMB_CACHE_MISSES_TOTAL.inc();
+                Ok(None)
+            }
         }
     }
     async fn flush(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let _: () = cmd("DEL").arg(&self.prefix).query_async(&mut *conn).await?;
+        RMB_CACHE_ENTRIES.set(0);
+        RMB_CACHE_FLUSHES_TOTAL.inc();
 
         Ok(())
     }

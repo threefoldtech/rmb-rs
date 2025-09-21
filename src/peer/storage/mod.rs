@@ -5,7 +5,6 @@ use crate::types::{self, Address, AddressExt, EnvelopeExt};
 use crate::types::{Backlog, Envelope};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bb8_redis::redis;
 pub use redis::*;
 pub use redis_storage::RedisStorage;
 use serde::{Deserialize, Serialize};
@@ -170,7 +169,7 @@ impl redis::ToRedisArgs for JsonOutgoingRequest {
 
 impl redis::FromRedisValue for JsonOutgoingRequest {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             serde_json::from_slice(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,
@@ -247,7 +246,7 @@ impl redis::ToRedisArgs for JsonIncomingRequest {
 
 impl redis::FromRedisValue for JsonIncomingRequest {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             serde_json::from_slice(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,
@@ -318,7 +317,7 @@ impl redis::ToRedisArgs for JsonOutgoingResponse {
 
 impl redis::FromRedisValue for JsonOutgoingResponse {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             serde_json::from_slice(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,
@@ -433,7 +432,7 @@ impl redis::ToRedisArgs for JsonIncomingResponse {
 
 impl redis::FromRedisValue for JsonIncomingResponse {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        if let redis::Value::Data(data) = v {
+        if let redis::Value::BulkString(data) = v {
             serde_json::from_slice(data).map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::TypeError,

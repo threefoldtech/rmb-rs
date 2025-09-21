@@ -103,7 +103,7 @@ mod tests {
         Ed25519Signer::try_from(WORDS).expect("key must be loaded");
 
         let err = Ed25519Signer::try_from("invalid words");
-        assert_eq!(err.is_err(), true);
+        assert!(err.is_err());
     }
 
     #[test]
@@ -115,6 +115,6 @@ mod tests {
         let _: [u8; 32] = result.as_slice().try_into().expect("key of size 32");
 
         let err = Ed25519Signer::try_from("0xinvalidseed");
-        assert_eq!(err.is_err(), true);
+        assert!(err.is_err());
     }
 }

@@ -1,16 +1,20 @@
 use std::fmt::Debug;
+use std::time::Duration;
 
 use crate::{
+    relay::build_error_envelope,
     relay::ranker::RelayRanker,
     relay::switch::{SessionID, Sink},
     twin::TwinDB,
     types::{Envelope, EnvelopeExt},
 };
-use anyhow::{Context, Result};
+// anyhow::Context no longer used after error typing refactor
 use async_trait::async_trait;
 use http::StatusCode;
 use protobuf::Message;
+use rand::{thread_rng, Rng};
 use reqwest::Client;
+use tokio::time::sleep;
 use workers::Work;
 
 #[derive(Clone)]
@@ -21,16 +25,42 @@ pub(crate) struct Router<D: TwinDB> {
     client: Client,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum RouterError {
+    #[error("remote relay rejected permanently: {0}")]
+    Permanent(String),
+    #[error("remote relay failed temporarily: {0}")]
+    Transient(String),
+    #[error("message has expired")]
+    Expired,
+}
+
 impl<D> Router<D>
 where
     D: TwinDB,
 {
     pub fn new(sink: Sink, twins: D, ranker: RelayRanker) -> Self {
+        // Configure HTTP client with production-friendly defaults
+        let client = Client::builder()
+            // Avoid your application hanging indefinitely
+            .connect_timeout(Duration::from_secs(2))
+            // Overall per-request ceiling
+            .timeout(Duration::from_secs(12))
+            // This keeps a connection in the connection pool for up to 5 minutes
+            // drastically reduce overhead by reusing existing connections for subsequent requests
+            .pool_idle_timeout(Duration::from_secs(300))
+            // Help detect dead paths sooner
+            .tcp_keepalive(Duration::from_secs(60))
+            // Let reqwest/h2 auto-tune flow control when available
+            .http2_adaptive_window(true)
+            .build()
+            .expect("failed to build reqwest client");
+
         Self {
             sink: Some(sink),
             twins,
             ranker,
-            client: Client::new(),
+            client,
         }
     }
 
@@ -38,9 +68,9 @@ where
         &self,
         domains: &'a Vec<S>,
         msg: Vec<u8>,
-    ) -> Result<&'a str> {
-        // TODO: FIX ME
-        for _ in 0..3 {
+    ) -> Result<&'a str, RouterError> {
+        // Up to 3 passes over candidate relays with small jittered backoff between passes
+        for pass in 0..3 {
             for domain in domains.iter() {
                 let url = if cfg!(test) {
                     format!("http://{}/", domain.as_ref())
@@ -48,7 +78,14 @@ where
                     format!("https://{}/", domain.as_ref())
                 };
                 log::debug!("federation to: {}", url);
-                let resp = match self.client.post(&url).body(msg.clone()).send().await {
+                let resp = match self
+                    .client
+                    .post(&url)
+                    .timeout(Duration::from_secs(3))
+                    .body(msg.clone())
+                    .send()
+                    .await
+                {
                     Ok(resp) => resp,
                     Err(err) => {
                         log::warn!(
@@ -58,63 +95,101 @@ where
                         );
                         self.ranker.downvote(domain.as_ref()).await;
                         continue;
-                        // bail!("could not send message to relay '{}': {}", domain, err)
                     }
                 };
 
-                if resp.status() != StatusCode::ACCEPTED {
+                if resp.status() == StatusCode::ACCEPTED {
+                    return Ok(domain.as_ref());
+                }
+
+                // Treat client errors (4xx) as non-retryable: return immediately with error
+                if resp.status().is_client_error() {
                     log::warn!(
-                        "received relay '{}' did not accept the message: {}",
+                        "relay '{}' rejected the message with client error: {} (non-retryable)",
                         domain.as_ref(),
                         resp.status()
                     );
-                    self.ranker.downvote(domain.as_ref()).await;
-                    continue;
+                    // Do NOT downvote offline
+                    return Err(RouterError::Permanent("destination offline".into()));
                 }
 
-                return Ok(domain.as_ref());
+                // For other statuses (e.g., 5xx), downvote and try next candidate
+                log::warn!(
+                    "received relay '{}' did not accept the message: {}",
+                    domain.as_ref(),
+                    resp.status()
+                );
+                self.ranker.downvote(domain.as_ref()).await;
+                continue;
+            }
+
+            // Jittered exponential backoff between passes except after the last pass
+            if pass < 2 {
+                let base_ms = 100u64 << pass; // 100ms, 200ms
+                let jitter: u64 = thread_rng().gen_range(0..(base_ms / 2 + 1));
+                sleep(Duration::from_millis(base_ms + jitter)).await;
             }
         }
-        bail!("relays '{:?}' was not reachable in time", domains);
+        Err(RouterError::Transient(format!(
+            "relays '{:?}' was not reachable in time",
+            domains
+        )))
     }
 
-    async fn process(&self, msg: Vec<u8>) -> Result<()> {
-        let env = Envelope::parse_from_bytes(&msg).context("failed to parse envelope")?;
+    pub(crate) async fn process(&self, msg: Vec<u8>) -> Result<(), RouterError> {
+        let env = Envelope::parse_from_bytes(&msg)
+            .map_err(|e| RouterError::Permanent(format!("failed to parse envelope: {}", e)))?;
+        // TTL check early
+        if env.ttl().map(|d| d.as_secs()).unwrap_or(0) == 0 {
+            return Err(RouterError::Expired);
+        }
         let twin = self
             .twins
             .get_twin(env.destination.twin.into())
             .await
-            .context("failed to get twin details")?
-            .ok_or_else(|| anyhow::anyhow!("self twin not found!"))?;
+            .map_err(|e| RouterError::Transient(format!("failed to get twin details: {}", e)))?
+            .ok_or_else(|| RouterError::Permanent("self twin not found!".into()))?;
         let domains = twin
             .relay
-            .ok_or_else(|| anyhow::anyhow!("relay is not set for this twin"))?;
+            .ok_or_else(|| RouterError::Permanent("relay is not set for this twin".into()))?;
         let mut sorted_doamin = domains.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         self.ranker.reorder(&mut sorted_doamin).await;
         let result = self.try_send(&sorted_doamin, msg).await;
         match result {
-            Ok(domain) => super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc(),
-            Err(ref err) => {
+            Ok(domain) => {
+                super::MESSAGE_SUCCESS.with_label_values(&[domain]).inc();
+                Ok(())
+            }
+            Err(err) => {
                 for d in domains.iter() {
                     super::MESSAGE_ERROR.with_label_values(&[d]).inc();
                 }
+                // Do not send error response here; worker decides based on error kind
+                Err(err)
+            }
+        }
+    }
 
-                if let Some(ref sink) = self.sink {
-                    let mut msg = Envelope::new();
-                    msg.expiration = 300;
-                    msg.stamp();
-                    msg.uid = env.uid;
-                    let e = msg.mut_error();
-                    e.message = err.to_string();
-                    let dst: SessionID = (&env.source).into();
+    // Public helper used by retry path to send an error response back to requester
+    pub async fn send_error_response(&self, env: &Envelope, err: &str) {
+        if env.has_request() {
+            if let Some(ref sink) = self.sink {
+                let msg = build_error_envelope(env, err);
+                let dst: SessionID = (&env.source).into();
 
-                    let _ = sink.send(&dst, msg.write_to_bytes()?).await;
-                    // after this point we don't care if the error was not reported back
+                match msg.write_to_bytes() {
+                    Ok(bytes) => {
+                        if let Err(err) = sink.send(&dst, bytes).await {
+                            // just log then
+                            log::error!("failed to send error message back to caller: {}", err);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("failed to serialize error envelope: {}", e);
+                    }
                 }
             }
         }
-
-        result.map(|_| ())
     }
 }
 
@@ -190,6 +265,8 @@ mod test {
         env.signature = None;
         env.schema = None;
         env.destination = Some(twin_id.into()).into();
+        // Ensure TTL is non-zero; Router::process() rejects expired messages
+        env.expiration = 60;
         env.stamp();
 
         let worker_handler = worker_pool.get().await;

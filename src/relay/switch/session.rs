@@ -13,6 +13,20 @@ pub enum ParseError {
     #[error("invalid value: {0}")]
     InvalidValue(#[from] ParseIntError),
 }
+
+impl PartialOrd for SessionID {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SessionID {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let a = (u32::from(self.0), self.1.as_deref());
+        let b = (u32::from(other.0), other.1.as_deref());
+        a.cmp(&b)
+    }
+}
 /// SessionID is a type alias for a user id. can be replaced later
 /// but for now we using numeric ids
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -115,7 +129,7 @@ impl ToRedisArgs for SessionID {
 
 impl FromRedisValue for SessionID {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        if let Value::Data(bytes) = v {
+        if let Value::BulkString(bytes) = v {
             let s = core::str::from_utf8(bytes)?;
 
             if !s.starts_with("stream:") {
@@ -172,7 +186,7 @@ impl FromStr for MessageID {
 
 impl FromRedisValue for MessageID {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        if let Value::Data(bytes) = v {
+        if let Value::BulkString(bytes) = v {
             let id: MessageID =
                 core::str::from_utf8(bytes)?
                     .parse()
@@ -233,7 +247,7 @@ mod test {
 
         assert_eq!(String::from_utf8_lossy(&arg[0]), "stream:10:con");
 
-        let v = Value::Data(arg.pop().unwrap());
+        let v = Value::BulkString(arg.pop().unwrap());
         let id: SessionID = SessionID::from_redis_value(&v).unwrap();
 
         assert_eq!(id.0, TwinID::from(10));

@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::{
     collections::HashMap,
     ops::DerefMut,
@@ -13,18 +15,18 @@ use futures::{
     future::{FusedFuture, OptionFuture},
     FutureExt,
 };
-use tokio::{sync::OwnedSemaphorePermit, time::sleep};
+use tokio::{sync::OwnedSemaphorePermit, task::yield_now, time::sleep};
 use tokio_util::sync::CancellationToken;
 
-use crate::relay::switch::{SendError, CON_PER_WORKER, RETRY_DELAY};
+use crate::relay::switch::{SendError, CON_PER_WORKER, RELAY_SESSION_EVICTIONS_TOTAL, RETRY_DELAY};
 
 use super::{
     queue::Queue, ConnectionSender, MessageID, SessionID, Switch, MESSAGE_TX, MESSAGE_TX_BYTES,
     READ_COUNT,
 };
 
-// block on read max of 5 seconds
-const READ_BLOCK_MS: usize = 5000;
+// block on read max of 2 seconds (was 5000)
+const READ_BLOCK_MS: usize = 2000;
 
 // connection can wait in back pressure status for 60 seconds
 const MAX_BACK_PRESSURE_DURATION: Duration = Duration::from_secs(60);
@@ -80,6 +82,20 @@ impl SessionStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ReadableSetSig {
+    len: usize,
+    fp1: u64,
+    fp2: u64,
+}
+
+#[inline]
+fn hash64<T: Hash>(v: &T) -> u64 {
+    let mut h = DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
 #[derive(derive_more::Deref, derive_more::DerefMut)]
 struct Session<S>
 where
@@ -98,7 +114,7 @@ impl<S> Session<S>
 where
     S: ConnectionSender,
 {
-    fn is_cancelled(&self) -> bool {
+    fn _is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
             || self.status.is_closed()
             || matches!(self.status, SessionStatus::BackPressure { since } if Instant::now().duration_since(since) > MAX_BACK_PRESSURE_DURATION)
@@ -140,6 +156,12 @@ pub struct Worker<H: ConnectionSender> {
     worker_size: usize,
     queue: Queue<WorkerJob<H>>,
     sessions: HashMap<SessionID, Session<H>>,
+    // Cached, sorted list of readable session IDs used to build the base XREAD command
+    cached_stream_ids: Vec<SessionID>,
+    // Cached base XREAD command up to and including STREAMS <ids...>
+    cached_base_cmd: Option<Cmd>,
+    // Signature of the last readable set to avoid unnecessary sort/alloc when unchanged
+    cached_readable_sig: ReadableSetSig,
 }
 
 impl<H> Worker<H>
@@ -153,6 +175,9 @@ where
             queue: switch.queue.clone(),
             pool: switch.pool.clone(),
             sessions: HashMap::default(),
+            cached_stream_ids: Vec::new(),
+            cached_base_cmd: None,
+            cached_readable_sig: ReadableSetSig::default(),
         }
     }
 
@@ -167,34 +192,77 @@ where
         CON_PER_WORKER.with_label_values(&[&worker_name]).set(0);
 
         'main: loop {
-            let mut con = match self.pool.get().await {
-                Ok(con) => con,
-                Err(err) => {
-                    log::error!(
-                        "[{}] error while getting redis connection: {}",
-                        self.worker_id,
-                        err
-                    );
-                    // this delay in case of redis connection error that we
-                    // wait before retrying
-                    sleep(RETRY_DELAY).await;
-                    continue;
-                }
-            };
-
             // drop any connection that was cancelled or was in back pressure state for too long
-            self.sessions.retain(|_, s| !s.is_cancelled());
+            // while counting the eviction reason, using a single-pass retain
+            let now = Instant::now();
+            let mut closed_count = 0u64;
+            let mut bp_timeout_count = 0u64;
+            let mut cancelled_count = 0u64;
+
+            self.sessions.retain(|_, s| {
+                // classify reason in a mutually exclusive order
+                if s.status.is_closed() {
+                    closed_count += 1;
+                    return false;
+                }
+                if matches!(s.status, SessionStatus::BackPressure { since } if now.duration_since(since) > MAX_BACK_PRESSURE_DURATION) {
+                    bp_timeout_count += 1;
+                    return false;
+                }
+                if s.cancellation.is_cancelled() {
+                    cancelled_count += 1;
+                    return false;
+                }
+                true
+            });
+
+            if closed_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["closed"])
+                    .inc_by(closed_count);
+            }
+            if bp_timeout_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["back_pressure_timeout"])
+                    .inc_by(bp_timeout_count);
+            }
+            if cancelled_count > 0 {
+                RELAY_SESSION_EVICTIONS_TOTAL
+                    .with_label_values(&["cancelled"])
+                    .inc_by(cancelled_count);
+            }
 
             CON_PER_WORKER
                 .with_label_values(&[&worker_name])
                 .set(self.sessions.len() as i64);
 
-            let query: OptionFuture<_> = self
-                .query_command()
-                .map(|cmd| {
-                    async move { cmd.query_async::<_, Output>(con.deref_mut()).await }.fuse()
-                })
-                .into();
+            // back-pressure gauge removed
+
+            // Build the query command first (requires &mut self), then acquire a Redis connection
+            // only if we actually have something to read. This avoids borrowing conflicts on `self`.
+            let cmd_opt = self.query_command();
+            let query: OptionFuture<_> = match cmd_opt {
+                Some(cmd) => {
+                    let mut con = match self.pool.get().await {
+                        Ok(con) => con,
+                        Err(err) => {
+                            log::error!(
+                                "[{}] error while getting redis connection: {}",
+                                self.worker_id,
+                                err
+                            );
+                            // this delay in case of redis connection error that we
+                            // wait before retrying
+                            sleep(RETRY_DELAY).await;
+                            continue;
+                        }
+                    };
+                    OptionFuture::from(Some(
+                        async move { cmd.query_async::<Output>(con.deref_mut()).await }.fuse(),
+                    ))
+                }
+                None => OptionFuture::from(None),
+            };
             let mut query = std::pin::pin!(query);
 
             // NOTE:
@@ -242,6 +310,8 @@ where
                                                 }
                                                 SendError::NotEnoughCapacity => {
                                                     session.status.merge(SessionStatus::BackPressure { since: Instant::now() });
+                                                    // inc counter
+
                                                 }
                                             }
                                             continue 'sender;
@@ -260,7 +330,7 @@ where
 
                         continue 'main;
                     }
-                    jobs = self.queue.pop(self.worker_size.saturating_sub(self.sessions.len())) => {
+                    jobs = self.queue.pop(1), if self.sessions.len() < self.worker_size => {
                         let mut count = 0;
                         for job in jobs {
                             self.sessions.insert(job.session_id.clone(), job.into());
@@ -268,6 +338,10 @@ where
                         }
 
                         log::info!("[{}] Accepted {} new clients to handle", self.worker_id, count);
+
+                        // Yield to allow other workers that were notified to acquire the queue lock
+                        // and accept their own registrations, improving fairness under load.
+                        yield_now().await;
 
                         if query.is_terminated() {
                             // no running queries, it's safe to create a new query now
@@ -286,42 +360,63 @@ where
         }
     }
 
-    fn query_command(&self) -> Option<Cmd> {
+    fn query_command(&mut self) -> Option<Cmd> {
         if self.sessions.is_empty() {
             return None;
         }
 
-        // build command
-        let (stream_ids, sessions): (Vec<&SessionID>, Vec<&Session<H>>) = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| {
-                // filter out sessions that cannot send
-                // messages
-                s.can_send()
-            })
-            .unzip();
+        // Compute signature of readable set without allocating/sorting
+        let mut sig = ReadableSetSig::default();
+        for (id, s) in &self.sessions {
+            if s.can_send() {
+                sig.len += 1;
+                let h = hash64(id);
+                sig.fp1 ^= h;
+                sig.fp2 = sig.fp2.wrapping_add(h.rotate_left(13));
+            }
+        }
 
-        if stream_ids.is_empty() {
+        if sig.len == 0 {
             return None;
         }
 
-        //TODO: may be not rebuild the command each time when the list of current users don't change.
-        let mut cmd = cmd("XREAD");
-        let mut c = cmd
-            .arg("COUNT")
-            .arg(READ_COUNT)
-            .arg("BLOCK")
-            .arg(READ_BLOCK_MS)
-            .arg("STREAMS");
+        // Rebuild cached base only when the readable set actually changed
+        if sig != self.cached_readable_sig {
+            // Collect and sort only on change for deterministic order
+            let mut readable_ids: Vec<SessionID> = self
+                .sessions
+                .iter()
+                .filter_map(|(id, s)| if s.can_send() { Some(id.clone()) } else { None })
+                .collect();
 
-        for id in stream_ids {
-            // convert streamID to full stream name (say stream:<id>)
-            c = c.arg(id);
+            // Allocation-free in-place sort based on (TwinID, optional connection) via Ord
+            // Unstable is safe here: elements are unique and comparator is a total order.
+            readable_ids.sort_unstable();
+
+            let mut base = cmd("XREAD");
+            let mut b = base
+                .arg("COUNT")
+                .arg(READ_COUNT)
+                .arg("BLOCK")
+                .arg(READ_BLOCK_MS)
+                .arg("STREAMS");
+
+            for id in &readable_ids {
+                b = b.arg(id);
+            }
+
+            self.cached_stream_ids = readable_ids;
+            self.cached_base_cmd = Some(base);
+            self.cached_readable_sig = sig;
         }
 
-        for session in sessions {
-            c = c.arg(session.last_message_id);
+        // Clone base and append last IDs in the same order as cached_stream_ids
+        let mut cmd = self.cached_base_cmd.as_ref().cloned().unwrap();
+        for id in &self.cached_stream_ids {
+            if let Some(session) = self.sessions.get(id) {
+                // `arg` returns &mut Cmd; just keep building without reassignment
+                cmd.arg(session.last_message_id);
+            }
         }
 
         Some(cmd)
@@ -333,7 +428,7 @@ struct Message(MessageID, Vec<Vec<u8>>);
 impl FromRedisValue for Message {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Bulk(values) => {
+            Value::Array(values) => {
                 if values.len() != 2 {
                     return Err(RedisError::from((
                         ErrorKind::TypeError,
@@ -358,7 +453,7 @@ struct Messages(SessionID, Vec<Message>);
 impl FromRedisValue for Messages {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Bulk(values) => {
+            Value::Array(values) => {
                 if values.len() != 2 {
                     return Err(RedisError::from((
                         ErrorKind::TypeError,
@@ -383,7 +478,7 @@ type Output = Option<Vec<Messages>>;
 #[cfg(test)]
 mod test {
     use super::{MessageID, Output, SessionID};
-    use bb8_redis::redis::{self, cmd};
+    use redis::{self, cmd};
 
     #[test]
     fn message_serialization() {

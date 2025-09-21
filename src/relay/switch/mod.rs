@@ -27,10 +27,7 @@ use tokio::time::Duration;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use worker::WorkerJob;
 
-use prometheus::{IntCounter, IntGaugeVec, Opts, Registry};
-
-#[cfg(feature = "tracker")]
-use prometheus::IntCounterVec;
+use prometheus::{IntCounter, IntCounterVec, IntGaugeVec, Opts, Registry};
 
 lazy_static::lazy_static! {
     static ref CON_PER_WORKER: IntGaugeVec = IntGaugeVec::new(
@@ -45,6 +42,16 @@ lazy_static::lazy_static! {
     static ref MESSAGE_RX_BYTES: IntCounter = IntCounter::new("relay_message_rx_bytes", "size of messages received by relay in bytes").unwrap();
 
     static ref MESSAGE_TX_BYTES: IntCounter = IntCounter::new("relay_message_tx_bytes", "size of messages forwarded by relay in bytes").unwrap();
+
+    // Total number of session evictions, labeled by reason
+    // reason ∈ { "closed", "back_pressure_timeout", "cancelled" }
+    static ref RELAY_SESSION_EVICTIONS_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "relay_session_evictions_total",
+            "Total number of session evictions from the relay, labeled by reason",
+        ),
+        &["reason"],
+    ).unwrap();
 }
 
 #[cfg(feature = "tracker")]
@@ -191,16 +198,20 @@ where
             sessions: Arc::new(Mutex::new(ActiveSessions::default())),
         };
 
-        let mut user_per_worker = max_users / (workers as usize);
-        if user_per_worker == 0 {
-            user_per_worker = 1;
-        }
+        // Determine per-worker capacity. If workers == 0 (tests may spawn manually), avoid div-by-zero.
+        let user_per_worker = if workers == 0 {
+            1
+        } else {
+            (max_users / workers as usize).max(1)
+        };
 
         opts.registry.register(Box::new(CON_PER_WORKER.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX.clone()))?;
         opts.registry.register(Box::new(MESSAGE_TX.clone()))?;
         opts.registry.register(Box::new(MESSAGE_RX_BYTES.clone()))?;
         opts.registry.register(Box::new(MESSAGE_TX_BYTES.clone()))?;
+        opts.registry
+            .register(Box::new(RELAY_SESSION_EVICTIONS_TOTAL.clone()))?;
         #[cfg(feature = "tracker")]
         opts.registry.register(Box::new(MESSAGE_RX_TWIN.clone()))?;
 
@@ -275,6 +286,14 @@ where
     ) -> Result<MessageID> {
         send(id.as_ref(), &self.pool, msg.as_ref()).await
     }
+
+    /// checks if a session is connected locally
+    /// it doesn't verify if the twin is belongs to this relay
+    /// so should be treated as cheap way to route to locals online twins bypassing twin lookup
+    /// if the session is not found, further routing verification should be done
+    pub async fn is_local(&self, id: &SessionID) -> bool {
+        self.sessions.lock().await.contains_key(id)
+    }
 }
 
 #[derive(Clone)]
@@ -302,18 +321,24 @@ async fn send(
     msg: &[u8],
 ) -> Result<MessageID> {
     let mut con = pool.get().await?;
-    let msg_id: MessageID = cmd("XADD")
-        .arg(stream_id)
+
+    // Build XADD command
+    let mut xadd = cmd("XADD");
+    xadd.arg(stream_id)
         .arg("MAXLEN")
         .arg("~")
         .arg(QUEUE_MAXLEN)
         .arg("*")
         .arg("_")
-        .arg(msg.as_ref())
-        .query_async(&mut *con)
-        .await?;
+        .arg(msg.as_ref());
 
-    let _: () = cmd("EXPIRE")
+    // Pipeline XADD + EXPIRE in a single round-trip (atomic)
+    let mut pipe = bb8_redis::redis::pipe();
+    pipe.atomic();
+
+    let (msg_id, _): (MessageID, ()) = pipe
+        .add_command(xadd)
+        .cmd("EXPIRE")
         .arg(stream_id)
         .arg(QUEUE_EXPIRE)
         .query_async(&mut *con)
@@ -377,7 +402,7 @@ mod test {
             .expect("can connect");
 
         let switch = Switch::<MessageSender>::new(super::SwitchOptions {
-            pool: pool,
+            pool,
             workers: 2,
             max_users: 100,
             registry: Registry::new(),
@@ -386,39 +411,55 @@ mod test {
 
         let (tx, mut receiver) = mpsc::unbounded_channel();
 
+        // Unique suffix per test run to isolate Redis streams between runs
+        let unique_suffix = format!("test-{}", std::process::id());
+
+        // Keep a list of sessions to unregister at the end
+        let mut sessions: Vec<SessionID> = Vec::new();
+
         for id in 1..=100 {
-            let session_id = SessionID::new(id.into(), None);
+            let session_id = SessionID::new(id.into(), Some(unique_suffix.clone()));
             let handler = MessageSender::new(session_id.clone(), tx.clone());
 
             switch
-                .register(session_id, CancellationToken::new(), handler)
+                .register(session_id.clone(), CancellationToken::new(), handler)
                 .await
-                .expect("session registered")
+                .expect("session registered");
+
+            sessions.push(session_id);
         }
 
         drop(tx);
 
         for id in 1..=100 {
-            let session_id = SessionID::new(id.into(), None);
+            let session_id = SessionID::new(id.into(), Some(unique_suffix.clone()));
             for _ in 0..10 {
                 switch
                     .send(&session_id, format!("Hello {id}"))
                     .await
                     .expect("can send");
             }
-
-            // un registering the client will cause it's handler to drop and eventually
-            // drop all transmitter ends. Effectively terminating the received channel
-            switch.unregister(session_id).await;
         }
 
         let expected_count = 100 * 10;
 
         let mut count = 0;
-        while let Some((session_id, msg_id, _msg)) = receiver.recv().await {
-            // expecting a 100 message
-            switch.ack(&session_id, &[msg_id]).await.expect("ack");
-            count += 1;
+        let total = expected_count;
+        use tokio::time::{timeout, Duration};
+        while count < total {
+            match timeout(Duration::from_secs(10), receiver.recv()).await {
+                Ok(Some((session_id, msg_id, _msg))) => {
+                    switch.ack(&session_id, &[msg_id]).await.expect("ack");
+                    count += 1;
+                }
+                Ok(None) => break, // channel closed unexpectedly
+                Err(_) => break,   // timeout
+            }
+        }
+
+        // Now unregister all sessions to clean up
+        for s in sessions {
+            switch.unregister(s).await;
         }
 
         assert_eq!(count, expected_count);

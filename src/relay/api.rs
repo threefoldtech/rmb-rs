@@ -1,17 +1,20 @@
 use crate::token::{self, Claims};
-use crate::twin::{RelayDomains, TwinDB};
-use crate::types::{Envelope, EnvelopeExt, Pong};
+use crate::twin::TwinDB;
+use crate::types::{Envelope, Pong};
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use futures::stream::SplitSink;
 use futures::Future;
 use futures::{sink::SinkExt, stream::StreamExt};
 use http::Method;
+use http::{Request, Response};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::upgrade::Upgraded;
-use hyper::Body;
-use hyper::{Request, Response};
 use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::{HyperWebsocket, WebSocketStream};
+use hyper_util::rt::TokioIo;
 use prometheus::Encoder;
 use prometheus::TextEncoder;
 use protobuf::Message as ProtoMessage;
@@ -19,6 +22,7 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -28,6 +32,7 @@ use super::federation::Federator;
 use super::limiter::{Metrics, RateLimiter};
 use super::switch::{ConnectionSender, MessageID, SendError, SessionID, Switch};
 use super::HttpError;
+use crate::relay::build_error_envelope;
 
 pub(crate) struct AppData<D: TwinDB, R: RateLimiter> {
     switch: Arc<Switch<WriterCallback>>,
@@ -76,23 +81,16 @@ where
     }
 }
 
-impl<D, R> Service<Request<Body>> for HttpService<D, R>
+impl<D, R> Service<Request<Incoming>> for HttpService<D, R>
 where
     D: TwinDB,
     R: RateLimiter,
 {
-    type Response = Response<Body>;
+    type Response = Response<Full<Bytes>>;
     type Error = HttpError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
+    fn call(&self, req: Request<Incoming>) -> Self::Future {
         let data = Arc::clone(&self.data);
 
         let fut = async {
@@ -102,7 +100,7 @@ where
                     log::debug!("connection error: {:#}", err);
                     Response::builder()
                         .status(err.status())
-                        .body(Body::from(err.to_string()))
+                        .body(Full::from(Bytes::from(err.to_string())))
                         .map_err(HttpError::Http)
                 }
             }
@@ -114,8 +112,8 @@ where
 
 async fn entry<D: TwinDB, R: RateLimiter>(
     data: Arc<AppData<D, R>>,
-    mut request: Request<Body>,
-) -> Result<Response<Body>, HttpError> {
+    mut request: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, HttpError> {
     // Check if the request is a websocket upgrade request.
     if hyper_tungstenite::is_upgrade_request(&request) {
         let jwt = request.uri().query().ok_or(HttpError::MissingJWT)?;
@@ -163,7 +161,7 @@ async fn entry<D: TwinDB, R: RateLimiter>(
     }
 }
 
-fn metrics() -> Result<Response<Body>, HttpError> {
+fn metrics() -> Result<Response<Full<Bytes>>, HttpError> {
     // TODO add other end point
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
@@ -174,20 +172,20 @@ fn metrics() -> Result<Response<Body>, HttpError> {
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
         return Response::builder()
             .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from(err.to_string()))
+            .body(Full::from(Bytes::from(err.to_string())))
             .map_err(HttpError::Http);
     }
 
     Response::builder()
         .status(http::StatusCode::OK)
-        .body(Body::from(buffer))
+        .body(Full::from(Bytes::from(buffer)))
         .map_err(HttpError::Http)
 }
 
 async fn federation<D: TwinDB, R: RateLimiter>(
     data: &AppData<D, R>,
-    request: Request<Body>,
-) -> Result<Response<Body>, HttpError> {
+    request: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, HttpError> {
     // TODO:
     //   there are many things that can go wrong here
     //   - this is not an authorized endpoint. means anyone (not necessary a relay)
@@ -200,50 +198,62 @@ async fn federation<D: TwinDB, R: RateLimiter>(
     //
     // this method trust whoever call it to provide correct federation information and proper message
     // size.
-    let body = hyper::body::to_bytes(request.into_body())
+    let body = request
+        .into_body()
+        .collect()
         .await
-        .map_err(|err| HttpError::BadRequest(err.to_string()))?;
+        .map_err(|err| HttpError::BadRequest(err.to_string()))?
+        .to_bytes();
 
     let envelope =
         Envelope::parse_from_bytes(&body).map_err(|err| HttpError::BadRequest(err.to_string()))?;
 
-    // todo: this is UNSAFE. since we can't verify the received message hence
-    // we shouldn't poison local cache
-
-    update_cache_relays(&envelope, &data.twins)
-        .await
-        .map_err(|err| HttpError::FailedToSetTwin(err.to_string()))?;
     let dst: SessionID = (&envelope.destination).into();
+
+    // fail-fast path: if requested and destination is not local, return error immediately
+    if has_fail_fast(&envelope) && !data.switch.is_local(&dst).await {
+        // destination session doesn’t exist on this relay
+        return Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body(Full::from(Bytes::from("destination offline")))
+            .map_err(HttpError::Http);
+    }
+
     data.switch.send(&dst, &body).await?;
 
     Response::builder()
         .status(http::StatusCode::ACCEPTED)
-        .body(Body::empty())
+        .body(Full::from(Bytes::new()))
         .map_err(HttpError::Http)
 }
 
-async fn update_cache_relays(envelope: &Envelope, twin_db: &impl TwinDB) -> Result<()> {
-    if envelope.relays.is_empty() {
-        return Ok(());
-    }
-    let mut twin = twin_db
-        .get_twin(envelope.source.twin.into())
-        .await?
-        .ok_or_else(|| anyhow::Error::msg("unknown twin source"))?;
-    let envelope_relays = RelayDomains::new(&envelope.relays);
-    match twin.relay {
-        Some(twin_relays) => {
-            if twin_relays == envelope_relays {
-                return Ok(());
-            }
-            twin.relay = Some(envelope_relays);
+/// Returns true if the envelope requests a fail-fast behavior for federation/local checks.
+///
+/// Canonical tag is "fail-fast" (kebab-case). Matching is token-based (comma/whitespace
+/// separated) and case-sensitive. No legacy aliases are supported.
+#[inline]
+pub(crate) fn has_fail_fast(envelope: &Envelope) -> bool {
+    const TAG_FAIL_FAST: &str = "fail-fast";
+
+    let tags = match envelope.tags.as_deref() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    // split on commas and whitespace, trim tokens, compare exactly (case-sensitive)
+    for token in tags.split(|c: char| c == ',' || c.is_whitespace()) {
+        let tok = token.trim();
+        if tok.is_empty() {
+            continue;
         }
-        None => twin.relay = Some(envelope_relays),
+        if tok == TAG_FAIL_FAST {
+            return true;
+        }
     }
-    twin_db.set_twin(twin).await
+    false
 }
 
-type Writer = SplitSink<WebSocketStream<Upgraded>, Message>;
+type Writer = SplitSink<WebSocketStream<TokioIo<Upgraded>>, Message>;
 
 pub(crate) struct ConnectionWriter {
     peer: SessionID,
@@ -285,6 +295,12 @@ impl ConnectionWriter {
 
     async fn run(mut self, mut rx: Receiver<(MessageID, Vec<u8>)>) {
         let drop_guard = self.cancellation.clone().drop_guard();
+        // Ack batching params
+        const ACK_BATCH_SIZE: usize = 128;
+        const ACK_FLUSH_MS: u64 = 10;
+
+        let mut pending_acks: Vec<MessageID> = Vec::with_capacity(ACK_BATCH_SIZE);
+        let mut last_flush = Instant::now();
 
         while let Some(Some((id, data))) = self.cancellation.run_until_cancelled(rx.recv()).await {
             log::trace!("relaying message {} to peer {}", id, self.peer);
@@ -293,8 +309,8 @@ impl ConnectionWriter {
                 .run_until_cancelled(self.writer.send(Message::Binary(data)))
                 .await
             {
-                // cancelled
-                None => return,
+                // cancelled; break so the loop exits and the final ACK flush runs.
+                None => break,
                 // failed to write
                 Some(Err(err)) => {
                     _ = self.writer.close().await;
@@ -305,11 +321,28 @@ impl ConnectionWriter {
                 Some(_) => {}
             }
 
-            // todo: a possible bottle neck. If messages can't be acked we probably
-            // will get stuck and not process new messages.
-            // a possible improvement is to ack multiple messages in one go instead
-            // of acking one by one
-            _ = self.switch.ack(&self.peer, &[id]).await;
+            // Batch ACKs to reduce Redis round-trips
+            pending_acks.push(id);
+            let should_flush = pending_acks.len() >= ACK_BATCH_SIZE
+                || last_flush.elapsed() >= Duration::from_millis(ACK_FLUSH_MS);
+            if should_flush {
+                if let Err(e) = self.switch.ack(&self.peer, &pending_acks).await {
+                    log::debug!("ack batch failed for {} ids: {}", pending_acks.len(), e);
+                }
+                pending_acks.clear();
+                last_flush = Instant::now();
+            }
+        }
+
+        // Flush any remaining acks on exit
+        if !pending_acks.is_empty() {
+            if let Err(e) = self.switch.ack(&self.peer, &pending_acks).await {
+                log::debug!(
+                    "final ack batch failed for {} ids: {}",
+                    pending_acks.len(),
+                    e
+                );
+            }
         }
 
         drop(drop_guard);
@@ -383,11 +416,22 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             anyhow::bail!("message with missing destination");
         }
 
-        // todo(sameh):
+        let is_local = self.switch.is_local(&dst).await;
+
         // check if the dst twin id is already connected locally
         // if so, we don't have to check federation and directly
         // switch the message
+        if is_local {
+            log::trace!("found local session for '{}' , forwarding message", dst);
+            if let Err(err) = self.switch.send(&dst, &msg).await {
+                log::error!("failed to route message to peer '{}' : {}", dst, err);
+                anyhow::bail!("failed to route message to peer '{}': {}", dst, err);
+            }
+            return Ok(());
+        }
 
+        // if destination is not local, we need to check if we need to federate
+        // or not.
         //  instead of sending the message directly to the switch
         //  we check federation information attached to the envelope
         //  if federation is not empty and does not match the domain
@@ -399,10 +443,6 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             .await?
             .ok_or_else(|| anyhow::Error::msg("unknown twin destination"))?;
 
-        // it's safe to update the local cache since we already authenticated
-        // the twin hence we trust their information.
-        update_cache_relays(envelope, &self.twins).await?;
-
         if !twin
             .relay
             .ok_or_else(|| anyhow::Error::msg("relay info is not set for this twin"))?
@@ -412,12 +452,18 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
             // push message to the (relay.federation) queue
             return Ok(self.federator.send(&msg).await?);
         }
+        // fail-fast path: we confirmed that this is not an foreign message, and if it is fail-fast taged and destination session is not connected
+        // then the peer must be offline, return error immediately
+        if has_fail_fast(envelope) && !is_local {
+            anyhow::bail!("destination offline");
+        }
         // we don't return an error because when we return an error
         // we will send this error back to the sender user. Hence
         // calling the switch.send again
         // this is an internal error anyway, and should not happen
         if let Err(err) = self.switch.send(&dst, &msg).await {
             log::error!("failed to route message to peer '{}': {}", dst, err);
+            anyhow::bail!("failed to route message to peer '{}': {}", dst, err);
         }
 
         Ok(())
@@ -471,7 +517,7 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                     // TODO: throttling to avoid sending too many messages in short time!
                     match message {
                         Message::Text(_) => {
-                            log::trace!("received unsupported (text) message. disconnecting!");
+                            log::debug!("received unsupported (text) message. disconnecting!");
                             break;
                         }
                         Message::Binary(msg) => {
@@ -484,16 +530,16 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
                             super::switch::MESSAGE_RX_TWIN.with_label_values(&[&format!("{}", envelope.source.twin)]).inc();
 
                             if !self.metrics.measure(msg.len()).await {
-                                log::trace!("twin with stream id {} exceeded its request limits, dropping message", self.id);
-                                self.send_error(envelope, "exceeded rate limits, dropping message").await;
-                                continue
+                                log::debug!("twin with stream id {} exceeded its request limits, dropping message", self.id);
+                                self.send_error_response(envelope, "exceeded rate limits, dropping message").await;
+                                continue;
                             }
 
                             // if we failed to route back the message to the user
                             // for any reason we send an error message back
                             // server error has no source address set.
                             if let Err(err) = self.route(&mut envelope, msg).await {
-                                self.send_error(envelope, err).await;
+                                self.send_error_response(envelope, err).await;
                             }
                         }
                         Message::Ping(_) => {
@@ -519,27 +565,24 @@ impl<M: Metrics, D: TwinDB> Session<M, D> {
         Ok(())
     }
 
-    async fn send_error<E: Display>(&self, envelope: Envelope, err: E) {
-        let mut resp = Envelope::new();
-        resp.expiration = 300;
-        resp.stamp();
-        resp.uid = envelope.uid;
+    async fn send_error_response<E: Display>(&self, envelope: Envelope, err: E) {
+        if !envelope.has_request() {
+            return;
+        }
+        let mut resp = build_error_envelope(&envelope, err);
         resp.destination = Some((&self.id).into()).into();
-        let e = resp.mut_error();
-        e.message = err.to_string();
 
-        let bytes = match resp.write_to_bytes() {
-            Ok(bytes) => bytes,
+        match resp.write_to_bytes() {
+            Ok(bytes) => {
+                if let Err(err) = self.switch.send(&self.id, bytes).await {
+                    // just log then
+                    log::error!("failed to send error message back to caller: {}", err);
+                }
+            }
             Err(err) => {
                 // this should never happen, hence let's print this as an error
                 log::error!("failed to serialize envelope: {}", err);
-                return;
             }
-        };
-
-        if let Err(err) = self.switch.send(&self.id, bytes).await {
-            // just log then
-            log::error!("failed to send error message back to caller: {}", err);
         }
     }
 }

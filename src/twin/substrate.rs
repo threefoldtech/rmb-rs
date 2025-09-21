@@ -3,21 +3,90 @@ use super::Twin;
 use super::TwinDB;
 use super::TwinID;
 use crate::cache::Cache;
-use anyhow::Result;
-use std::collections::LinkedList;
+use anyhow::{anyhow, Result};
+use arc_swap::ArcSwap;
+use futures::future::{BoxFuture, FutureExt, Shared};
+use std::collections::{HashMap, LinkedList};
 use std::sync::Arc;
+use std::time::Duration;
 use subxt::utils::AccountId32;
 use subxt::Error as ClientError;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 use tfchain_client::client::{Client, Hash, KeyPair};
+
+// Type aliases to simplify complex generic types used for singleflight fetches
+type TwinFetchResult = Result<Arc<Option<Twin>>, Arc<anyhow::Error>>;
+type TwinFetchFuture = Shared<BoxFuture<'static, TwinFetchResult>>;
+type InFlightMap = HashMap<u32, TwinFetchFuture>;
+
+/// Try to establish a client connection with per-attempt timeout and URL rotation.
+async fn connect_with_timeouts(urls: &Arc<Mutex<LinkedList<String>>>) -> Result<Client> {
+    // Try up to 2 * urls.len() attempts, rotating on each failure
+    let trials = {
+        let urls_guard = urls.lock().await;
+        let len = urls_guard.len();
+        if len == 0 {
+            return Err(anyhow!("substrate urls list is empty"));
+        }
+        len * 2
+    };
+
+    for _ in 0..trials {
+        let current_url = {
+            let urls_guard = urls.lock().await;
+            urls_guard.front().cloned()
+        };
+
+        let url = match current_url {
+            Some(u) => u,
+            None => return Err(anyhow!("substrate urls list is empty")),
+        };
+
+        match timeout(Duration::from_secs(12), Client::new(&url)).await {
+            Ok(Ok(client)) => return Ok(client),
+            Ok(Err(err)) => {
+                log::error!(
+                    "failed to create substrate client with url \"{}\": {}",
+                    url,
+                    err
+                );
+            }
+            Err(_) => {
+                log::error!(
+                    "timeout while creating substrate client with url \"{}\"",
+                    url
+                );
+            }
+        }
+
+        // rotate URL
+        let mut urls_guard = urls.lock().await;
+        if let Some(front) = urls_guard.pop_front() {
+            urls_guard.push_back(front);
+        }
+    }
+
+    Err(anyhow!(
+        "failed to connect to substrate using the provided urls"
+    ))
+}
 
 #[derive(Clone)]
 pub struct SubstrateTwinDB<C>
 where
     C: Cache<Twin>,
 {
-    client: Arc<Mutex<ClientWrapper>>,
+    // Lock-free snapshot for reads; atomic swap on reconnect
+    client: Arc<ArcSwap<Client>>,
+    // URL rotation list protected by a small mutex
+    substrate_urls: Arc<Mutex<LinkedList<String>>>,
+    // Singleflight for reconnects
+    reconnect_lock: Arc<Mutex<()>>,
+    // In-flight fetches for cache miss de-duplication. Output must be Clone for `shared()`
+    // so we wrap both Ok and Err in Arc<...>.
+    in_flight: Arc<Mutex<InFlightMap>>,
     cache: C,
 }
 
@@ -26,12 +95,31 @@ where
     C: Cache<Twin> + Clone,
 {
     pub async fn new(substrate_urls: Vec<String>, cache: C) -> Result<Self> {
-        let client_wrapper = ClientWrapper::new(substrate_urls).await?;
+        let mut urls_list = LinkedList::new();
+        for url in substrate_urls {
+            urls_list.push_back(url);
+        }
+
+        let urls = Arc::new(Mutex::new(urls_list));
+        let client = connect_with_timeouts(&urls).await?;
 
         Ok(Self {
-            client: Arc::new(Mutex::new(client_wrapper)),
+            client: Arc::new(ArcSwap::from_pointee(client)),
+            substrate_urls: urls,
+            reconnect_lock: Arc::new(Mutex::new(())),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
             cache,
         })
+    }
+
+    async fn reconnect_singleflight(&self) -> Result<()> {
+        // Ensure only one task performs reconnect at a time
+        let _guard = self.reconnect_lock.lock().await;
+        // Build a new client outside of any other locks
+        let new_client = connect_with_timeouts(&self.substrate_urls).await?;
+        // Atomically swap client for all readers
+        self.client.store(Arc::new(new_client));
+        Ok(())
     }
 
     pub async fn update_twin(
@@ -40,9 +128,23 @@ where
         relay: RelayDomains,
         pk: Option<&[u8]>,
     ) -> Result<Hash> {
-        let mut client = self.client.lock().await;
-        let hash = client.update_twin(kp, Some(relay.to_string()), pk).await?;
-        Ok(hash)
+        let relay_str = Some(relay.to_string());
+        // Attempt with retry on RPC disconnects
+        loop {
+            let client_arc = self.client.load_full();
+            match client_arc.update_twin(kp, relay_str.clone(), pk).await {
+                Ok(hash) => return Ok(hash),
+                Err(ClientError::Rpc(_)) => {
+                    // Perform singleflight reconnect and retry
+                    self.reconnect_singleflight().await?;
+                    continue;
+                }
+                Err(err) => {
+                    log::warn!("update_twin non-RPC error (not retried): {}", err);
+                    return Err(err.into());
+                }
+            }
+        }
     }
 }
 
@@ -56,131 +158,96 @@ where
             return Ok(Some(twin));
         }
 
-        let mut client = self.client.lock().await;
+        let key: u32 = twin_id.into();
 
-        let twin = client.get_twin_by_id(twin_id.into()).await?;
+        // De-duplicate concurrent cache misses for the same key
+        let fetch_fut = {
+            let mut map = self.in_flight.lock().await;
+            if let Some(shared) = map.get(&key) {
+                shared.clone()
+            } else {
+                let client_swap = self.client.clone();
+                let urls = self.substrate_urls.clone();
+                let rlock = self.reconnect_lock.clone();
+                // Future that performs RPC with reconnect on RPC errors
+                let fut: BoxFuture<'static, TwinFetchResult> = async move {
+                    loop {
+                        let client_arc = client_swap.load_full();
+                        match client_arc.get_twin_by_id(key).await {
+                            Ok(twin) => break Ok(Arc::new(twin.map(Twin::from))),
+                            Err(ClientError::Rpc(_)) => {
+                                // singleflight reconnect: take the lock, connect, swap
+                                let _g = rlock.lock().await;
+                                // another task may have already swapped; still safe
+                                match connect_with_timeouts(&urls).await {
+                                    Ok(new_client) => {
+                                        client_swap.store(Arc::new(new_client));
+                                    }
+                                    Err(e) => {
+                                        // propagate error; callers may retry later
+                                        return Err(Arc::new(e));
+                                    }
+                                }
+                                // retry
+                                continue;
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "get_twin non-RPC error for key {} (not retried): {}",
+                                    key,
+                                    err
+                                );
+                                break Err(Arc::new(err.into()));
+                            }
+                        }
+                    }
+                }
+                .boxed();
+                let shared = fut.shared();
+                map.insert(key, shared.clone());
+                shared
+            }
+        };
 
-        // but if we wanna hit the grid we get throttled by the workers pool
-        // the pool has a limited size so only X queries can be in flight.
+        let result = fetch_fut.await;
+
+        // Remove from in-flight map
+        let mut map = self.in_flight.lock().await;
+        map.remove(&key);
+        drop(map);
+
+        let twin = match result {
+            Ok(arc_opt) => (*arc_opt).clone(),
+            Err(e) => return Err(anyhow!(e.as_ref().to_string())),
+        };
 
         if let Some(ref twin) = twin {
             self.cache.set(twin.id, twin.clone()).await?;
         }
-
         Ok(twin)
     }
 
     async fn get_twin_with_account(&self, account_id: AccountId32) -> Result<Option<u32>> {
-        let mut client = self.client.lock().await;
-
-        let id = client.get_twin_id_by_account(account_id).await?;
-
-        Ok(id)
+        // Attempt with retry on RPC disconnects
+        loop {
+            let client_arc = self.client.load_full();
+            match client_arc.get_twin_id_by_account(account_id.clone()).await {
+                Ok(id) => return Ok(id),
+                Err(ClientError::Rpc(_)) => {
+                    self.reconnect_singleflight().await?;
+                    continue;
+                }
+                Err(err) => {
+                    log::warn!("get_twin_with_account non-RPC error (not retried): {}", err);
+                    return Err(err.into());
+                }
+            }
+        }
     }
 
     async fn set_twin(&self, twin: Twin) -> Result<()> {
         self.cache.set(twin.id, twin).await?;
         Ok(())
-    }
-}
-
-/// ClientWrapper is basically a substrate client.
-/// all methods exported by the ClientWrapper has a reconnect functionality internally.
-/// so if any network error happened, the ClientWrapper will try to reconnect to substrate using the provided substrate urls.
-/// if after a number of trials (currently 2 * the number of urls) a reconnect was not successful, the ClientWrapper returns an error.
-struct ClientWrapper {
-    client: Client,
-    substrate_urls: LinkedList<String>,
-}
-
-impl ClientWrapper {
-    pub async fn new(substrate_urls: Vec<String>) -> Result<Self> {
-        let mut urls = LinkedList::new();
-        for url in substrate_urls {
-            urls.push_back(url);
-        }
-
-        let client = Self::connect(&mut urls).await?;
-
-        Ok(Self {
-            client,
-            substrate_urls: urls,
-        })
-    }
-
-    async fn connect(urls: &mut LinkedList<String>) -> Result<Client> {
-        let trials = urls.len() * 2;
-        for _ in 0..trials {
-            let url = match urls.front() {
-                Some(url) => url,
-                None => anyhow::bail!("substrate urls list is empty"),
-            };
-
-            match Client::new(&url).await {
-                Ok(client) => return Ok(client),
-                Err(err) => {
-                    log::error!(
-                        "failed to create substrate client with url \"{}\": {}",
-                        url,
-                        err
-                    );
-                }
-            }
-
-            if let Some(front) = urls.pop_front() {
-                urls.push_back(front);
-            }
-        }
-
-        anyhow::bail!("failed to connect to substrate using the provided urls")
-    }
-
-    pub async fn update_twin(
-        &mut self,
-        kp: &KeyPair,
-        relay: Option<String>,
-        pk: Option<&[u8]>,
-    ) -> Result<Hash> {
-        let hash = loop {
-            match self.client.update_twin(kp, relay.clone(), pk).await {
-                Ok(hash) => break hash,
-                Err(ClientError::Rpc(_)) => {
-                    self.client = Self::connect(&mut self.substrate_urls).await?;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        };
-
-        Ok(hash)
-    }
-
-    pub async fn get_twin_by_id(&mut self, twin_id: u32) -> Result<Option<Twin>> {
-        let twin = loop {
-            match self.client.get_twin_by_id(twin_id).await {
-                Ok(twin) => break twin,
-                Err(ClientError::Rpc(_)) => {
-                    self.client = Self::connect(&mut self.substrate_urls).await?;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-        .map(Twin::from);
-
-        Ok(twin)
-    }
-
-    pub async fn get_twin_id_by_account(&mut self, account_id: AccountId32) -> Result<Option<u32>> {
-        let id = loop {
-            match self.client.get_twin_id_by_account(account_id.clone()).await {
-                Ok(twin) => break twin,
-                Err(ClientError::Rpc(_)) => {
-                    self.client = Self::connect(&mut self.substrate_urls).await?;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        };
-
-        Ok(id)
     }
 }
 
@@ -215,8 +282,8 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert!(matches!(twin.relay, None));
-        assert!(matches!(twin.pk, None));
+        assert!(twin.relay.is_none());
+        assert!(twin.pk.is_none());
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"
@@ -249,8 +316,8 @@ mod tests {
         // as provided by the url wss://tfchain.dev.grid.tf.
         // if this environment was reset at some point. those
         // values won't match anymore.
-        assert!(matches!(twin.relay, None));
-        assert!(matches!(twin.pk, None));
+        assert!(twin.relay.is_none());
+        assert!(twin.pk.is_none());
         assert_eq!(
             twin.account.to_string(),
             "5Eh2stFNQX4khuKoh2a1jQBVE91Lv3kyJiVP2Y5webontjRe"

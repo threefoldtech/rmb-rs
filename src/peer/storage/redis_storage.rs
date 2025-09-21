@@ -152,7 +152,7 @@ impl Storage for RedisStorage {
         }
         let mut conn = self.get_connection().await?;
         let key = BacklogKey(&backlog.uid);
-        let _: () = conn.set_ex(&key, backlog, backlog.ttl as usize).await?;
+        let _: () = conn.set_ex(&key, backlog, backlog.ttl).await?;
 
         Ok(())
     }
@@ -189,7 +189,7 @@ impl Storage for RedisStorage {
         let resp_queue = Queue::Response.as_ref();
         let queues = (req_queue, resp_queue);
 
-        let (queue, value): (String, Value) = conn.brpop(queues, 0).await?;
+        let (queue, value): (String, Value) = conn.brpop(queues, 0.0).await?;
 
         let msg: JsonMessage = if queue == req_queue {
             JsonOutgoingRequest::from_redis_value(&value)
