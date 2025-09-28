@@ -345,6 +345,11 @@ impl ConnectionWriter {
             }
         }
 
+        // Ensure the websocket writer is gracefully closed on cancellation to avoid half-closed sockets
+        if let Err(e) = self.writer.close().await {
+            log::debug!("writer close on cancel failed: {}", e);
+        }
+
         drop(drop_guard);
     }
 }
