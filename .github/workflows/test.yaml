@@ -29,12 +29,14 @@ jobs:
         with:
           toolchain: stable
           target: x86_64-unknown-linux-musl
-      - name: Add musl target
-        run: rustup target add x86_64-unknown-linux-musl
-      - uses: actions-rs/cargo@v1
-        name: Build
-        with:
-          command: build
-          args: |
-            --release
-            --target=x86_64-unknown-linux-musl
+      - name: Show installed targets
+        run: rustup target list --installed
+      # - name: Add musl target
+      #   run: rustup target add x86_64-unknown-linux-musl
+      # - uses: actions-rs/cargo@v1
+      #   name: Build
+      #   with:
+      #     command: build
+      #     args: |
+      #       --release
+      #       --target=x86_64-unknown-linux-musl
