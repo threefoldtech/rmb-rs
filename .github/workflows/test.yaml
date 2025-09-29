@@ -1,0 +1,38 @@
+on:
+  push:
+   branches:
+      - master_test
+
+name: Test
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_RELAY: threefoldtech/rmb-relay
+  IMAGE_NAME_PEER: threefoldtech/rmb-peer
+
+jobs:
+  build:
+    name: build rmb
+    runs-on: ubuntu-24.04
+    steps:
+
+      - name: Prepare
+        run: |
+          sudo apt-get update
+          sudo apt-get install musl-tools
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+          sudo unzip -d /usr/local protoc-21.12-linux-x86_64.zip
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        name: Install toolchain
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-musl
+      - uses: actions-rs/cargo@v1
+        name: Build
+        with:
+          command: build
+          args: |
+            --release
+            --target=x86_64-unknown-linux-musl
