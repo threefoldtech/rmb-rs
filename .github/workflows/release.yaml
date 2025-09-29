@@ -28,6 +28,7 @@ jobs:
         name: Install toolchain
         with:
           toolchain: stable
+          override: true
           target: x86_64-unknown-linux-musl
       - uses: actions-rs/cargo@v1
         name: Build release
