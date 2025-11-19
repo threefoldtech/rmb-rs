@@ -561,9 +561,7 @@ mod test {
 
         let total_hits = high_activity_hits + low_activity_hits;
         // Avoid division by zero if no hits occurred (very unlikely but possible)
-        if total_hits == 0 {
-            return;
-        }
+        assert!(total_hits > 0, "total hits is zero");
 
         let high_activity_percentage = (high_activity_hits as f64 / total_hits as f64) * 100.0;
 
