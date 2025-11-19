@@ -69,9 +69,9 @@ pub const DEFAULT_USERS: usize = 100_1000;
 const READ_COUNT: usize = 100;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 const QUEUE_MAXLEN: usize = 10000;
-const QUEUE_EXPIRE: usize = 1800; // 30 minutes (matches MAX_TTL)
-const MAX_TTL_MS: u64 = 1800 * 1000; // 30 minutes in milliseconds
-const XTRIM_SAMPLE_RATE: u32 = 10; // 10% of sends trigger XTRIM
+const QUEUE_EXPIRE: usize = 1800; // idle queues can live max of 30 minutes (matches MAX_TTL)
+const ENTRY_MAX_AGE_MS: u64 = 1800 * 1000; // entries older than 30 minutes in busy queues are evicted when housekeeping (XTRIM) is triggered
+const XTRIM_SAMPLE_RATE: u32 = 10; // 10% of sends trigger housekeeping (XTRIM)
 
 #[derive(thiserror::Error, Debug)]
 pub enum SwitchError {
@@ -358,13 +358,13 @@ async fn send(
     // the system doesn't grow indefinitely.
     //
     // Without both EXPIRE and XTRIM, the system would be incomplete
-    // EXPIRE alone can't clean active streams, and XTRIM alone wouldn't remove streams for clients that have disconnected permanently.
+    // EXPIRE alone can't clean active streams, and XTRIM alone wouldn't remove entries from abandoned streams.
     // so basically:
-    // - EXPIRE: It's the garbage collector for abandoned or idle streams.
-    // - XTRIM MINID: It's the housekeeper for busy streams, preventing them from becoming bloated with expired messages.
+    // - EXPIRE: It's the garbage collector for abandoned or idle streams. whole stream is removed.
+    // - XTRIM MINID: It's the housekeeper for busy streams preventing them from becoming bloated with expired messages by removing old entries.
     //
     // Probabilistic time-based trimming (10% of sends)
-    // This remove messages older than MAX_TTL_MS which is the max time allowed for a messages in transit.
+    // This remove messages older than ENTRY_MAX_AGE_MS which is the max time allowed for a messages in the queue.
     // running XTRIM on every send would needlessly tax the system for no meaningful gain.
     // The 10% probabilistic approach remains superior, automatically adapts, moore sends = more XTRIM
     if passes_chance(XTRIM_SAMPLE_RATE) {
@@ -373,7 +373,7 @@ async fn send(
             .unwrap()
             .as_millis() as u64;
 
-        let cutoff_ms = now_ms.saturating_sub(MAX_TTL_MS);
+        let cutoff_ms = now_ms.saturating_sub(ENTRY_MAX_AGE_MS);
 
         // XTRIM is best-effort; don't fail send if it errors
         if let Err(e) = cmd("XTRIM")
