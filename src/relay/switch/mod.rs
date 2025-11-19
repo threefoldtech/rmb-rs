@@ -565,18 +565,18 @@ mod test {
             return;
         }
 
-        let high_activity_proportion = high_activity_hits as f64 / total_hits as f64;
+        let high_activity_percentage = (high_activity_hits as f64 / total_hits as f64) * 100.0;
 
         // The high-activity group was responsible for 70% of the sends (70000 out of 100000).
         // We expect it to receive roughly 70% of the cleanup triggers.
-        let expected_proportion = 0.7;
-        let margin = 0.05; // Allow a 5% margin for randomness
+        let expected_percentage = 70.0;
+        let margin = 5.0; // Allow a 5% margin for randomness
 
         assert!(
-            (high_activity_proportion - expected_proportion).abs() < margin,
+            (high_activity_percentage - expected_percentage).abs() < margin,
             "High-activity group received {:.2}% of cleanups, expected around {:.2}%",
-            high_activity_proportion * 100.0,
-            expected_proportion * 100.0
+            high_activity_percentage,
+            expected_percentage
         );
     }
 }
