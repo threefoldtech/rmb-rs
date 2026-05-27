@@ -1,103 +1,102 @@
 [![Rust](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml/badge.svg)](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml)
 
-# Reliable Message Bus
+# Reliable Message Bus (RMB)
 
-Reliable message bus is a secure communication panel that allows `bots` to communicate together in a `chat` like way. It makes it very easy to host a service or a set of functions to be used by anyone, even if your service is running behind NAT.
+Reliable Message Bus is a secure peer-to-peer messaging protocol that enables services and nodes to communicate reliably, even when running behind NAT. It provides message authenticity guarantees, end-to-end encryption, and support for federated third-party relays.
 
-Out of the box RMB provides the following:
+## What this is
 
-- Guarantee authenticity of the messages. You are always sure that the received message is from whoever is pretending to be
-- End to End encryption
-- Support for 3rd party hosted relays. Anyone can host a relay and people can use it safely since there is no way messages can be inspected while using e2e. That's similar to `home` servers by `matrix`
+RMB is a messaging system designed for machine-to-machine communication. It allows bots (automated services) to send and receive messages in a chat-like pattern, with the following properties:
 
-## Why
+- **Message authenticity**: Messages are cryptographically signed so the receiver can verify the sender's identity.
+- **End-to-end encryption**: Messages are encrypted so that relays cannot inspect content.
+- **Federated relays**: Anyone can host a relay; users are protected by encryption even when using third-party infrastructure.
 
-RMB is developed by ThreefoldTech to create a global network of nodes that are available to host capacity. Each node will act like a single bot where you can ask to host your capacity. This enforced a unique set of requirements:
+## What this repository contains
 
-- Communication needed to be reliable
-  - Minimize and completely eliminate message loss
-  - Reduce downtime
-- Node need to authenticate and authorize calls
-  - Guarantee identity of the other peer so only owners of data can see it
-- Fast request response time
+- **`rmb-peer`** — A gateway binary that connects to a relay on behalf of your identity, handling reconnection, verification, decryption, and exposing a simple Redis-based plain-text API
+- **Relay server** — The message routing infrastructure that forwards messages between peers
+- **Protocol libraries** — Rust crates implementing the RMB protocol (signing, verification, encryption, message formats)
+- **Protocol specification** — Detailed protocol documentation in the [docs](docs/readme.md) directory
 
-Starting from this we came up with a more detailed requirements:
+## Role in the stack
 
-- User (or rather bots) need their identity maintained by `tfchain` (a blockchain) hence each bot needs an account on tfchain to be able to use `rmb`
-- Then each message then can be signed by the `bot` keys, hence make it easy to verify the identity of the sender of a message. This is done both ways.
-- To support federation (using 3rd party relays) we needed to add e2e encryption to make sure messages that are surfing the public internet can't be sniffed
-- e2e encryption is done by deriving an encryption key from the same identity seed, and share the public key on `tfchain` hence it's available to everyone to use
+RMB serves as the messaging backbone for the infrastructure stack. Nodes, users, and services use it to exchange commands, status updates, and responses. Identities are maintained on a blockchain (each peer needs an account), and public encryption keys are published there for anyone to use. The `rmb-peer` gateway abstracts the cryptographic complexity, allowing clients to interact via simple Redis queue operations using plain JSON.
+
+## Mycelium
+
+Mycelium is the network layer used to provide secure, peer-to-peer connectivity between nodes, services, and users. It enables decentralized networking across the infrastructure stack and is used as part of the ThreeFold Grid deployment.
+
+## ZOS / Zero-OS
+
+ZOS, also known as Zero-OS, is the operating system layer used to run and manage nodes. It provides the low-level runtime environment for workloads, networking, storage, and automation. RMB is the primary communication channel used by ZOS nodes to receive commands and report status.
+
+## Relation to ThreeFold
+
+This technology is used within the ThreeFold ecosystem and was first deployed on the ThreeFold Grid. The component itself is designed as reusable infrastructure technology and should be understood by its technical function first, independent of any specific deployment.
+
+## Ownership
+
+This repository is owned and maintained by TF-Tech NV, a Belgian company responsible for the development and maintenance of this technology.
 
 ## Specification
 
-For details about protocol itself please check the [docs](docs/readme.md)
+For details about the protocol itself, see the [docs](docs/readme.md).
 
 ## How to use
 
-There are many ways to use `rmb` because it was built for `bots` and software to communicate. Hence, there is no mobile app for it for example, but instead a set of libraries where you can use to connect to the network, make chitchats with other bots then exit.
+RMB is built for bots and software to communicate, not for human chat. There is no mobile app; instead, libraries are provided for connecting to the network and exchanging messages with other bots.
 
-Or you can keep the connection forever to answer other bots requests if you are providing a service.
+### Using an existing library
 
-### If there is a library in your preferred language
+If a library exists for your language, follow its documentation to implement a service bot or make requests to other bots.
 
-Then you are in luck, follow the library documentations to implement a service bot, or to make requests to other bots.
+#### Known libraries
 
-#### known libraries
+- Go: [rmb-sdk-go](https://github.com/threefoldtech/tfgrid-sdk-go/tree/development/rmb-sdk-go)
+- TypeScript: [rmb-sdk-ts](https://github.com/threefoldtech/tfgrid-sdk-ts)
 
-- Golang [rmb-sdk-go](https://github.com/threefoldtech/tfgrid-sdk-go/tree/development/rmb-sdk-go)
-- Typescript [rmb-sdk-ts](https://github.com/threefoldtech/tfgrid-sdk-ts)
+### Using `rmb-peer`
 
-### Well, I am not that lucky
+If no library is available for your language, you can use `rmb-peer` as a gateway. `rmb-peer` uses your mnemonic (identity secret key) to assume your identity and connects to the relay on your behalf. It maintains the connection indefinitely and handles:
 
-In that case:
+- Reconnecting if the connection is lost
+- Verifying received messages
+- Decrypting received messages
+- Sending requests on your behalf, handling all cryptographic operations
 
-- Implement a library in your preferred language
-- If it's too much to do all the signing, verification, e2e in your language then use `rmb-peer`
+It exposes a simple plain-text API over Redis. To send messages or handle requests, you only need to push and pop messages from Redis queues. Messages are simple plain-text JSON.
 
-## What is rmb-peer
-
-think of `rmb-peer` as a gateway that stands between you and the `relay`. `rmb-peer` uses your mnemonics (your identity secret key) to assume your identity and it connects to the relay on your behalf, it maintains the connection forever and takes care of
-
-- reconnecting if connection was lost
-- verifying received messages
-- decrypting received messages
-- sending requests on your behalf, taking care of all crypto heavy lifting.
-
-Then it provide a simple (plain-text) api over `redis`. means to send messages (or handle requests) you just need to be able to push and pop messages from some redis queues. Messages are simple plain text json.
-
-> More details about the structure of the messages are also in the [docs](docs/readme.md) page
+> More details about the structure of the messages are also in the [docs](docs/readme.md).
 
 ## Download
 
-Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/releases) normally you only need the `rmb-peer` binary, unless you want to host your own relay.
+Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/releases). Normally you only need the `rmb-peer` binary, unless you want to host your own relay.
 
 ## Build from source
 
-### Perquisites
+### Prerequisites
 
-- download Rustup and install Rust, run the following in your terminal, then follow the on-screen instructions:
+- Download Rustup and install Rust:
 
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
 
-- Install the standard library for the target `x86_64-unknown-linux-musl`, which is a Linux platform that uses the musl `libc` implementation instead of the `glibc` one.
-This allows you to compile Rust programs that can run on Linux systems that do not have glibc installed, or to create fully static binaries that do not depend on any shared libraries.
+- Install the standard library for the target `x86_64-unknown-linux-musl`:
 
   ```bash
   rustup target add x86_64-unknown-linux-musl
   ```
 
-- To use this target, you also need to install a linker that supports musl, such as `musl-gcc`.
+- Install a linker that supports musl, such as `musl-gcc`:
 
   ```bash
   sudo apt update
   sudo apt install musl-tools
   ```
 
-  You can then pass the `--target=x86_64-unknown-linux-musl` option to `cargo build` or `cargo run` to compile and run your program for this target.
-
-- Install pre-compiled `protoc` binary to ensure that you’re using the latest release of protoc.
+- Install a pre-compiled `protoc` binary:
 
   ```bash
   PB_REL="https://github.com/protocolbuffers/protobuf/releases"
@@ -106,26 +105,14 @@ This allows you to compile Rust programs that can run on Linux systems that do n
   protoc --version  # Ensure compiler version is updated
   ```
 
-- Redis:
-  - Install Redis server using the apt package manager:
+- Redis server:
 
-    ```bash
-    sudo apt update
-    sudo apt install redis-server
-    ```
-
-  - Configure Redis server by editing the `/etc/redis/redis.conf` file (optional)
-  - Enable Redis server to start automatically on boot:
-
-    ```bash
-    sudo systemctl enable redis-server
-    ```
-
-  - Start Redis server using systemd:
-
-    ```bash
-    sudo systemctl start redis-server
-    ```
+  ```bash
+  sudo apt update
+  sudo apt install redis-server
+  sudo systemctl enable redis-server
+  sudo systemctl start redis-server
+  ```
 
 ### Building
 
@@ -137,24 +124,20 @@ cargo build --release --target=x86_64-unknown-linux-musl
 
 ### Troubleshooting
 
-- If you encounter an error like the one below, it is likely that the `protoc` version installed by your package manager is too old.
+- If you encounter an error like:
 
-  ```bash
-  --- stderr
-    types.proto: This file contains proto3 optional fields, but --experimental_allow_proto3_optional was not set.
-    codegen failed: parse and typecheck
+  ```
+  types.proto: This file contains proto3 optional fields, but --experimental_allow_proto3_optional was not set.
+  codegen failed: parse and typecheck
   ```
 
-  **Solution**: The best way to ensure that you’re using the latest release of `protoc` is installing from pre-compiled binaries. See perquisites.
+  **Solution**: Install `protoc` from pre-compiled binaries rather than your package manager. See prerequisites above.
 
-- A peer must use a unique `mnemonic` or keys. It's not correct if multiple peers uses the same mnemonic this will make it impossible to route messages correctly. It's possible for the same peer to make multiple connections to the same `relay` given that it uses different `session ids`. A session id identify the connection and hence make routing messages possible.
-- A single peer on the other hand can make multiple connections to multiple relays for redundancy given that his data on the tfchain must reflect that
+- A peer must use a unique mnemonic or keys. Multiple peers using the same mnemonic will make message routing impossible. The same peer may make multiple connections to the same relay using different session IDs. A single peer may also connect to multiple relays for redundancy.
 
-> RUNNING MULTIPLE PEERS WITH THE SAME MNEMONIC MUST BE AVOIDED UNLESS FOLLOWING THE GUIDE LINES ABOVE
+> RUNNING MULTIPLE PEERS WITH THE SAME MNEMONIC MUST BE AVOIDED UNLESS FOLLOWING THE GUIDELINES ABOVE
 
 ### Running tests
-
-While inside the repository
 
 ```bash
 cargo test
