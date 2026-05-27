@@ -1,12 +1,12 @@
 [![Rust](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml/badge.svg)](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml)
 
-# Reliable Message Bus (RMB)
+# ZOS RMB - Reliable Message Bus
 
 Reliable Message Bus is a secure peer-to-peer messaging protocol that enables services and nodes to communicate reliably, even when running behind NAT. It provides message authenticity guarantees, end-to-end encryption, and support for federated third-party relays.
 
 ## What this is
 
-RMB is a messaging system designed for machine-to-machine communication. It allows bots (automated services) to send and receive messages in a chat-like pattern, with the following properties:
+ZOS RMB is a messaging system designed for machine-to-machine communication. It allows bots (automated services) to send and receive messages in a chat-like pattern, with the following properties:
 
 - **Message authenticity**: Messages are cryptographically signed so the receiver can verify the sender's identity.
 - **End-to-end encryption**: Messages are encrypted so that relays cannot inspect content.
@@ -16,12 +16,12 @@ RMB is a messaging system designed for machine-to-machine communication. It allo
 
 - **`rmb-peer`** — A gateway binary that connects to a relay on behalf of your identity, handling reconnection, verification, decryption, and exposing a simple Redis-based plain-text API
 - **Relay server** — The message routing infrastructure that forwards messages between peers
-- **Protocol libraries** — Rust crates implementing the RMB protocol (signing, verification, encryption, message formats)
+- **Protocol libraries** — Rust crates implementing the ZOS RMB protocol (signing, verification, encryption, message formats)
 - **Protocol specification** — Detailed protocol documentation in the [docs](docs/readme.md) directory
 
 ## Role in the stack
 
-RMB serves as the messaging backbone for the infrastructure stack. Nodes, users, and services use it to exchange commands, status updates, and responses. Identities are maintained on a blockchain (each peer needs an account), and public encryption keys are published there for anyone to use. The `rmb-peer` gateway abstracts the cryptographic complexity, allowing clients to interact via simple Redis queue operations using plain JSON.
+ZOS RMB serves as the messaging backbone for the infrastructure stack. Nodes, users, and services use it to exchange commands, status updates, and responses. Identities are maintained on a blockchain (each peer needs an account), and public encryption keys are published there for anyone to use. The `rmb-peer` gateway abstracts the cryptographic complexity, allowing clients to interact via simple Redis queue operations using plain JSON.
 
 ## Mycelium
 
@@ -29,7 +29,7 @@ Mycelium is the network layer used to provide secure, peer-to-peer connectivity 
 
 ## ZOS / Zero-OS
 
-ZOS, also known as Zero-OS, is the operating system layer used to run and manage nodes. It provides the low-level runtime environment for workloads, networking, storage, and automation. RMB is the primary communication channel used by ZOS nodes to receive commands and report status.
+ZOS, also known as Zero-OS, is the operating system layer used to run and manage nodes. It provides the low-level runtime environment for workloads, networking, storage, and automation. ZOS RMB is the primary communication channel used by ZOS nodes to receive commands and report status.
 
 ## Relation to ThreeFold
 
@@ -45,7 +45,7 @@ For details about the protocol itself, see the [docs](docs/readme.md).
 
 ## How to use
 
-RMB is built for bots and software to communicate, not for human chat. There is no mobile app; instead, libraries are provided for connecting to the network and exchanging messages with other bots.
+ZOS RMB is built for bots and software to communicate, not for human chat. There is no mobile app; instead, libraries are provided for connecting to the network and exchanging messages with other bots.
 
 ### Using an existing library
 
