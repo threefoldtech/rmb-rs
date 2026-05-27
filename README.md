@@ -1,4 +1,4 @@
-[![Rust](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml/badge.svg)](https://github.com/threefoldtech/rmb-rs/actions/workflows/rust.yaml)
+[![Rust](https://github.com/threefoldtech/zos_rmb/actions/workflows/rust.yaml/badge.svg)](https://github.com/threefoldtech/zos_rmb/actions/workflows/rust.yaml)
 
 # ZOS RMB - Reliable Message Bus
 
@@ -71,7 +71,7 @@ It exposes a simple plain-text API over Redis. To send messages or handle reques
 
 ## Download
 
-Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/releases). Normally you only need the `rmb-peer` binary, unless you want to host your own relay.
+Please check the latest [releases](https://github.com/threefoldtech/zos_rmb/releases). Normally you only need the `rmb-peer` binary, unless you want to host your own relay.
 
 ## Build from source
 
