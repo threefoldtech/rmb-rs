@@ -53,8 +53,8 @@ If a library exists for your language, follow its documentation to implement a s
 
 #### Known libraries
 
-- Go: [rmb-sdk-go](https://github.com/threefoldtech/tfgrid-sdk-go/tree/development/rmb-sdk-go)
-- TypeScript: [rmb-sdk-ts](https://github.com/threefoldtech/tfgrid-sdk-ts)
+- Go: [rmb-sdk-go](https://github.com/threefoldtech/zos_sdk_go/tree/development/rmb-sdk-go)
+- TypeScript: [rmb-sdk-ts](https://github.com/threefoldtech/zos_sdk_ts)
 
 ### Using `rmb-peer`
 
@@ -118,7 +118,7 @@ Please check the latest [releases](https://github.com/threefoldtech/rmb-rs/relea
 
 ```bash
 git clone git@github.com:threefoldtech/rmb-rs.git
-cd rmb-rs
+cd zos_rmb
 cargo build --release --target=x86_64-unknown-linux-musl
 ```
 
